@@ -34,15 +34,22 @@ case "$cmd" in
     tail -n 40 -f "$WORKDIR/run.log"; exit 0 ;;
 esac
 
-cd "$ROOT/backend"
-echo "== cargo build (debug 增量)"
-cargo build 2>&1 | tail -2
-
 if [ -z "$WEBROOT" ]; then
   if [ -d "$ROOT/deploy/web-dist" ]; then WEBROOT="$ROOT/deploy/web-dist";
   elif [ -d "$ROOT/frontend/dist" ]; then WEBROOT="$ROOT/frontend/dist";
   else WEBROOT="$ROOT/backend/web-ui/dist"; fi
 fi
+
+# rust-embed 编译期要求 backend/web-ui/dist 存在(仓库不存前端产物) → 用 WEBROOT 填
+if [ ! -f "$ROOT/backend/web-ui/dist/index.html" ] && [ -d "$WEBROOT" ]; then
+  mkdir -p "$ROOT/backend/web-ui/dist"
+  cp -a "$WEBROOT"/. "$ROOT/backend/web-ui/dist/" 2>/dev/null || true
+fi
+
+cd "$ROOT/backend"
+echo "== cargo build (debug 增量)"
+export RUSTFLAGS="--cfg reqwest_unstable"
+cargo build 2>&1 | tail -2
 
 mkdir -p "$WORKDIR/storage"
 stop

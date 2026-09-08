@@ -374,6 +374,11 @@ pub async fn probe_logged_in(ns: &str, source: &BookSource) -> bool {
     }
 }
 
+/// 页面是否含密码输入框（登录表单存在性）
+fn has_password_form(body: &str) -> bool {
+    body.contains("type=\"password\"") || body.contains("type='password'")
+}
+
 /// 无 loginCheckJs 时的失败标记嗅探：站点常对任意账密回 200 + 会话 Cookie,
 /// 仅凭状态码会「假成功」——先扫常见失败文案并回带片段
 fn login_failure_marker(body: &str) -> Option<String> {
@@ -637,6 +642,9 @@ pub async fn login_http(
         None
     };
 
+    let has_check_js = source.login_check_js.as_deref().is_some_and(|j| !j.trim().is_empty());
+    // 基线(登录前)页面: 有密码框才可用「回访表单消失」判定; JS 壳页无法验证 → 引导代开页/手动 Cookie
+    let mut baseline_body: Option<String> = None;
     // 裸 loginUrl（GET 且无占位符/后缀 body）：先取登录页, 自动解析表单改 POST
     let auto_form = if method.eq_ignore_ascii_case("GET")
         && body.is_none()
@@ -654,6 +662,7 @@ pub async fn login_http(
         )
         .await
         {
+            baseline_body = Some(page.body.clone());
             parse_login_form(&page.body, &page.url, &req.username, &req.password)
         } else {
             None
@@ -661,6 +670,20 @@ pub async fn login_http(
     } else {
         None
     };
+    if baseline_body.is_none() && !has_check_js {
+        baseline_body = crawler::http_get_retry(
+            ns,
+            &url,
+            &req_headers,
+            20,
+            suffix.charset.as_deref(),
+            source.proxy_url.as_deref(),
+            suffix.retry,
+        )
+        .await
+        .ok()
+        .map(|r| r.body);
+    }
 
     let resp = if let Some((form_url, form_body)) = &auto_form {
         let mut h = req_headers.clone();
@@ -723,8 +746,7 @@ pub async fn login_http(
             .await?;
     }
 
-    // loginCheckJs; 缺失时启发式防假成功: 无失败标记 + 合并 Cookie 回访 loginUrl 不再展示登录表单
-    let has_check_js = source.login_check_js.as_deref().is_some_and(|j| !j.trim().is_empty());
+    // loginCheckJs; 缺失时启发式防假成功: 基线有密码框 + 回访表单消失 + 无失败标记
     let ok = match &source.login_check_js {
         Some(js) if !js.trim().is_empty() => check_login(js, &merged, &resp.body, &resp.url)?,
         _ => {
@@ -748,9 +770,10 @@ pub async fn login_http(
                 {
                     Ok(pr) => {
                         // crawler 按 ns 自动带 jar cookie → 回访即登录态视角: 仍见密码框 = 未登录
-                        let still_form =
-                            pr.body.contains("type=\"password\"") || pr.body.contains("type='password'");
-                        login_failure_marker(&pr.body).is_none() && !still_form
+                        let base_form = baseline_body.as_deref().map(has_password_form).unwrap_or(false);
+                        login_failure_marker(&pr.body).is_none()
+                            && base_form
+                            && !has_password_form(&pr.body)
                     }
                     Err(_) => false,
                 }
@@ -801,7 +824,12 @@ pub async fn login_http(
             "登录失败：loginCheckJs 未通过".to_string()
         } else {
             login_failure_marker(&resp.body).unwrap_or_else(|| {
-                "登录后回访 loginUrl 仍展示登录表单：视为未登录（账号密码可能错误, 或站点为 JS 驱动登录——请用「打开页面自己登录」或手动 Cookie）".to_string()
+                let base_form = baseline_body.as_deref().map(has_password_form).unwrap_or(false);
+                if !base_form {
+                    "登录页无可解析的密码表单（JS 驱动登录）：请用「打开页面自己登录」或手动 Cookie".to_string()
+                } else {
+                    "登录后回访 loginUrl 仍展示登录表单：视为未登录（账号密码可能错误, 或站点校验额外字段——请用「打开页面自己登录」）".to_string()
+                }
             })
         },
     })
