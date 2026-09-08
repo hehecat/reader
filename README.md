@@ -149,6 +149,10 @@ compose 默认挂 `deploy/storage/`(容器内 `/storage/storage`), 内含:
 
 **运行时可调(无需重启/重建)**: 设置页「搜索 → 单源搜索超时」(3-60s, 即时保存, 随每次搜索请求下发)。
 
+**CF 质询/浏览器自动登录**: 镜像不内置 camoufox(体积)。需要解 Cloudflare 质询或书源浏览器登录时,
+在宿主机跑 `python3 scripts/camoufox_solver.py`(先 `pip install camoufox && python -m camoufox fetch`),
+再给容器设 `READER_CAMOUFOX_URL=http://<宿主机IP>:<端口>`; 未配置时相关能力报「camoufox 求解服务启动失败」并缓存, 不影响直连抓取。
+
 ### 反代(通常不需要)
 
 默认**不需要任何反代**: 容器单端口直服前端与全部 API, 局域网/内网穿透直接用。

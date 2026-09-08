@@ -261,6 +261,12 @@ fn login_failure_marker(body: &str) -> Option<String> {
         "账户不存在",
         "登录失败",
         "验证码错误",
+        "请输入用户名",
+        "请输入账号",
+        "请输入密码",
+        "不能为空",
+        "cannot be empty",
+        "field is required",
         "incorrect password",
         "invalid credentials",
         "wrong password",
@@ -616,7 +622,22 @@ pub async fn login_http(
                     Ok(pr) => {
                         let still_form =
                             pr.body.contains("type=\"password\"") || pr.body.contains("type='password'");
-                        login_failure_marker(&pr.body).is_none() && !still_form
+                        // 基线: 匿名回访同页——正文与带 Cookie 相同说明 Cookie 没带来登录态(JS 壳页/空账密假成功)
+                        let baseline_same = match crawler::http_get_retry(
+                            ns,
+                            &url,
+                            &req_headers,
+                            20,
+                            suffix.charset.as_deref(),
+                            source.proxy_url.as_deref(),
+                            suffix.retry,
+                        )
+                        .await
+                        {
+                            Ok(base) => base.body.trim() == pr.body.trim(),
+                            Err(_) => false,
+                        };
+                        login_failure_marker(&pr.body).is_none() && !still_form && !baseline_same
                     }
                     Err(_) => false,
                 }
