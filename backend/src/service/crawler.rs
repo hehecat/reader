@@ -202,6 +202,58 @@ pub fn http_client_builder(
     build_http_client(timeout_secs, redirect_policy, None)
 }
 
+// ---- DNS 钉扎：fake-ip/DNS 劫持环境（clash tun 等）下容器解析到 198.18.x 假 IP 直连必败 →
+// 连接层失败时经 DoH(dns.alidns.com, IP 直连免递归)解析真 IP 并按 host 钉扎 10 分钟
+static DNS_PINS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, Vec<std::net::IpAddr>)>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+fn pin_dns(host: &str, ips: Vec<std::net::IpAddr>) {
+    if let Ok(mut m) = DNS_PINS.lock() {
+        m.retain(|_, (t, _)| t.elapsed() < std::time::Duration::from_secs(600));
+        m.insert(host.to_string(), (std::time::Instant::now(), ips));
+    }
+}
+
+fn dns_pins() -> Vec<(String, Vec<std::net::IpAddr>)> {
+    DNS_PINS
+        .lock()
+        .map(|m| m.iter().map(|(h, (_, ips))| (h.clone(), ips.clone())).collect())
+        .unwrap_or_default()
+}
+
+/// DoH 解析 A 记录（AliDNS, 客户端钉扎 223.5.5.5 免被劫持）
+async fn doh_resolve(domain: &str) -> Option<Vec<std::net::IpAddr>> {
+    use std::net::SocketAddr;
+    let client = reqwest::Client::builder()
+        .resolve_to_addrs(
+            "dns.alidns.com",
+            &[SocketAddr::new("223.5.5.5".parse().ok()?, 443)],
+        )
+        .timeout(Duration::from_secs(6))
+        .build()
+        .ok()?;
+    let v: serde_json::Value = client
+        .get(format!("https://dns.alidns.com/resolve?name={domain}&type=A"))
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    let ips: Vec<std::net::IpAddr> = v
+        .get("Answer")?
+        .as_array()?
+        .iter()
+        .filter_map(|a| a.get("data")?.as_str()?.parse::<std::net::IpAddr>().ok())
+        .collect();
+    if ips.is_empty() {
+        None
+    } else {
+        Some(ips)
+    }
+}
+
 /// 实际构建：EG5 书源级代理（proxyUrl / URL option 的 proxy 键）显式指定时优先生效，
 /// 覆盖 READER_HTTP_PROXY 环境变量（书源自带代理语义更精确）。timeout_secs=0 表示
 /// 不设全局超时（代理 Client 缓存复用场景——每次请求经 RequestBuilder::timeout 单独限定）。
@@ -213,6 +265,15 @@ fn build_http_client(
     let mut builder = reqwest::Client::builder()
         .redirect(redirect_policy)
         .user_agent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36");
+    // 应用 DNS 钉扎（fake-ip 环境兜底）：443/80 双端口按序尝试
+    for (host, ips) in dns_pins() {
+        let mut addrs = Vec::with_capacity(ips.len() * 2);
+        for ip in &ips {
+            addrs.push(std::net::SocketAddr::new(*ip, 443));
+            addrs.push(std::net::SocketAddr::new(*ip, 80));
+        }
+        builder = builder.resolve_to_addrs(&host, &addrs);
+    }
     // timeout_secs=0 → 不设全局超时（ClientBuilder 默认无超时；请求级在 fetch_once 内限定）
     if timeout_secs > 0 {
         builder = builder.timeout(Duration::from_secs(timeout_secs));
@@ -1103,6 +1164,46 @@ async fn http_fetch(
     charset: Option<&str>,
     proxy: Option<&str>,
 ) -> Result<FetchResponse> {
+    let first = http_fetch_inner(ns, url, headers, timeout_secs, method, body, charset, proxy).await;
+    match first {
+        Err(e) if proxy.is_none() => {
+            let conn_fail = e
+                .downcast_ref::<reqwest::Error>()
+                .is_some_and(|r| r.is_connect() || r.is_request());
+            if !conn_fail {
+                return Err(e);
+            }
+            // fake-ip/DNS 劫持环境（clash tun 等）：连接层失败 → DoH 解析真 IP 钉扎后重试一次
+            let host = url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_string));
+            let resolved = match host {
+                Some(h) => doh_resolve(&h).await.map(|ips| (h, ips)),
+                None => None,
+            };
+            match resolved {
+                Some((h, ips)) => {
+                    tracing::info!("DoH 解析 {h} -> {ips:?}（本地 DNS 疑似劫持/fake-ip）——钉扎重试");
+                    pin_dns(&h, ips);
+                    http_fetch_inner(ns, url, headers, timeout_secs, method, body, charset, proxy)
+                        .await
+                }
+                None => Err(e),
+            }
+        }
+        other => other,
+    }
+}
+
+
+async fn http_fetch_inner(
+    ns: &str,
+    url: &str,
+    headers: &HashMap<String, String>,
+    timeout_secs: u64,
+    method: &str,
+    body: Option<&str>,
+    charset: Option<&str>,
+    proxy: Option<&str>,
+) -> Result<FetchResponse> {
     // 0) data URI（legado dataUriRegex：`data:;base64,<payload>`——搜索/详情规则可直接
     //    内嵌 base64 数据，不发起网络请求；搜索 URL 后缀 `{"type":...}` 已被切分）
     if crate::service::search::is_data_uri(url) {
@@ -1237,6 +1338,7 @@ async fn http_fetch(
                     "http_fetch 直连失败 {url}: {e:?} source={:?}",
                     e.source().map(|s| s.to_string())
                 );
+                // fake-ip/DNS 劫持环境：连接层失败 → DoH 解析真 IP 钉扎后重试一次
                 // 默认浏览器兜底（READER_BROWSER_FALLBACK_DISABLE=1 关闭）：网络层失败
                 // （超时/连接中断/TLS）时内置 obscura 浏览器重试——很多站点的反爬只对
                 // 直连 reqwest 指纹生效，浏览器 stealth 指纹可正常访问
