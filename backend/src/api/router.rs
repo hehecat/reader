@@ -1399,7 +1399,7 @@ fn merge_login_params(
 // ==================== 自定义字体（按用户存库, 阅读设置可选用/删除） ====================
 
 const FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "woff", "woff2"];
-const FONT_MAX_MB: u64 = 40;
+const FONT_MAX_MB: u64 = 100;
 
 fn fonts_dir(state: &AppState, ns: &str) -> std::path::PathBuf {
     state
