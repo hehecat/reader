@@ -153,10 +153,8 @@ compose 默认挂 `deploy/storage/`(容器内 `/storage/storage`), 内含:
 `scripts/dev-backend.sh smoke`(冒烟: index/注册登录/书架) / `stop` 停止。GH Actions 只出发布镜像;
 镜像构建为 cargo-chef 三段式, 依赖层命中缓存时 src 改动只编本 crate。
 
-**CF 质询/浏览器自动登录**: 镜像不内置 camoufox(体积)。需要解 Cloudflare 质询或书源浏览器登录时,
-在宿主机跑 `python3 scripts/camoufox_solver.py`(先 `pip install camoufox && python -m camoufox fetch`),
-再给容器设 `READER_CAMOUFOX_URL=http://<宿主机IP>:<端口>`; 未配置时相关能力报「camoufox 求解服务启动失败」并缓存, 不影响直连抓取。
-`camoufox sync/fetch` 走 GitHub API, 匿名限流时给 solver 进程注入 `GITHUB_TOKEN` 再启动; 手动放置浏览器包后需补 `~/.cache/camoufox/.0.5_FLAG`, 否则库启动时会清空该目录。
+**CF 质询/浏览器自动登录**: 镜像内置 camoufox(浏览器包 + Python 求解器)。容器首次用到浏览器登录时自动 spawn 求解服务, 无需额外配置。
+若因网络问题(如 GitHub API 限流)导致构建期未下载浏览器包, 可设 `READER_CAMOUFOX_URL=http://<宿主机IP>:<端口>` 使用外置求解器(宿主机 `scripts/camoufox_solver.py`); 未配置且内置失败时报「camoufox 求解服务启动失败」并缓存, 不影响直连抓取。
 
 ### 反代(通常不需要)
 
