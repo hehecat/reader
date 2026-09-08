@@ -307,6 +307,10 @@ pub fn router(config: crate::AppConfig, storage: Storage) -> axum::Router {
             post(delete_all_book_sources),
         )
         // 书源登录态（cookie 按用户隔离）
+        .route("/reader3/loginPage", get(login_page))
+        .route("/reader3/loginPage/submit", post(login_page_submit))
+        .route("/reader3/loginPage/result", get(login_page_result))
+        .route("/reader3/loginPage/res", get(login_page_res))
         .route(
             "/reader3/loginBookSource",
             get(login_book_source).post(login_book_source),
@@ -1391,6 +1395,192 @@ fn merge_login_params(
 }
 
 /// 解析 bookSource 参数（书源 URL 或完整 JSON）——复用 resolve_book_source 语义
+/// GET /reader3/loginPage?bookSource=：代开书源登录页（app WebView 登录的 web 等价物——
+/// 用户在代开页自己登录, Set-Cookie 经 crawler jar 存库; 表单/子资源改写回本服务）
+async fn login_page(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    let ns = match resolve_namespace(&state, &params, &headers).await {
+        Ok(ns) => ns,
+        Err(ret) => return Json(ret).into_response(),
+    };
+    let book_source_param = params.get("bookSource").cloned().unwrap_or_default();
+    let Some(source) = resolve_login_source(&state, &ns, &book_source_param).await else {
+        return html_page("书源不存在（请先导入书源）", false).into_response();
+    };
+    match crate::service::login::fetch_login_page(&ns, &source).await {
+        Ok((body, page_url)) => Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "text/html; charset=utf-8")
+            .header("Cache-Control", "no-store")
+            .body(Body::from(crate::service::login::rewrite_login_page(
+                &body,
+                &page_url,
+                &source.book_source_url,
+            )))
+            .unwrap(),
+        Err(e) => html_page(&format!("打开登录页失败: {e}"), false).into_response(),
+    }
+}
+
+/// POST /reader3/loginPage/submit：代开页表单转发（__login_action 携带原 action）
+async fn login_page_submit(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Option<axum::body::Bytes>,
+) -> Response {
+    let ns = match resolve_namespace(&state, &params, &headers).await {
+        Ok(ns) => ns,
+        Err(ret) => return Json(ret).into_response(),
+    };
+    let book_source_param = params.get("bookSource").cloned().unwrap_or_default();
+    let Some(source) = resolve_login_source(&state, &ns, &book_source_param).await else {
+        return html_page("书源不存在（请先导入书源）", false).into_response();
+    };
+    let raw = body
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default();
+    let mut target: Option<String> = None;
+    let pairs: Vec<&str> = raw
+        .split('&')
+        .filter(|p| {
+            if let Some((k, v)) = p.split_once('=') {
+                if k == "__login_action" {
+                    target = Some(
+                        url::form_urlencoded::parse(format!("{k}={v}").as_bytes())
+                            .next()
+                            .map(|(_, vv)| vv.into_owned())
+                            .unwrap_or_default(),
+                    );
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
+    let forward = pairs.join("&");
+    let target = target.unwrap_or_else(|| {
+        source
+            .login_url
+            .clone()
+            .unwrap_or_else(|| source.book_source_url.clone())
+    });
+    let mut h = source
+        .header
+        .as_deref()
+        .map(crate::service::crawler::parse_header)
+        .unwrap_or_default();
+    h.insert(
+        "Content-Type".to_string(),
+        "application/x-www-form-urlencoded".to_string(),
+    );
+    let (raw_url, suffix) = crate::service::search::split_url_suffix(&target);
+    let _ = crate::service::crawler::http_post_retry(
+        &ns,
+        &raw_url,
+        &h,
+        20,
+        Some(forward.as_str()),
+        suffix.charset.as_deref(),
+        source.proxy_url.as_deref(),
+        suffix.retry,
+    )
+    .await;
+    Response::builder()
+        .status(StatusCode::SEE_OTHER)
+        .header(
+            "Location",
+            format!(
+                "/reader3/loginPage/result?bookSource={}",
+                crate::service::login::urlenc(&source.book_source_url)
+            ),
+        )
+        .body(Body::empty())
+        .unwrap()
+}
+
+/// GET /reader3/loginPage/result：提交后回访判定登录态
+async fn login_page_result(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    let ns = match resolve_namespace(&state, &params, &headers).await {
+        Ok(ns) => ns,
+        Err(ret) => return Json(ret).into_response(),
+    };
+    let book_source_param = params.get("bookSource").cloned().unwrap_or_default();
+    let Some(source) = resolve_login_source(&state, &ns, &book_source_param).await else {
+        return html_page("书源不存在（请先导入书源）", false).into_response();
+    };
+    let ok = crate::service::login::probe_logged_in(&ns, &source).await;
+    html_page(
+        &if ok {
+            format!("登录成功：{} 的登录态已保存, 可关闭本页", source.book_source_name)
+        } else {
+            format!(
+                "登录后回访仍见登录表单：{} 可能未登录成功——可返回代开页重试, 或用书源管理的表单/手动 Cookie",
+                source.book_source_name
+            )
+        },
+        ok,
+    )
+    .into_response()
+}
+
+/// GET /reader3/loginPage/res?bookSource=&url=：代开页子资源代理（验证码图/CSS/JS）
+async fn login_page_res(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    let ns = match resolve_namespace(&state, &params, &headers).await {
+        Ok(ns) => ns,
+        Err(ret) => return Json(ret).into_response(),
+    };
+    let book_source_param = params.get("bookSource").cloned().unwrap_or_default();
+    let url = params.get("url").cloned().unwrap_or_default();
+    if url.is_empty() {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let Some(source) = resolve_login_source(&state, &ns, &book_source_param).await else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let mut h = source
+        .header
+        .as_deref()
+        .map(crate::service::crawler::parse_header)
+        .unwrap_or_default();
+    if let Ok(u) = url::Url::parse(&url) {
+        h.insert("Referer".to_string(), u.origin().ascii_serialization());
+    }
+    match crate::service::crawler::http_get_retry(&ns, &url, &h, 20, None, None, None).await {
+        Ok(resp) => {
+            let mime = mime_for(std::path::Path::new(&url));
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", mime)
+                .header("Cache-Control", "public, max-age=300")
+                .body(Body::from(resp.body.into_bytes()))
+                .unwrap()
+        }
+        Err(_) => StatusCode::BAD_GATEWAY.into_response(),
+    }
+}
+
+fn html_page(msg: &str, ok: bool) -> String {
+    let color = if ok { "#2e7d32" } else { "#c62828" };
+    format!(
+        "<!doctype html><meta charset=\"utf-8\"><title>书源登录</title>\
+         <body style=\"font-family:system-ui;display:grid;place-items:center;min-height:60vh\">\
+         <div style=\"text-align:center\"><p style=\"color:{color};font-size:16px\">{msg}</p>\
+         <p style=\"color:#888;font-size:13px\">本窗可关闭; 登录态已按当前账号保存</p></div></body>"
+    )
+}
+
 async fn resolve_login_source(
     state: &AppState,
     ns: &str,

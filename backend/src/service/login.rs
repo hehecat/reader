@@ -247,6 +247,133 @@ fn parse_login_form(html: &str, base_url: &str, username: &str, password: &str) 
     Some((target, body))
 }
 
+// ==================== 网页代登页（app WebView 登录的 web 等价物） ====================
+//
+// app 版(legado)用 WebView 打开 loginUrl、用户自己登录、CookieManager 取 cookie;
+// 浏览器跨域读不到第三方 cookie → 由后端代开登录页: 表单 action/子资源全部改写回
+// /reader3/loginPage/*, 用户在代开页里自己登录(含图片验证码), Set-Cookie 经 crawler
+// jar 自动存库。JS 驱动登录(fetch/XHR 直连源站)不在改写范围 → 回退模态表单/手动 Cookie。
+
+/// 把绝对/相对 URL 归一到源站绝对地址
+fn absolutize(base: &str, target: &str) -> Option<String> {
+    let t = target.trim();
+    if t.is_empty()
+        || t.starts_with("data:")
+        || t.starts_with("javascript:")
+        || t.starts_with("mailto:")
+        || t.starts_with('#')
+    {
+        return None;
+    }
+    Some(
+        url::Url::parse(t)
+            .ok()
+            .or_else(|| url::Url::parse(base).ok()?.join(t).ok())?
+            .to_string(),
+    )
+}
+
+/// 代开登录页改写: form action → 提交路由 + 隐藏字段保留原 action; src/href → 子资源代理
+pub fn rewrite_login_page(html: &str, page_url: &str, book_source: &str) -> String {
+    use regex::Regex;
+    use std::sync::LazyLock;
+    static FORM_TAG_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new("(?is)<form\\b[^>]*>").unwrap());
+    static ACTION_ATTR_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new("(?is)\\baction\\s*=\\s*[\"\']([^\"\']*)[\"\']").unwrap());
+    static URL_ATTR_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new("(?is)\\b(src|href)\\s*=\\s*[\"\']([^\"\']+)[\"\']").unwrap());
+
+    let enc = urlenc(book_source);
+    let mut out = String::with_capacity(html.len() + 512);
+    let mut last = 0usize;
+    for m in FORM_TAG_RE.find_iter(html) {
+        out.push_str(&html[last..m.start()]);
+        let tag = m.as_str();
+        let action = ACTION_ATTR_RE
+            .captures(tag)
+            .and_then(|c| c.get(1))
+            .map(|v| v.as_str())
+            .unwrap_or("");
+        let abs = absolutize(page_url, action).unwrap_or_else(|| page_url.to_string());
+        let new_tag = ACTION_ATTR_RE
+            .replace(tag, &format!("action=\"/reader3/loginPage/submit?bookSource={enc}\""));
+        out.push_str(&new_tag);
+        out.push_str(&format!(
+            "<input type=\"hidden\" name=\"__login_action\" value=\"{abs}\">"
+        ));
+        last = m.end();
+    }
+    out.push_str(&html[last..]);
+
+    // 子资源(src/href)走代理; 表单刚改写的 action 与隐藏字段不含 src/href, 安全
+    let enc2 = enc.clone();
+    URL_ATTR_RE
+        .replace_all(&out, |caps: &regex::Captures| {
+            let attr = &caps[1];
+            let val = &caps[2];
+            match absolutize(page_url, val) {
+                Some(abs) => format!(
+                    "{attr}=\"/reader3/loginPage/res?bookSource={enc2}&url={}\"",
+                    urlenc(&abs)
+                ),
+                None => caps[0].to_string(),
+            }
+        })
+        .to_string()
+}
+
+pub fn urlenc(t: &str) -> String {
+    let mut out = String::with_capacity(t.len());
+    for b in t.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(*b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// 取代开登录页原文（带 jar cookie）
+pub async fn fetch_login_page(
+    ns: &str,
+    source: &BookSource,
+) -> Result<(String, String)> {
+    let login_url = source
+        .login_url
+        .as_deref()
+        .ok_or_else(|| anyhow!("书源未配置 loginUrl"))?;
+    let (raw_url, suffix) = search::split_url_suffix(login_url);
+    let headers = source
+        .header
+        .as_deref()
+        .map(crawler::parse_header)
+        .unwrap_or_default();
+    let resp = crawler::http_get_retry(
+        ns,
+        &raw_url,
+        &headers,
+        20,
+        suffix.charset.as_deref(),
+        source.proxy_url.as_deref(),
+        suffix.retry,
+    )
+    .await?;
+    Ok((resp.body, resp.url))
+}
+
+/// 代开页提交后判定: 回访 loginUrl 不再出现密码框 = 登录态生效
+pub async fn probe_logged_in(ns: &str, source: &BookSource) -> bool {
+    match fetch_login_page(ns, source).await {
+        Ok((body, _)) => {
+            login_failure_marker(&body).is_none()
+                && !body.contains("type=\"password\"")
+                && !body.contains("type='password'")
+        }
+        Err(_) => false,
+    }
+}
+
 /// 无 loginCheckJs 时的失败标记嗅探：站点常对任意账密回 200 + 会话 Cookie,
 /// 仅凭状态码会「假成功」——先扫常见失败文案并回带片段
 fn login_failure_marker(body: &str) -> Option<String> {
@@ -620,24 +747,10 @@ pub async fn login_http(
                 .await
                 {
                     Ok(pr) => {
+                        // crawler 按 ns 自动带 jar cookie → 回访即登录态视角: 仍见密码框 = 未登录
                         let still_form =
                             pr.body.contains("type=\"password\"") || pr.body.contains("type='password'");
-                        // 基线: 匿名回访同页——正文与带 Cookie 相同说明 Cookie 没带来登录态(JS 壳页/空账密假成功)
-                        let baseline_same = match crawler::http_get_retry(
-                            ns,
-                            &url,
-                            &req_headers,
-                            20,
-                            suffix.charset.as_deref(),
-                            source.proxy_url.as_deref(),
-                            suffix.retry,
-                        )
-                        .await
-                        {
-                            Ok(base) => base.body.trim() == pr.body.trim(),
-                            Err(_) => false,
-                        };
-                        login_failure_marker(&pr.body).is_none() && !still_form && !baseline_same
+                        login_failure_marker(&pr.body).is_none() && !still_form
                     }
                     Err(_) => false,
                 }
@@ -688,11 +801,7 @@ pub async fn login_http(
             "登录失败：loginCheckJs 未通过".to_string()
         } else {
             login_failure_marker(&resp.body).unwrap_or_else(|| {
-                if set_cookies.is_empty() {
-                    "无法校验登录结果：登录请求未返回 Cookie 且书源未配 loginCheckJs——请在工作台补 loginCheckJs, 或改用手动 Cookie".to_string()
-                } else {
-                    "登录后回访 loginUrl 仍展示登录表单：视为未登录（账号密码可能错误, 或站点登录规则需补 loginCheckJs）".to_string()
-                }
+                "登录后回访 loginUrl 仍展示登录表单：视为未登录（账号密码可能错误, 或站点为 JS 驱动登录——请用「打开页面自己登录」或手动 Cookie）".to_string()
             })
         },
     })
@@ -1257,6 +1366,21 @@ mod send_tests {
         assert!(body.contains("pwd=p%40ss+w0rd"), "{body}");
         // 无密码框的页面不解析
         assert!(parse_login_form("<form><input name='a'></form>", "https://x.com/", "u", "p").is_none());
+    }
+
+    /// 代开登录页改写: form action 换提交路由 + 隐藏原 action; src/href 走子资源代理
+    #[test]
+    fn 代开页改写() {
+        let html = r#"<html><body>
+        <img src="/captcha.php?id=1">
+        <form method="post" action="/login.php?do=submit">
+          <input type="text" name="username">
+          <input type="password" name="password">
+        </form></body></html>"#;
+        let out = rewrite_login_page(html, "https://www.example.com/login.php", "https://www.example.com");
+        assert!(out.contains("action="/reader3/loginPage/submit?bookSource=https%3A%2F%2Fwww.example.com""), "{out}");
+        assert!(out.contains("name="__login_action" value="https://www.example.com/login.php?do=submit""), "{out}");
+        assert!(out.contains("/reader3/loginPage/res?bookSource=https%3A%2F%2Fwww.example.com&url=https%3A%2F%2Fwww.example.com%2Fcaptcha.php%3Fid%3D1"), "{out}");
     }
 
     /// 失败标记嗅探: 站点回 200 但正文含失败文案

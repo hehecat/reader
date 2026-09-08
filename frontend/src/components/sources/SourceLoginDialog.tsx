@@ -1,4 +1,4 @@
-import { KeyRound, Cookie } from "lucide-react";
+import { Cookie, ExternalLink, KeyRound } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -12,6 +12,7 @@ import {
   Spinner,
   toast,
 } from "@/components/ui";
+import { getAccessToken } from "@/lib/storage";
 import {
   loginBookSource,
   setBookSourceCookie,
@@ -120,6 +121,14 @@ export function SourceLoginDialog({ source, open, onOpenChange }: SourceLoginDia
     }
   };
 
+  /** app WebView 登录的 web 等价物: 后端代开登录页, 用户自己登录, Set-Cookie 自动存库 */
+  const openProxyPage = () => {
+    const q = new URLSearchParams({ bookSource: source.bookSourceUrl });
+    const tok = getAccessToken();
+    if (tok) q.set("accessToken", tok);
+    window.open(`/reader3/loginPage?${q.toString()}`, "_blank", "noopener");
+  };
+
   const saveCookie = async () => {
     setBusy(true);
     try {
@@ -202,6 +211,10 @@ export function SourceLoginDialog({ source, open, onOpenChange }: SourceLoginDia
             ) : null}
 
             <div className="flex items-center justify-end gap-2">
+              <Button variant="secondary" onClick={openProxyPage}>
+                <ExternalLink aria-hidden className="size-4" />
+                打开页面自己登录
+              </Button>
               <Button variant="ghost" onClick={() => setCookieMode(true)}>
                 <Cookie aria-hidden className="size-4" />
                 手动 Cookie
