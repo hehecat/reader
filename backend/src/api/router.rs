@@ -11294,6 +11294,8 @@ async fn fallback_handler(
             return Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", mime_for(&file))
+                // 哈希文件名内容不变 → 长缓存; 无代理部署也自洽
+                .header("Cache-Control", "public, max-age=31536000, immutable")
                 .body(Body::from(bytes))
                 .unwrap();
         }
@@ -11303,6 +11305,8 @@ async fn fallback_handler(
         return Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", mime)
+            .header("Cache-Control", "no-cache")
+            .header("Surrogate-Control", "no-store")
             .body(Body::from(bytes))
             .unwrap();
     }
@@ -11311,6 +11315,8 @@ async fn fallback_handler(
         Ok(bytes) => Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "text/html; charset=utf-8")
+            .header("Cache-Control", "no-cache")
+            .header("Surrogate-Control", "no-store")
             .body(Body::from(bytes))
             .unwrap(),
         Err(_) => webdav_status_404(),
