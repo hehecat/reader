@@ -1378,8 +1378,14 @@ mod send_tests {
           <input type="password" name="password">
         </form></body></html>"#;
         let out = rewrite_login_page(html, "https://www.example.com/login.php", "https://www.example.com");
-        assert!(out.contains("action="/reader3/loginPage/submit?bookSource=https%3A%2F%2Fwww.example.com""), "{out}");
-        assert!(out.contains("name="__login_action" value="https://www.example.com/login.php?do=submit""), "{out}");
+        assert!(
+            out.contains(r#"action="/reader3/loginPage/submit?bookSource=https%3A%2F%2Fwww.example.com""#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"name="__login_action" value="https://www.example.com/login.php?do=submit""#),
+            "{out}"
+        );
         assert!(out.contains("/reader3/loginPage/res?bookSource=https%3A%2F%2Fwww.example.com&url=https%3A%2F%2Fwww.example.com%2Fcaptcha.php%3Fid%3D1"), "{out}");
     }
 

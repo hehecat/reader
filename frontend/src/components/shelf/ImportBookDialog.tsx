@@ -19,9 +19,10 @@ import { BOOKS_QUERY_KEY, errorMessage } from "@/hooks/useBookshelf";
 import { saveBook } from "@/services/bookshelf";
 import { importBookPreview, uploadLocalBook, type ImportPreview } from "@/services/import";
 
-/** 文件选择框允许的扩展名(后端还支持 umd/cbz 等, 这里按需求只放开 txt/epub) */
-const ACCEPT_EXTENSIONS = ".txt,.epub";
-const SUPPORTED_EXTENSIONS = ["txt", "epub"];
+/** 文件选择框允许的扩展名: 与后端 SUPPORTED_EXTENSIONS(local_sync) 全量对齐 */
+const ACCEPT_EXTENSIONS = ".txt,.epub,.mobi,.azw3,.pdf,.fb2,.docx,.cbz,.umd";
+const SUPPORTED_EXTENSIONS = ["txt", "epub", "mobi", "azw3", "pdf", "fb2", "docx", "cbz", "umd"];
+const SUPPORTED_LABEL = "TXT / EPUB / MOBI / AZW3 / PDF / FB2 / DOCX / CBZ / UMD";
 
 /** pick=选文件 uploading=上传解析中 preview=预览确认 saving=加入书架中 */
 type Phase = "pick" | "uploading" | "preview" | "saving";
@@ -95,8 +96,8 @@ export function ImportBookDialog({ open, onOpenChange }: ImportBookDialogProps) 
     if (!SUPPORTED_EXTENSIONS.includes(extension)) {
       setError(
         extension.length === 0
-          ? "文件没有扩展名, 请选择 TXT / EPUB 书籍文件"
-          : `不支持导入 ${extension.toUpperCase()} 格式的书籍文件, 请选择 TXT / EPUB`,
+          ? `文件没有扩展名, 请选择 ${SUPPORTED_LABEL} 书籍文件`
+          : `不支持导入 ${extension.toUpperCase()} 格式的书籍文件, 请选择 ${SUPPORTED_LABEL}`,
       );
       return;
     }
@@ -203,7 +204,7 @@ export function ImportBookDialog({ open, onOpenChange }: ImportBookDialogProps) 
               >
                 <FileUp aria-hidden className="size-8" />
                 <span className="text-sm">点击选择书籍文件</span>
-                <span className="text-xs">支持 TXT / EPUB 格式</span>
+                <span className="text-xs">支持 {SUPPORTED_LABEL} 格式</span>
               </button>
             )
           ) : null}
