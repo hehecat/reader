@@ -71,7 +71,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=camo /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
-COPY --from=camo /root/.cache/camoufox /root/.cache/camoufox
+# 浏览器二进制(~600MB)不内嵌运行镜像——容器内 env 不兼容(Playwright 启动失败);
+# 需要浏览器登录的部署方在宿主机跑 scripts/camoufox_solver.py, 设 READER_CAMOUFOX_URL 指向它
+# COPY --from=camo /root/.cache/camoufox /root/.cache/camoufox  # 注释掉: 不内置
 COPY backend/scripts/camoufox_solver.py /usr/local/bin/camoufox_solver.py
 
 ENV TZ=Asia/Shanghai
