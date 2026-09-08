@@ -45,20 +45,19 @@ COPY --from=web /web/dist ./web-ui/dist
 RUN cargo build --release
 
 # ---------- 阶段 3：camoufox 求解后端（pip 包 + 浏览器二进制，构建期下载） ----------
-FROM python:3.12-slim AS camo
+FROM python:3.13-slim AS camo
 RUN pip install --no-cache-dir camoufox==0.5.4 \
     && python -m camoufox fetch
 
-# ---------- 阶段 4：运行镜像 ----------
-FROM debian:trixie-slim
+# ---------- 阶段 4：运行镜像（python:3.13-slim 基础——与 camo 同解释器版本,
+#           camo 的 site-packages 直拷即可被 import, 避免系统 python 版本错配） ----------
+FROM python:3.13-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         tzdata \
         fonts-noto-cjk \
-        python3 \
-        python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 # camoufox 运行时系统库（Firefox 内核依赖集）+ tini
@@ -71,7 +70,7 @@ RUN apt-get update \
     && ln -sf /usr/bin/tini /sbin/tini \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=camo /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=camo /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
 COPY --from=camo /root/.cache/camoufox /root/.cache/camoufox
 COPY backend/scripts/camoufox_solver.py /usr/local/bin/camoufox_solver.py
 
