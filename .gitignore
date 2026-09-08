@@ -9,3 +9,5 @@ deploy/web-dist/
 *.log
 docker-compose.override.yml
 deploy/Caddyfile.local
+backend/web-ui/dist/
+deploy/web-dist.old/

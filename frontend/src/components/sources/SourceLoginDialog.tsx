@@ -1,4 +1,4 @@
-import { Cookie, ExternalLink, KeyRound } from "lucide-react";
+import { Cookie, KeyRound, MonitorSmartphone } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -12,7 +12,6 @@ import {
   Spinner,
   toast,
 } from "@/components/ui";
-import { getAccessToken } from "@/lib/storage";
 import {
   loginBookSource,
   setBookSourceCookie,
@@ -24,6 +23,10 @@ export interface SourceLoginDialogProps {
   source: BookSource | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** 该书源已存 Cookie(非空串) → 显示已登录横幅 */
+  existingCookie?: string | null;
+  /** 登录态变化(清除/登录成功)后回调 → 父级刷新徽标 */
+  onCookieChanged?: () => void;
 }
 
 interface LoginField {
@@ -61,7 +64,13 @@ function parseLoginUi(source: BookSource): LoginField[] {
 }
 
 /** 书源登录: 表单登录 → 图片验证码重试 → 手动 Cookie 兜底 (warp loginBookSource 契约) */
-export function SourceLoginDialog({ source, open, onOpenChange }: SourceLoginDialogProps) {
+export function SourceLoginDialog({
+  source,
+  open,
+  onOpenChange,
+  existingCookie = null,
+  onCookieChanged,
+}: SourceLoginDialogProps) {
   const fields = React.useMemo(() => (source ? parseLoginUi(source) : []), [source]);
   const [values, setValues] = React.useState<Record<string, string>>({});
   const [busy, setBusy] = React.useState(false);
@@ -84,7 +93,7 @@ export function SourceLoginDialog({ source, open, onOpenChange }: SourceLoginDia
 
   if (!source) return null;
 
-  const submit = async (withCaptcha?: string) => {
+  const submit = async (withCaptcha?: string, mode?: "http" | "browser") => {
     setBusy(true);
     setNotice(null);
     try {
@@ -99,9 +108,11 @@ export function SourceLoginDialog({ source, open, onOpenChange }: SourceLoginDia
         ),
         captcha: withCaptcha ?? (captchaText || undefined),
         captchaId: captcha?.captchaId,
+        mode,
       });
       if (res.success) {
         toast.success("登录成功, Cookie 已保存");
+        onCookieChanged?.();
         onOpenChange(false);
       } else if (res.needCaptcha) {
         setCaptcha(res);
@@ -121,12 +132,17 @@ export function SourceLoginDialog({ source, open, onOpenChange }: SourceLoginDia
     }
   };
 
-  /** app WebView 登录的 web 等价物: 后端代开登录页, 用户自己登录, Set-Cookie 自动存库 */
-  const openProxyPage = () => {
-    const q = new URLSearchParams({ bookSource: source.bookSourceUrl });
-    const tok = getAccessToken();
-    if (tok) q.set("accessToken", tok);
-    window.open(`/reader3/loginPage?${q.toString()}`, "_blank", "noopener");
+  const clearCookie = async () => {
+    setBusy(true);
+    try {
+      await setBookSourceCookie(source.bookSourceUrl, "");
+      toast.success("登录态已清除");
+      onCookieChanged?.();
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : "清除失败");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const saveCookie = async () => {
@@ -134,6 +150,7 @@ export function SourceLoginDialog({ source, open, onOpenChange }: SourceLoginDia
     try {
       await setBookSourceCookie(source.bookSourceUrl, cookieText.trim());
       toast.success(cookieText.trim() ? "Cookie 已保存" : "Cookie 已清除");
+      onCookieChanged?.();
       onOpenChange(false);
     } catch (e) {
       setNotice(e instanceof Error ? e.message : "保存失败");
@@ -154,6 +171,17 @@ export function SourceLoginDialog({ source, open, onOpenChange }: SourceLoginDia
             登录态(Cookie)按当前账号保存, 仅用于该书源的搜索/目录/正文请求
           </DialogDescription>
         </DialogHeader>
+
+        {existingCookie && existingCookie.length > 0 ? (
+          <div className="border-accent/40 bg-accent/10 mx-4 mt-3 flex items-center justify-between gap-2 rounded-md border px-3 py-2 md:mx-5">
+            <span className="text-accent text-xs">
+              已登录：该书源已保存登录态（Cookie {existingCookie.length} 字符），重新登录将覆盖
+            </span>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => void clearCookie()}>
+              清除登录态
+            </Button>
+          </div>
+        ) : null}
 
         {cookieMode ? (
           <div className="space-y-3 px-4 pb-4 md:px-5 md:pb-5">
@@ -211,13 +239,18 @@ export function SourceLoginDialog({ source, open, onOpenChange }: SourceLoginDia
             ) : null}
 
             <div className="flex items-center justify-end gap-2">
-              <Button variant="secondary" onClick={openProxyPage}>
-                <ExternalLink aria-hidden className="size-4" />
-                打开页面自己登录
-              </Button>
               <Button variant="ghost" onClick={() => setCookieMode(true)}>
                 <Cookie aria-hidden className="size-4" />
                 手动 Cookie
+              </Button>
+              <Button
+                variant="secondary"
+                disabled={busy}
+                title="服务端 camoufox 真浏览器打开登录页自动填写提交, 能跑 JS/过部分验证码; 需部署 camoufox 服务"
+                onClick={() => void submit(captcha ? captchaText : undefined, "browser")}
+              >
+                <MonitorSmartphone aria-hidden className="size-4" />
+                浏览器自动登录
               </Button>
               <Button
                 disabled={busy}

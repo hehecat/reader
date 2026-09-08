@@ -40,8 +40,10 @@ if [ -z "$WEBROOT" ]; then
   else WEBROOT="$ROOT/backend/web-ui/dist"; fi
 fi
 
-# rust-embed 编译期要求 backend/web-ui/dist 存在(仓库不存前端产物) → 用 WEBROOT 填
-if [ ! -f "$ROOT/backend/web-ui/dist/index.html" ] && [ -d "$WEBROOT" ]; then
+# rust-embed 编译期内嵌 backend/web-ui/dist(仓库不存前端产物) → 每次用 WEBROOT 刷新,
+# 否则二进制内嵌旧前端优先于磁盘, 验不到新 UI
+if [ -d "$WEBROOT" ]; then
+  rm -rf "$ROOT/backend/web-ui/dist"
   mkdir -p "$ROOT/backend/web-ui/dist"
   cp -a "$WEBROOT"/. "$ROOT/backend/web-ui/dist/" 2>/dev/null || true
 fi

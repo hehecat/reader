@@ -306,11 +306,12 @@ pub fn router(config: crate::AppConfig, storage: Storage) -> axum::Router {
             "/reader3/deleteAllBookSources",
             post(delete_all_book_sources),
         )
+        // 自定义字体（按用户存库）
+        .route("/reader3/uploadFont", post(upload_font))
+        .route("/reader3/getFontList", get(get_font_list))
+        .route("/reader3/getFont", get(get_font))
+        .route("/reader3/deleteFont", post(delete_font))
         // 书源登录态（cookie 按用户隔离）
-        .route("/reader3/loginPage", get(login_page))
-        .route("/reader3/loginPage/submit", post(login_page_submit))
-        .route("/reader3/loginPage/result", get(login_page_result))
-        .route("/reader3/loginPage/res", get(login_page_res))
         .route(
             "/reader3/loginBookSource",
             get(login_book_source).post(login_book_source),
@@ -1395,179 +1396,213 @@ fn merge_login_params(
 }
 
 /// 解析 bookSource 参数（书源 URL 或完整 JSON）——复用 resolve_book_source 语义
-/// GET /reader3/loginPage?bookSource=：代开书源登录页（app WebView 登录的 web 等价物——
-/// 用户在代开页自己登录, Set-Cookie 经 crawler jar 存库; 表单/子资源改写回本服务）
-async fn login_page(
+// ==================== 自定义字体（按用户存库, 阅读设置可选用/删除） ====================
+
+const FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "woff", "woff2"];
+const FONT_MAX_MB: u64 = 40;
+
+fn fonts_dir(state: &AppState, ns: &str) -> std::path::PathBuf {
+    state
+        .storage
+        .config
+        .storage_dir()
+        .join("data")
+        .join(ns)
+        .join("fonts")
+}
+
+fn font_mime(ext: &str) -> &'static str {
+    match ext {
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "woff" => "font/woff",
+        _ => "font/woff2",
+    }
+}
+
+/// POST /reader3/uploadFont：multipart 字段 file → 存 data/{ns}/fonts/{id}.{ext}
+async fn upload_font(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    mut multipart: axum::extract::Multipart,
+) -> Json<ReturnData> {
+    let namespace = match resolve_namespace(&state, &params, &headers).await {
+        Ok(ns) => ns,
+        Err(ret) => return Json(ret),
+    };
+    let mut file_bytes: Option<Vec<u8>> = None;
+    let mut file_name = String::new();
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(mut field)) => {
+                if field.name() == Some("file") {
+                    file_name = field.file_name().unwrap_or("font.ttf").to_string();
+                    match read_multipart_field_limited(&mut field, FONT_MAX_MB as usize * 1024 * 1024, FONT_MAX_MB as i64).await {
+                        Ok(b) => file_bytes = Some(b),
+                        Err(msg) => return Json(ReturnData::err(msg)),
+                    }
+                }
+            }
+            Ok(None) => break,
+            Err(e) => {
+                tracing::debug!("uploadFont multipart 读取失败: {e}");
+                break;
+            }
+        }
+    }
+    let Some(bytes) = file_bytes else {
+        return Json(ReturnData::err("未收到文件"));
+    };
+    if bytes.is_empty() {
+        return Json(ReturnData::err("文件为空"));
+    }
+    let ext = file_name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_lowercase())
+        .unwrap_or_default();
+    if !FONT_EXTENSIONS.contains(&ext.as_str()) {
+        return Json(ReturnData::err("仅支持 TTF/OTF/WOFF/WOFF2 字体文件"));
+    }
+    let stem = file_name
+        .rsplit_once('.')
+        .map(|(n, _)| n)
+        .unwrap_or("font")
+        .trim()
+        .to_string();
+    let stem = if stem.is_empty() { "font".to_string() } else { stem };
+    let id = format!(
+        "{}-{:x}",
+        stem.chars()
+            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+            .collect::<String>(),
+        {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            bytes.len().hash(&mut h);
+            bytes[..64.min(bytes.len())].hash(&mut h);
+            h.finish()
+        }
+    );
+    let dir = fonts_dir(&state, &namespace);
+    if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+        return Json(ReturnData::err(format!("创建字体目录失败: {e}")));
+    }
+    let path = dir.join(format!("{id}.{ext}"));
+    if let Err(e) = tokio::fs::write(&path, &bytes).await {
+        return Json(ReturnData::err(format!("写入字体失败: {e}")));
+    }
+    Json(ReturnData::ok(serde_json::json!({
+        "id": id,
+        "name": file_name,
+        "family": format!("ReaderCustom-{id}"),
+        "size": bytes.len(),
+    })))
+}
+
+/// GET /reader3/getFontList：当前用户已上传字体
+async fn get_font_list(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Json<ReturnData> {
+    let namespace = match resolve_namespace(&state, &params, &headers).await {
+        Ok(ns) => ns,
+        Err(ret) => return Json(ret),
+    };
+    let dir = fonts_dir(&state, &namespace);
+    let mut list: Vec<serde_json::Value> = Vec::new();
+    if let Ok(mut rd) = tokio::fs::read_dir(&dir).await {
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some((id, ext)) = name.rsplit_once('.') else { continue };
+            if !FONT_EXTENSIONS.contains(&ext.to_lowercase().as_str()) {
+                continue;
+            }
+            let size = entry.metadata().await.map(|m| m.len()).unwrap_or(0);
+            let updated = entry
+                .metadata()
+                .await
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            list.push(serde_json::json!({
+                "id": id,
+                "name": name,
+                "family": format!("ReaderCustom-{id}"),
+                "size": size,
+                "updatedAt": updated,
+            }));
+        }
+    }
+    list.sort_by(|a, b| {
+        a["updatedAt"]
+            .as_i64()
+            .unwrap_or(0)
+            .cmp(&b["updatedAt"].as_i64().unwrap_or(0))
+    });
+    Json(ReturnData::ok(serde_json::Value::Array(list)))
+}
+
+/// GET /reader3/getFont?id=：字体字节（id 不可变 → 长缓存）
+async fn get_font(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Response {
-    let ns = match resolve_namespace(&state, &params, &headers).await {
+    let namespace = match resolve_namespace(&state, &params, &headers).await {
         Ok(ns) => ns,
         Err(ret) => return Json(ret).into_response(),
     };
-    let book_source_param = params.get("bookSource").cloned().unwrap_or_default();
-    let Some(source) = resolve_login_source(&state, &ns, &book_source_param).await else {
-        return html_page("书源不存在（请先导入书源）", false).into_response();
-    };
-    match crate::service::login::fetch_login_page(&ns, &source).await {
-        Ok((body, page_url)) => Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "text/html; charset=utf-8")
-            .header("Cache-Control", "no-store")
-            .body(Body::from(crate::service::login::rewrite_login_page(
-                &body,
-                &page_url,
-                &source.book_source_url,
-            )))
-            .unwrap(),
-        Err(e) => html_page(&format!("打开登录页失败: {e}"), false).into_response(),
+    let id = params.get("id").cloned().unwrap_or_default();
+    if id.is_empty() || !id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        return StatusCode::BAD_REQUEST.into_response();
     }
+    let dir = fonts_dir(&state, &namespace);
+    for ext in FONT_EXTENSIONS {
+        let path = dir.join(format!("{id}.{ext}"));
+        if let Ok(bytes) = tokio::fs::read(&path).await {
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", font_mime(ext))
+                .header("Cache-Control", "public, max-age=31536000, immutable")
+                .body(Body::from(bytes))
+                .unwrap();
+        }
+    }
+    StatusCode::NOT_FOUND.into_response()
 }
 
-/// POST /reader3/loginPage/submit：代开页表单转发（__login_action 携带原 action）
-async fn login_page_submit(
+/// POST /reader3/deleteFont：删除已上传字体
+async fn delete_font(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
     body: Option<axum::body::Bytes>,
-) -> Response {
-    let ns = match resolve_namespace(&state, &params, &headers).await {
+) -> Json<ReturnData> {
+    let namespace = match resolve_namespace(&state, &params, &headers).await {
         Ok(ns) => ns,
-        Err(ret) => return Json(ret).into_response(),
+        Err(ret) => return Json(ret),
     };
-    let book_source_param = params.get("bookSource").cloned().unwrap_or_default();
-    let Some(source) = resolve_login_source(&state, &ns, &book_source_param).await else {
-        return html_page("书源不存在（请先导入书源）", false).into_response();
-    };
-    let raw = body
-        .map(|b| String::from_utf8_lossy(&b).into_owned())
-        .unwrap_or_default();
-    let mut target: Option<String> = None;
-    let pairs: Vec<&str> = raw
-        .split('&')
-        .filter(|p| {
-            if let Some((k, v)) = p.split_once('=') {
-                if k == "__login_action" {
-                    target = Some(
-                        url::form_urlencoded::parse(format!("{k}={v}").as_bytes())
-                            .next()
-                            .map(|(_, vv)| vv.into_owned())
-                            .unwrap_or_default(),
-                    );
-                    return false;
-                }
-            }
-            true
-        })
-        .collect();
-    let forward = pairs.join("&");
-    let target = target.unwrap_or_else(|| {
-        source
-            .login_url
-            .clone()
-            .unwrap_or_else(|| source.book_source_url.clone())
-    });
-    let mut h = source
-        .header
-        .as_deref()
-        .map(crate::service::crawler::parse_header)
-        .unwrap_or_default();
-    h.insert(
-        "Content-Type".to_string(),
-        "application/x-www-form-urlencoded".to_string(),
-    );
-    let (raw_url, suffix) = crate::service::search::split_url_suffix(&target);
-    let _ = crate::service::crawler::http_post_retry(
-        &ns,
-        &raw_url,
-        &h,
-        20,
-        Some(forward.as_str()),
-        suffix.charset.as_deref(),
-        source.proxy_url.as_deref(),
-        suffix.retry,
-    )
-    .await;
-    Response::builder()
-        .status(StatusCode::SEE_OTHER)
-        .header(
-            "Location",
-            format!(
-                "/reader3/loginPage/result?bookSource={}",
-                crate::service::login::urlenc(&source.book_source_url)
-            ),
-        )
-        .body(Body::empty())
-        .unwrap()
-}
-
-/// GET /reader3/loginPage/result：提交后回访判定登录态
-async fn login_page_result(
-    State(state): State<AppState>,
-    Query(params): Query<HashMap<String, String>>,
-    headers: HeaderMap,
-) -> Response {
-    let ns = match resolve_namespace(&state, &params, &headers).await {
-        Ok(ns) => ns,
-        Err(ret) => return Json(ret).into_response(),
-    };
-    let book_source_param = params.get("bookSource").cloned().unwrap_or_default();
-    let Some(source) = resolve_login_source(&state, &ns, &book_source_param).await else {
-        return html_page("书源不存在（请先导入书源）", false).into_response();
-    };
-    let ok = crate::service::login::probe_logged_in(&ns, &source).await;
-    html_page(
-        &if ok {
-            format!("登录成功：{} 的登录态已保存, 可关闭本页", source.book_source_name)
-        } else {
-            format!(
-                "登录后回访仍见登录表单：{} 可能未登录成功——可返回代开页重试, 或用书源管理的表单/手动 Cookie",
-                source.book_source_name
-            )
-        },
-        ok,
-    )
-    .into_response()
-}
-
-/// GET /reader3/loginPage/res?bookSource=&url=：代开页子资源代理（验证码图/CSS/JS）
-async fn login_page_res(
-    State(state): State<AppState>,
-    Query(params): Query<HashMap<String, String>>,
-    headers: HeaderMap,
-) -> Response {
-    let ns = match resolve_namespace(&state, &params, &headers).await {
-        Ok(ns) => ns,
-        Err(ret) => return Json(ret).into_response(),
-    };
-    let book_source_param = params.get("bookSource").cloned().unwrap_or_default();
-    let url = params.get("url").cloned().unwrap_or_default();
-    if url.is_empty() {
-        return StatusCode::BAD_REQUEST.into_response();
+    let body_json = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    let id = param_of(&params, body_json.as_ref(), "id");
+    if id.is_empty() || !id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        return Json(ReturnData::err("参数错误"));
     }
-    let Some(source) = resolve_login_source(&state, &ns, &book_source_param).await else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    let mut h = source
-        .header
-        .as_deref()
-        .map(crate::service::crawler::parse_header)
-        .unwrap_or_default();
-    if let Ok(u) = url::Url::parse(&url) {
-        h.insert("Referer".to_string(), u.origin().ascii_serialization());
-    }
-    match crate::service::crawler::http_get_retry(&ns, &url, &h, 20, None, None, None).await {
-        Ok(resp) => {
-            let mime = mime_for(std::path::Path::new(&url));
-            Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", mime)
-                .header("Cache-Control", "public, max-age=300")
-                .body(Body::from(resp.body.into_bytes()))
-                .unwrap()
+    let dir = fonts_dir(&state, &namespace);
+    let mut deleted = false;
+    for ext in FONT_EXTENSIONS {
+        let path = dir.join(format!("{id}.{ext}"));
+        if tokio::fs::remove_file(&path).await.is_ok() {
+            deleted = true;
         }
-        Err(_) => StatusCode::BAD_GATEWAY.into_response(),
+    }
+    if deleted {
+        Json(ReturnData::ok(serde_json::json!({ "deleted": true })))
+    } else {
+        Json(ReturnData::err("字体不存在"))
     }
 }
 
@@ -11482,13 +11517,20 @@ async fn fallback_handler(
     // 内嵌资产优先（rust-embed——发布单文件免外部 dist）；磁盘目录回退
     // （READER_APP_WEB_ROOT 自定义主题 / 开发热更）
     let rel = path.trim_start_matches('/');
+    // HTML(index.html / SPA 回退)永远 no-cache; 哈希产物才 immutable——
+    // index 被长缓存会导致浏览器永持旧 index 引用旧 chunk(整页 404 事故根因)
+    let is_html = rel.is_empty() || rel == "index.html" || rel.ends_with("/index.html");
     if let Some((bytes, mime)) = crate::web_assets::get(rel) {
-        return Response::builder()
+        let mut b = Response::builder()
             .status(StatusCode::OK)
-            .header("Content-Type", mime)
-            .header("Cache-Control", "public, max-age=31536000, immutable")
-            .body(Body::from(bytes))
-            .unwrap();
+            .header("Content-Type", mime);
+        b = if is_html {
+            b.header("Cache-Control", "no-cache")
+                .header("Surrogate-Control", "no-store")
+        } else {
+            b.header("Cache-Control", "public, max-age=31536000, immutable")
+        };
+        return b.body(Body::from(bytes)).unwrap();
     }
     let web_root = std::path::PathBuf::from(&state.storage.config.web_root);
     let file = web_root.join(rel);
@@ -11496,13 +11538,16 @@ async fn fallback_handler(
     let root_abs = web_root.canonicalize().unwrap_or_else(|_| web_root.clone());
     if file_abs.starts_with(&root_abs) && file.is_file() {
         if let Ok(bytes) = tokio::fs::read(&file).await {
-            return Response::builder()
+            let mut b = Response::builder()
                 .status(StatusCode::OK)
-                .header("Content-Type", mime_for(&file))
-                // 哈希文件名内容不变 → 长缓存; 无代理部署也自洽
-                .header("Cache-Control", "public, max-age=31536000, immutable")
-                .body(Body::from(bytes))
-                .unwrap();
+                .header("Content-Type", mime_for(&file));
+            b = if is_html {
+                b.header("Cache-Control", "no-cache")
+                    .header("Surrogate-Control", "no-store")
+            } else {
+                b.header("Cache-Control", "public, max-age=31536000, immutable")
+            };
+            return b.body(Body::from(bytes)).unwrap();
         }
     }
     // 前端 SPA：index.html（内嵌优先）

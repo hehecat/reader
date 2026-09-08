@@ -361,6 +361,23 @@ export async function loginBookSource(
   return data;
 }
 
+/** 当前用户全部书源登录态 (cookie 行) */
+export interface SourceCookieRow {
+  sourceUrl: string;
+  cookie: string;
+  userAgent?: string;
+  loginHeader?: string;
+  updatedAt?: number;
+}
+
+/** 读取当前用户书源登录态列表 (登录徽标/对话框状态用) */
+export async function getBookSourceCookie(
+  config?: ApiRequestConfig,
+): Promise<SourceCookieRow[]> {
+  const data = await get<SourceCookieRow[]>("/getBookSourceCookie", undefined, config);
+  return data ?? [];
+}
+
 /** 手动设置书源 Cookie (空串 = 清除); 点击验证码等场景的兜底 */
 export async function setBookSourceCookie(
   bookSource: string,

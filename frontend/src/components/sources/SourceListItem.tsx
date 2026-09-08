@@ -25,6 +25,8 @@ export interface SourceListItemProps {
   onWorkbench?: (source: BookSource) => void;
   /** 书源配置了 loginUrl 时渲染「登录」入口(登录态按用户存库) */
   onLogin?: (source: BookSource) => void;
+  /** 该书源已存登录态(cookie 非空) */
+  logged?: boolean;
   onEdit: (source: BookSource) => void;
   onDebug: (source: BookSource) => void;
   onDelete: (source: BookSource) => void;
@@ -50,6 +52,7 @@ export function SourceListItem({
   onToggleEnabled,
   onWorkbench,
   onLogin,
+  logged = false,
   onEdit,
   onDebug,
   onDelete,
@@ -89,6 +92,16 @@ export function SourceListItem({
           <Badge size="sm" variant="muted" className="shrink-0 bg-secondary text-foreground">
             {TYPE_LABEL[source.bookSourceType] ?? `类型${source.bookSourceType}`}
           </Badge>
+          {logged ? (
+            <Badge
+              size="sm"
+              variant="outline"
+              className="shrink-0 border-accent/50 text-accent"
+              title="该书源已保存登录态(Cookie 按当前账号存库)"
+            >
+              已登录
+            </Badge>
+          ) : null}
           {invalid || dead ? (
             invalid && onInvalidClick !== undefined ? (
               <button

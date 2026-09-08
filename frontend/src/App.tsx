@@ -5,6 +5,7 @@ import { TooltipProvider, ToastViewport } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { lazyPage } from "@/lib/lazy";
+import { useCustomFonts } from "@/hooks/useCustomFonts";
 
 // 路由级分包: 每个页面单独一个 chunk, 首次访问才拉取;
 // Suspense 占位与 chunk 失效(部署更新/断网)兜底见 @/lib/lazy.
@@ -21,6 +22,8 @@ const MePage = lazyPage(() => import("@/pages/MePage"));
 const ReaderPage = lazyPage(() => import("@/pages/ReaderPage"));
 
 export default function App() {
+  useCustomFonts();
+  // 自定义字体 @font-face 全局注入(阅读器/设置预览共用)
   // 主题应用到 <html>(dark class / data-theme), 全局一次
   useTheme();
   // 监听 reader:unauthorized → 清登录态并跳 /login?redirect=当前路径

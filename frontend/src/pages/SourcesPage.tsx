@@ -9,7 +9,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ellipsis } from "lucide-react";
 import {
   DropdownMenu,
@@ -38,7 +38,7 @@ import {
   useSourceStats,
   useToggleSourceEnabled,
 } from "@/components/sources/useSources";
-import { saveBookSources, type SourceStat } from "@/services/sources";
+import { getBookSourceCookie, saveBookSources, type SourceStat } from "@/services/sources";
 import { SOURCES_QUERY_KEY } from "@/components/sources/useSources";
 import { InvalidReasonDialog } from "@/components/sources/InvalidReasonDialog";
 import type { InvalidBookSource } from "@/services/sources";
@@ -62,6 +62,7 @@ import { toast } from "@/components/ui/Toast";
 import type { BookSource } from "@/types/api";
 
 /** 书源列表容器 id: 分组标签通过 aria-controls 指向它 */
+const SOURCE_COOKIES_QUERY_KEY = ["sourceCookies"] as const;
 const LIST_ID = "sources-list";
 
 /** 书源管理页: 列表(启用开关/编辑/调试/删除) + 分组 Tabs + 本地搜索 + 导入 + 失效检测 */
@@ -119,6 +120,19 @@ export default function SourcesPage() {
   const [importOpen, setImportOpen] = React.useState(false);
   const [editSource, setEditSource] = React.useState<BookSource | null>(null);
   const [loginSource, setLoginSource] = React.useState<BookSource | null>(null);
+  /** 书源登录态(cookie 按用户存库): 行徽标 + 登录对话框横幅 */
+  const cookiesQuery = useQuery({
+    queryKey: SOURCE_COOKIES_QUERY_KEY,
+    queryFn: getBookSourceCookie,
+    staleTime: 30_000,
+  });
+  const cookieMap = React.useMemo(() => {
+    const m = new Map<string, string>();
+    for (const row of cookiesQuery.data ?? []) {
+      if (row.cookie.trim().length > 0) m.set(row.sourceUrl, row.cookie);
+    }
+    return m;
+  }, [cookiesQuery.data]);
   const [debugSource, setDebugSource] = React.useState<BookSource | null>(null);
   const [pendingDelete, setPendingDelete] = React.useState<BookSource | null>(null);
   const [invalidOpen, setInvalidOpen] = React.useState(false);
@@ -558,6 +572,7 @@ export default function SourcesPage() {
                   onWorkbench={(target) =>
                     navigate(`/workbench?url=${encodeURIComponent(target.bookSourceUrl)}`)
                   }
+                  logged={cookieMap.has(source.bookSourceUrl)}
                   onEdit={setEditSource}
                   onLogin={setLoginSource}
                   onDebug={setDebugSource}
@@ -583,6 +598,12 @@ export default function SourcesPage() {
       <SourceLoginDialog
         source={loginSource}
         open={loginSource !== null}
+        existingCookie={
+          loginSource ? (cookieMap.get(loginSource.bookSourceUrl) ?? null) : null
+        }
+        onCookieChanged={() =>
+          void queryClient.invalidateQueries({ queryKey: SOURCE_COOKIES_QUERY_KEY })
+        }
         onOpenChange={(open) => {
           if (!open) setLoginSource(null);
         }}

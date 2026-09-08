@@ -1,11 +1,14 @@
-import { Check } from "lucide-react";
+import { Check, Trash2, Upload } from "lucide-react";
+import * as React from "react";
 
 import {
   FONT_FAMILY_OPTIONS,
   Segmented,
   StepperRow,
 } from "@/components/reader/SettingsControls";
-import { Input, SettingCard, SettingRow, Slider, Switch, cn } from "@/components/ui";
+import { Button, Input, SettingCard, SettingRow, Slider, Switch, cn, toast } from "@/components/ui";
+import { useCustomFonts } from "@/hooks/useCustomFonts";
+import { deleteFont, uploadFont, type CustomFont } from "@/services/fonts";
 import {
   AUTO_SCROLL_SPEED_RANGE,
   FONT_SIZE_RANGE,
@@ -79,6 +82,28 @@ export function ReadingPreferencesCard() {
   const setPreheatOnChapterEnd = useSettingsStore((state) => state.setPreheatOnChapterEnd);
   const preheatOnAdd = useSettingsStore((state) => state.preheatOnAdd);
   const setPreheatOnAdd = useSettingsStore((state) => state.setPreheatOnAdd);
+  const { fonts, refresh } = useCustomFonts();
+  const [uploading, setUploading] = React.useState(false);
+  const fileRef = React.useRef<HTMLInputElement>(null);
+
+  const handleUpload = async (file: File) => {
+    setUploading(true);
+    try {
+      const saved = await uploadFont(file);
+      toast.success(`字体「${saved.name}」已上传`);
+      refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "上传失败");
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  const applyFont = (f: CustomFont) => {
+    setCustomFontFamily(`"${f.family}"`);
+    setFontFamily("custom");
+  };
 
   return (
     <SettingCard title="阅读偏好" desc="与阅读器内的设置面板同源, 修改即时生效并保存在本机">
@@ -197,6 +222,67 @@ export function ReadingPreferencesCard() {
           />
         </div>
       ) : null}
+      <div className="space-y-2 py-4">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-muted-foreground text-xs">
+            上传字体（TTF/OTF/WOFF/WOFF2, ≤40MB）· 按账号存服务端, 选用后作用于正文
+          </span>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={uploading}
+            onClick={() => fileRef.current?.click()}
+          >
+            <Upload aria-hidden className="size-4" />
+            {uploading ? "上传中" : "上传字体"}
+          </Button>
+          <input
+            ref={fileRef}
+            type="file"
+            hidden
+            accept=".ttf,.otf,.woff,.woff2"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void handleUpload(f);
+            }}
+          />
+        </div>
+        {fonts.map((f) => {
+          const active = customFontFamily.includes(f.family);
+          return (
+            <div
+              key={f.id}
+              className="border-border/70 bg-surface-muted/40 flex items-center gap-2 rounded-md border px-3 py-2"
+            >
+              <span className="min-w-0 flex-1 truncate text-sm" title={f.name}>
+                {f.name}
+                <span className="text-muted-foreground ml-2 text-xs">{Math.round(f.size / 1024)} KB</span>
+              </span>
+              <Button size="sm" variant={active ? "secondary" : "ghost"} disabled={active} onClick={() => applyFont(f)}>
+                {active ? <Check aria-hidden className="size-4" /> : null}
+                {active ? "使用中" : "选用"}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-muted-foreground hover:bg-danger/10 hover:text-danger"
+                onClick={() => {
+                  void deleteFont(f.id)
+                    .then(() => {
+                      if (active) setCustomFontFamily("");
+                      refresh();
+                      toast.success("字体已删除");
+                    })
+                    .catch((e) => toast.error(e instanceof Error ? e.message : "删除失败"));
+                }}
+              >
+                <Trash2 aria-hidden className="size-4" />
+                删除
+              </Button>
+            </div>
+          );
+        })}
+      </div>
       <SettingRow
         label="阅读模式"
         value={readMode === "page" ? "翻页 · 左右分页, 像纸书一样" : "滚动 · 上下连续阅读"}
