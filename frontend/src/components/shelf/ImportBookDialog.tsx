@@ -168,7 +168,7 @@ export function ImportBookDialog({ open, onOpenChange }: ImportBookDialogProps) 
       <DialogContent width="md">
         <DialogHeader>
           <DialogTitle>导入本地书籍</DialogTitle>
-          <DialogDescription>上传 TXT / EPUB 文件, 确认后加入书架</DialogDescription>
+          <DialogDescription>上传文件, 确认后加入书架</DialogDescription>
         </DialogHeader>
 
         <div className="px-4 md:px-5">
