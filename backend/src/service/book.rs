@@ -557,6 +557,30 @@ pub async fn analyze_toc(
     }
 }
 
+/// 目录抓取总预算(秒, env READER_TOC_BUDGET_SECS 覆盖, 默认 30): 链表分页串行抓,
+/// 卡源单页 CF 求解+超时可到 25-35s, 无总预算时实测 100s+ 无响应; 到点即报错可重试
+fn toc_budget_secs() -> u64 {
+    static B: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    let base = *B.get_or_init(|| {
+        std::env::var("READER_TOC_BUDGET_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|v: &u64| *v > 0)
+            .unwrap_or(30)
+    });
+    match TOC_BUDGET_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => base,
+        v => v,
+    }
+}
+
+/// 测试覆盖总预算(None = 用 env/默认)
+static TOC_BUDGET_OVERRIDE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(test)]
+fn set_toc_budget_secs(v: u64) {
+    TOC_BUDGET_OVERRIDE.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
 async fn analyze_toc_impl(
     ns: &str,
     toc_url: &str,
@@ -566,6 +590,8 @@ async fn analyze_toc_impl(
     book_url: &str,
 ) -> Result<Vec<BookChapter>> {
     let mut all: Vec<BookChapter> = Vec::new();
+    let toc_t0 = std::time::Instant::now();
+    let toc_budget = std::time::Duration::from_secs(toc_budget_secs());
     let mut current_url = toc_url.to_string();
     let mut reverse = false;
     // legado Book.putVariable：详情（getBookInfo）写入的变量在目录/正文流程共享
@@ -575,6 +601,13 @@ async fn analyze_toc_impl(
     vars.book_name = book_name.map(str::to_string);
 
     for _page in 0..max_pages {
+        if toc_t0.elapsed() > toc_budget {
+            return Err(anyhow::anyhow!(
+                "目录抓取超时(预算 {}s, 已抓 {} 页): 源响应过慢, 可点刷新目录重试",
+                toc_budget.as_secs(),
+                _page
+            ));
+        }
         let resp = fetch_url(ns, &current_url, source).await?;
         // legado WebBook.getChapterList：目录页抓取后执行 loginCheckJs
         let page_body = apply_login_check_js(ns, source, &resp.body, &resp.url, None).await;
@@ -1775,6 +1808,69 @@ mod tests {
         let chapters = chapters_from_items(&items, &rule, "https://src.test", 0, &mut vars);
         assert_eq!(chapters.len(), 1);
         assert_eq!(chapters[0].tag.as_deref(), Some("2026-08-08"));
+    }
+
+    /// 链表分页串行抓的总预算: 每页 2s 的双页源 + 预算 1s → 第二页前报错, 不再百秒无响应
+    #[tokio::test]
+    async fn test_toc_budget_caps_serial_pagination() {
+        let _ssrf = crate::service::crawler::ssrf_allow_private_guard(true);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(v) => v,
+                    Err(_) => return,
+                };
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = [0u8; 1024];
+                    let mut req = String::new();
+                    loop {
+                        let n = sock.read(&mut buf).await.unwrap_or(0);
+                        if n == 0 {
+                            break;
+                        }
+                        req.push_str(&String::from_utf8_lossy(&buf[..n]));
+                        if req.contains("\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    let path = req.split_whitespace().nth(1).unwrap_or("/");
+                    let body = if path.starts_with("/toc2") {
+                        r#"{"ch":[{"t":"第二章","u":"/c/2"}]}"#
+                    } else {
+                        r#"{"ch":[{"t":"第一章","u":"/c/1"}],"next":"/toc2"}"#
+                    };
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        let mut src = test_source();
+        src.book_source_url = format!("http://{addr}/src");
+        src.rule_toc = Some(serde_json::json!({
+            "chapterList": "@js:$.ch",
+            "chapterName": "$.t",
+            "chapterUrl": "$.u",
+            "nextTocUrl": "$.next"
+        }));
+        set_toc_budget_secs(1);
+        let t0 = std::time::Instant::now();
+        let res = analyze_toc("default", &format!("http://{addr}/toc"), &src, 20, None, "").await;
+        let elapsed = t0.elapsed();
+        set_toc_budget_secs(0);
+        let err = res.err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(
+            err.contains("预算") && elapsed < std::time::Duration::from_secs(10),
+            "应报预算超时且快: err={err} elapsed={elapsed:?}"
+        );
     }
 
     /// 详情 @put → 目录 @get：书级变量跨 getBookInfo/getChapterList 贯通
