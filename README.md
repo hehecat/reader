@@ -155,10 +155,10 @@ compose 默认挂 `deploy/storage/`(容器内 `/storage/storage`), 内含:
 仅当你需要 HTTPS(公网访问建议)时才自备反代, 届时注意三点:
 
 1. SSE 路径(`/reader3/*SSE`)不压缩、关代理缓冲, 否则搜索流式失效
-2. **HTML 永不缓存**: `/` 与 `/reader3/*` 必须 no-cache/不缓存; 只允许缓存 `/assets/*`(哈希名, 容器已发 immutable)。给 HTML 加缓存会导致旧 index.html 引用旧 chunk 哈希 → 整页 404(常见事故)
+2. **HTML 永不缓存**: `/` 与 `/reader3/*` 必须 no-cache/不缓存; 只允许缓存 `/static/*`(前端哈希产物, 容器已发 immutable); `/assets/*` 是用户封面存储路由, 勿加 immutable。给 HTML 加缓存会导致旧 index.html 引用旧 chunk 哈希 → 整页 404(常见事故)
 3. 参考 `deploy/Caddyfile.example`
 
-容器自身已发正确缓存头(HTML no-cache + Surrogate-Control: no-store; /assets/* immutable), 无代理部署天然自洽。
+容器自身已发正确缓存头(HTML no-cache + Surrogate-Control: no-store; /static/* immutable), 无代理部署天然自洽。
 
 ---
 

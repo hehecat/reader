@@ -25,6 +25,8 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
+    // 后端 /assets 是 legacy storage 封面路由(nest_service), 前端产物必须避开
+    assetsDir: "static",
     rollupOptions: {
       output: {
         // 按包分组的长效缓存 chunk; 未命中的 vendor 交给 Rollup 默认策略,
