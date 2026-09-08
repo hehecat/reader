@@ -1,5 +1,6 @@
 import { get, post, type ApiRequestConfig } from "@/lib/api-client";
 import { getAccessToken } from "@/lib/storage";
+import { postMultipart } from "@/services/import";
 
 /** 用户上传的自定义字体（按账号存库） */
 export interface CustomFont {
@@ -20,10 +21,11 @@ export async function getFontList(config?: ApiRequestConfig): Promise<CustomFont
 }
 
 /** 上传字体文件 (ttf/otf/woff/woff2, ≤40MB) */
+/** 走 fetch 直传(与书籍上传同链路): axios 实例带 30s 超时, 慢网大文件会被掐断→后端截断 multipart 报错 */
 export async function uploadFont(file: File, config?: ApiRequestConfig): Promise<CustomFont> {
   const form = new FormData();
-  form.append("file", file);
-  return await post<CustomFont>("/uploadFont", form, config);
+  form.append("file", file, file.name);
+  return await postMultipart<CustomFont>("/uploadFont", form, config);
 }
 
 /** 删除已上传字体 */

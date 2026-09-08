@@ -55,7 +55,7 @@ export type UploadedBook = z.infer<typeof uploadedBookSchema>;
  * accessToken 与 api-client 拦截器一致地放在 query; 响应按同样的 envelope 规则解包/抛错.
  * 不手动设置 Content-Type, 由浏览器带上 multipart boundary.
  */
-async function postMultipart<T>(
+export async function postMultipart<T>(
   url: string,
   form: FormData,
   config?: ApiRequestConfig,
