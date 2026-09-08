@@ -331,3 +331,41 @@ export async function getSourceStats(config?: ApiRequestConfig): Promise<SourceS
   const data = await get<unknown>("/getSourceStats", undefined, config);
   return parseWith(sourceStatListSchema, stripNullsDeep(data));
 }
+
+/** 书源登录结果 (warp /reader3/loginBookSource 软性结果联合体) */
+export interface SourceLoginResult {
+  success: boolean;
+  /** 需要图片验证码: captchaUrl 展示, 用户输入后带 captcha 重试 */
+  needCaptcha?: boolean;
+  captchaUrl?: string;
+  captchaId?: string;
+  /** 点击类验证码等无法自动处理 → 引导手动粘贴 Cookie */
+  needManualCaptcha?: boolean;
+  message?: string;
+  cookie?: string;
+}
+
+/** 书源登录: 表单 HTTP 登录 (mode=browser 走 camoufox 自动过验证码) */
+export async function loginBookSource(
+  params: {
+    bookSource: string;
+    username?: string;
+    password?: string;
+    captcha?: string;
+    captchaId?: string;
+    mode?: "http" | "browser";
+  },
+  config?: ApiRequestConfig,
+): Promise<SourceLoginResult> {
+  const data = await post<SourceLoginResult>("/loginBookSource", params, config);
+  return data;
+}
+
+/** 手动设置书源 Cookie (空串 = 清除); 点击验证码等场景的兜底 */
+export async function setBookSourceCookie(
+  bookSource: string,
+  cookie: string,
+  config?: ApiRequestConfig,
+): Promise<void> {
+  await post<unknown>("/setBookSourceCookie", { bookSource, cookie }, config);
+}

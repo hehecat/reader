@@ -161,6 +161,36 @@ pub fn check_login(js: &str, cookie: &str, result: &str, url: &str) -> Result<bo
     Ok(r.eq_ignore_ascii_case("true") || r == "1")
 }
 
+/// 无 loginCheckJs 时的失败标记嗅探：站点常对任意账密回 200 + 会话 Cookie,
+/// 仅凭状态码会「假成功」——先扫常见失败文案并回带片段
+fn login_failure_marker(body: &str) -> Option<String> {
+    const MARKERS: &[&str] = &[
+        "密码错误",
+        "密码不正确",
+        "用户名错误",
+        "账号或密码错误",
+        "用户名或密码错误",
+        "账号不存在",
+        "用户名不存在",
+        "账户不存在",
+        "登录失败",
+        "验证码错误",
+        "incorrect password",
+        "invalid credentials",
+        "wrong password",
+        "login failed",
+    ];
+    let lower = body.to_lowercase();
+    for m in MARKERS {
+        if let Some(pos) = lower.find(m) {
+            let snippet: String = body[pos..].chars().take(30).collect();
+            let snippet = snippet.split('<').next().unwrap_or("").trim();
+            return Some(format!("站点提示登录失败: {snippet}"));
+        }
+    }
+    None
+}
+
 /// Set-Cookie 合并（响应多个 Set-Cookie + 用户既有 cookie）：
 /// 按 name 合并——新 Set-Cookie 覆盖同名、空值删除、其余保留；顺序稳定（既有为基底 + 新名追加）
 pub fn merge_cookie(existing: &str, set_cookies: &[String]) -> String {
@@ -432,10 +462,38 @@ pub async fn login_http(
             .await?;
     }
 
-    // loginCheckJs
+    // loginCheckJs; 缺失时启发式防假成功: 无失败标记 + 合并 Cookie 回访 loginUrl 不再展示登录表单
+    let has_check_js = source.login_check_js.as_deref().is_some_and(|j| !j.trim().is_empty());
     let ok = match &source.login_check_js {
-        Some(js) => check_login(js, &merged, &resp.body, &resp.url)?,
-        None => true,
+        Some(js) if !js.trim().is_empty() => check_login(js, &merged, &resp.body, &resp.url)?,
+        _ => {
+            if login_failure_marker(&resp.body).is_some() {
+                false
+            } else {
+                let mut probe_headers = req_headers.clone();
+                if !merged.is_empty() {
+                    probe_headers.insert("Cookie".to_string(), merged.clone());
+                }
+                match crawler::http_get_retry(
+                    ns,
+                    &url,
+                    &probe_headers,
+                    20,
+                    suffix.charset.as_deref(),
+                    source.proxy_url.as_deref(),
+                    suffix.retry,
+                )
+                .await
+                {
+                    Ok(pr) => {
+                        let still_form =
+                            pr.body.contains("type=\"password\"") || pr.body.contains("type='password'");
+                        login_failure_marker(&pr.body).is_none() && !still_form
+                    }
+                    Err(_) => false,
+                }
+            }
+        }
     };
     if ok {
         return Ok(LoginOutcome::Success { cookie: merged });
@@ -477,7 +535,13 @@ pub async fn login_http(
         });
     }
     Ok(LoginOutcome::Failed {
-        message: "登录失败：loginCheckJs 未通过".to_string(),
+        message: if has_check_js {
+            "登录失败：loginCheckJs 未通过".to_string()
+        } else {
+            login_failure_marker(&resp.body).unwrap_or_else(|| {
+                "无法校验登录结果：登录请求未返回 Cookie 且书源未配 loginCheckJs——请在工作台补 loginCheckJs, 或改用手动 Cookie".to_string()
+            })
+        },
     })
 }
 
@@ -559,9 +623,14 @@ async fn login_session_to_outcome(
             let cookie_str = sess.cookies_to_string();
             let html = &sess.html;
             let page_url = &sess.url;
+            let has_check_js = source.login_check_js.as_deref().is_some_and(|j| !j.trim().is_empty());
             let ok = match &source.login_check_js {
-                Some(js) => check_login(js, &cookie_str, html, page_url)?,
-                None => true,
+                Some(js) if !js.trim().is_empty() => check_login(js, &cookie_str, html, page_url)?,
+                _ => {
+                    let still_form =
+                        html.contains("type=\"password\"") || html.contains("type='password'");
+                    login_failure_marker(html).is_none() && !cookie_str.is_empty() && !still_form
+                }
             };
             if ok {
                 if !cookie_str.is_empty() {
@@ -580,7 +649,13 @@ async fn login_session_to_outcome(
                 });
             }
             Ok(LoginOutcome::Failed {
-                message: "浏览器登录失败：loginCheckJs 未通过".to_string(),
+                message: if has_check_js {
+                    "浏览器登录失败：loginCheckJs 未通过".to_string()
+                } else {
+                    login_failure_marker(html).unwrap_or_else(|| {
+                        "无法校验登录结果：浏览器会话无 Cookie 且书源未配 loginCheckJs——请补 loginCheckJs 或改用手动 Cookie".to_string()
+                    })
+                },
             })
         }
         "need_captcha" => {

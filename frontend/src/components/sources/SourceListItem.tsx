@@ -1,4 +1,4 @@
-import { BookText, Pencil, SquareTerminal, ToolCase, Trash2 } from "lucide-react";
+import { BookText, KeyRound, Pencil, SquareTerminal, ToolCase, Trash2 } from "lucide-react";
 
 import { Badge, IconButton, Switch, cn } from "@/components/ui";
 import type { SourceStat } from "@/services/sources";
@@ -23,6 +23,8 @@ export interface SourceListItemProps {
   onToggleEnabled: (source: BookSource, enabled: boolean) => void;
   /** 提供时在操作区渲染「工作台」入口(跳转可视化调试); 不传则不渲染 */
   onWorkbench?: (source: BookSource) => void;
+  /** 书源配置了 loginUrl 时渲染「登录」入口(登录态按用户存库) */
+  onLogin?: (source: BookSource) => void;
   onEdit: (source: BookSource) => void;
   onDebug: (source: BookSource) => void;
   onDelete: (source: BookSource) => void;
@@ -47,6 +49,7 @@ export function SourceListItem({
   onInvalidClick,
   onToggleEnabled,
   onWorkbench,
+  onLogin,
   onEdit,
   onDebug,
   onDelete,
@@ -129,6 +132,11 @@ export function SourceListItem({
       </div>
 
       <div className="flex shrink-0 items-center gap-0.5">
+        {onLogin !== undefined && (source.loginUrl ?? "").trim().length > 0 ? (
+          <IconButton size="sm" variant="ghost" tooltip="登录" onClick={() => onLogin(source)}>
+            <KeyRound aria-hidden />
+          </IconButton>
+        ) : null}
         {onWorkbench !== undefined ? (
           <IconButton size="sm" variant="ghost" tooltip="工作台" onClick={() => onWorkbench(source)}>
             <ToolCase aria-hidden />

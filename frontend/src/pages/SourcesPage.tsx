@@ -26,6 +26,7 @@ import { ImportSourcesDialog } from "@/components/sources/ImportSourcesDialog";
 import { InvalidSourcesDialog } from "@/components/sources/InvalidSourcesDialog";
 import { SourceGroupTabs } from "@/components/sources/SourceGroupTabs";
 import { SourceListItem } from "@/components/sources/SourceListItem";
+import { SourceLoginDialog } from "@/components/sources/SourceLoginDialog";
 import {
   SOURCE_GROUP_ALL,
   buildSourceGroups,
@@ -117,6 +118,7 @@ export default function SourcesPage() {
   const [activeGroup, setActiveGroup] = React.useState<string>(SOURCE_GROUP_ALL);
   const [importOpen, setImportOpen] = React.useState(false);
   const [editSource, setEditSource] = React.useState<BookSource | null>(null);
+  const [loginSource, setLoginSource] = React.useState<BookSource | null>(null);
   const [debugSource, setDebugSource] = React.useState<BookSource | null>(null);
   const [pendingDelete, setPendingDelete] = React.useState<BookSource | null>(null);
   const [invalidOpen, setInvalidOpen] = React.useState(false);
@@ -557,6 +559,7 @@ export default function SourcesPage() {
                     navigate(`/workbench?url=${encodeURIComponent(target.bookSourceUrl)}`)
                   }
                   onEdit={setEditSource}
+                  onLogin={setLoginSource}
                   onDebug={setDebugSource}
                   onDelete={setPendingDelete}
                 />
@@ -574,6 +577,14 @@ export default function SourcesPage() {
         open={editSource !== null}
         onOpenChange={(open) => {
           if (!open) setEditSource(null);
+        }}
+      />
+
+      <SourceLoginDialog
+        source={loginSource}
+        open={loginSource !== null}
+        onOpenChange={(open) => {
+          if (!open) setLoginSource(null);
         }}
       />
 

@@ -7,6 +7,25 @@
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
+/// legacy/源仓库 JSON 的数字字段常以字符串下发(如 lastUpdateTime: "1700000000000"),
+/// 严格 i64 反序列化会整源拒收 → 容忍 数字/数字字符串/null
+fn lenient_i64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
+    use serde::de::Error;
+    match serde_json::Value::deserialize(d)? {
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .or_else(|| n.as_f64().map(|f| f as i64))
+            .ok_or_else(|| D::Error::custom("invalid number")),
+        serde_json::Value::String(t) => t
+            .trim()
+            .parse::<i64>()
+            .or_else(|_| t.trim().parse::<f64>().map(|f| f as i64))
+            .map_err(|_| D::Error::custom("invalid number string")),
+        serde_json::Value::Null => Ok(0),
+        _ => Err(D::Error::custom("invalid number")),
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, FromRow)]
 #[serde(default)]
 pub struct BookSource {
@@ -21,12 +40,14 @@ pub struct BookSource {
     pub book_source_group: Option<String>,
     #[serde(rename = "bookSourceType")]
     #[sqlx(rename = "book_source_type")]
+    #[serde(deserialize_with = "lenient_i64")]
     pub book_source_type: i64,
     #[serde(rename = "bookUrlPattern")]
     #[sqlx(rename = "book_url_pattern")]
     pub book_url_pattern: Option<String>,
     #[serde(rename = "customOrder")]
     #[sqlx(rename = "custom_order")]
+    #[serde(deserialize_with = "lenient_i64")]
     pub custom_order: i64,
     pub enabled: bool,
     #[serde(rename = "enabledExplore")]
@@ -69,10 +90,13 @@ pub struct BookSource {
     pub variable_comment: Option<String>,
     #[serde(rename = "lastUpdateTime")]
     #[sqlx(rename = "last_update_time")]
+    #[serde(deserialize_with = "lenient_i64")]
     pub last_update_time: i64,
     #[serde(rename = "respondTime")]
     #[sqlx(rename = "respond_time")]
+    #[serde(deserialize_with = "lenient_i64")]
     pub respond_time: i64,
+    #[serde(deserialize_with = "lenient_i64")]
     pub weight: i64,
     // ---- 使用统计（权重自动调整数据源；serde skip：不外泄/不参与 raw_json，
     //      客户端回写 saveBookSource 也不会覆盖——upsert 不写这两列）----
@@ -299,5 +323,25 @@ mod tests {
         assert_eq!(normalize_book_sources(single).len(), 1);
 
         assert!(normalize_book_sources(serde_json::json!({ "x": 1 })).is_empty());
+    }
+
+    /// 源仓库/legacy 导出常把数字字段写成字符串 → 必须容忍, 否则整源拒收
+    #[test]
+    fn 数字字段容忍字符串与null() {
+        let v = serde_json::json!({
+            "bookSourceUrl": "https://e.com/",
+            "bookSourceName": "E源",
+            "lastUpdateTime": "1700000000000",
+            "respondTime": "60000",
+            "weight": null,
+            "bookSourceType": "1",
+            "customOrder": 3
+        });
+        let s: BookSource = serde_json::from_value(v).expect("字符串数字应可反序列化");
+        assert_eq!(s.last_update_time, 1700000000000);
+        assert_eq!(s.respond_time, 60000);
+        assert_eq!(s.weight, 0);
+        assert_eq!(s.book_source_type, 1);
+        assert_eq!(s.custom_order, 3);
     }
 }

@@ -1316,10 +1316,24 @@ async fn delete_book_sources(
     let Some(body) = body else {
         return Json(ReturnData::err("参数错误"));
     };
-    let urls: Vec<String> = match serde_json::from_slice(&body) {
+    // legacy 契约 body = BookSource 对象数组; 也容忍纯字符串数组
+    let raw: Vec<serde_json::Value> = match serde_json::from_slice(&body) {
         Ok(u) => u,
         Err(_) => return Json(ReturnData::err("参数错误")),
     };
+    let urls: Vec<String> = raw
+        .into_iter()
+        .filter_map(|v| match v {
+            serde_json::Value::String(t) => Some(t),
+            serde_json::Value::Object(m) => m
+                .get("bookSourceUrl")
+                .or_else(|| m.get("url"))
+                .and_then(|u| u.as_str())
+                .map(str::to_string),
+            _ => None,
+        })
+        .filter(|u| !u.is_empty())
+        .collect();
     let mut deleted = 0u64;
     for url in &urls {
         if let Ok(n) = state.storage.delete_book_source(&namespace, url).await {
@@ -11282,6 +11296,7 @@ async fn fallback_handler(
         return Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", mime)
+            .header("Cache-Control", "public, max-age=31536000, immutable")
             .body(Body::from(bytes))
             .unwrap();
     }
