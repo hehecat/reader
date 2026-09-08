@@ -149,6 +149,10 @@ compose 默认挂 `deploy/storage/`(容器内 `/storage/storage`), 内含:
 
 **运行时可调(无需重启/重建)**: 设置页「搜索 → 单源搜索超时」(3-60s, 即时保存, 随每次搜索请求下发)。
 
+**后端改动本地验证(不等 GH 镜像)**: `scripts/dev-backend.sh`(增量 debug 编译 + 临时实例 :4599 独立 storage) /
+`scripts/dev-backend.sh smoke`(冒烟: index/注册登录/书架) / `stop` 停止。GH Actions 只出发布镜像;
+镜像构建为 cargo-chef 三段式, 依赖层命中缓存时 src 改动只编本 crate。
+
 **CF 质询/浏览器自动登录**: 镜像不内置 camoufox(体积)。需要解 Cloudflare 质询或书源浏览器登录时,
 在宿主机跑 `python3 scripts/camoufox_solver.py`(先 `pip install camoufox && python -m camoufox fetch`),
 再给容器设 `READER_CAMOUFOX_URL=http://<宿主机IP>:<端口>`; 未配置时相关能力报「camoufox 求解服务启动失败」并缓存, 不影响直连抓取。

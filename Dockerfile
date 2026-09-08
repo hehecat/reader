@@ -14,17 +14,34 @@ RUN npm i -g pnpm@11 && pnpm fetch --frozen-lockfile
 COPY frontend ./
 RUN pnpm install --frozen-lockfile --offline && pnpm build
 
-# ---------- 阶段 2：后端编译 ----------
-FROM rust:1.97-slim AS builder
+# ---------- 阶段 2：后端编译（cargo-chef 三段式: 依赖层缓存, src 改动只编本 crate） ----------
+FROM rust:1.97-slim AS chef
+RUN cargo install cargo-chef --locked
+
+FROM chef AS planner
 WORKDIR /app
 COPY backend/Cargo.toml backend/Cargo.lock ./
+COPY backend/src ./src
+COPY backend/.cargo ./.cargo
+# rust-embed/include_bytes 路径占位（prepare 只扫源码不编译, 真产物在 cook/build 阶段注入）
+RUN mkdir -p web-ui/dist web-ui/public/fonts \
+    && echo '<!doctype html><title>placeholder</title>' > web-ui/dist/index.html
+RUN cargo chef prepare --recipe-path /app/recipe.json
+
+FROM chef AS cook
+WORKDIR /app
+ENV RUSTFLAGS="--cfg reqwest_unstable"
+COPY --from=planner /app/recipe.json /app/recipe.json
+RUN cargo chef cook --release --recipe-path /app/recipe.json
+
+FROM cook AS builder
+WORKDIR /app
 COPY backend/src ./src
 COPY backend/.cargo ./.cargo
 # GAP 176：epub 导出内嵌中文字体（include_bytes 编译期内嵌, 路径相对 cargo 根）
 COPY backend/web-ui/public/fonts ./web-ui/public/fonts
 # rust-embed 编译期嵌入前端（web-ui/dist 由 web 阶段产出——本仓库不存旧前端产物）
 COPY --from=web /web/dist ./web-ui/dist
-ENV RUSTFLAGS="--cfg reqwest_unstable"
 RUN cargo build --release
 
 # ---------- 阶段 3：camoufox 求解后端（pip 包 + 浏览器二进制，构建期下载） ----------
