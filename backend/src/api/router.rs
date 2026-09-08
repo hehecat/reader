@@ -2930,10 +2930,29 @@ async fn search_book_multi(
             res.unwrap_or_default()
         }));
     }
+    // 提前收口：凑够 EARLY_HITS 条或总预算耗尽即返回, 不等死源拖尾(legacy 全窗等待实测 >120s);
+    // 未完成的 spawn 随 handle 丢弃后仍会在各自源超时内自然结束(有界, 不再阻塞响应)
+    const EARLY_HITS: usize = 60;
+    let budget = std::time::Duration::from_secs(timeout_secs.clamp(5, 30).saturating_mul(2));
+    let deadline = tokio::time::Instant::now() + budget;
+    let mut rest = handles;
     let mut all: Vec<crate::service::search::SearchBook> = Vec::new();
-    for h in handles {
-        if let Ok(books) = h.await {
-            all.extend(books);
+    loop {
+        if rest.is_empty() || all.len() >= EARLY_HITS {
+            break;
+        }
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(left, futures::future::select_all(rest)).await {
+            Ok((joined, _idx, remaining)) => {
+                rest = remaining;
+                if let Ok(books) = joined {
+                    all.extend(books);
+                }
+            }
+            Err(_) => break,
         }
     }
     // 精确模式（exact=1）：书源规则解析后按书名/作者等值过滤（大小写/全半角忽略）
@@ -3062,7 +3081,9 @@ async fn search_book_source(
         .as_ref()
         .and_then(|j| j.get("lastIndex"))
         .and_then(|v| v.as_i64())
-        .or_else(|| params.get("lastIndex").and_then(|v| v.parse::<i64>().ok()));
+        .or_else(|| params.get("lastIndex").and_then(|v| v.parse::<i64>().ok()))
+        // legacy 首调哨兵 -1：归一为无 lastIndex(主路径+提前收口), 避免窗口从 -1 起算的退化全窗等待
+        .filter(|v| *v >= 0);
     let search_size = body_json
         .as_ref()
         .and_then(|j| j.get("searchSize"))
