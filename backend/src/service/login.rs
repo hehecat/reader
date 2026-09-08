@@ -161,6 +161,92 @@ pub fn check_login(js: &str, cookie: &str, result: &str, url: &str) -> Result<bo
     Ok(r.eq_ignore_ascii_case("true") || r == "1")
 }
 
+/// loginUrl 无占位符/无 `,{...}` POST 后缀时（源仓库常见裸 login.php）：
+/// 自动解析登录页第一个含密码框的 <form>——action + 隐藏字段 + 账密输入名 → 表单 POST。
+/// 解析失败返回 None（保持原 GET 行为）。
+fn parse_login_form(html: &str, base_url: &str, username: &str, password: &str) -> Option<(String, String)> {
+    use regex::Regex;
+    use std::sync::LazyLock;
+    static FORM_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new("(?is)<form\\b[^>]*>.*?</form>").unwrap());
+    static ACTION_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new("(?is)\\baction\\s*=\\s*[\"\']([^\"\']*)[\"\']").unwrap());
+    static INPUT_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new("(?is)<input\\b[^>]*>").unwrap());
+    static ATTR_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new("(?is)\\b(name|type|value)\\s*=\\s*[\"\']([^\"\']*)[\"\']").unwrap());
+
+    let form_html = FORM_RE
+        .find_iter(html)
+        .map(|m| m.as_str())
+        .find(|f| f.contains("type=\"password\"") || f.contains("type='password'"))?;
+    let action = ACTION_RE
+        .captures(form_html)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().trim())
+        .unwrap_or("");
+    let target = if action.is_empty() {
+        base_url.to_string()
+    } else {
+        url::Url::parse(base_url).ok()?.join(action).ok()?.to_string()
+    };
+
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    let mut user_field: Option<String> = None;
+    let mut pass_field: Option<String> = None;
+    for cap in INPUT_RE.find_iter(form_html) {
+        let tag = cap.as_str();
+        let mut attrs: HashMap<String, String> = HashMap::new();
+        for ac in ATTR_RE.captures_iter(tag) {
+            attrs.insert(ac[1].to_lowercase(), ac[2].to_string());
+        }
+        let name = attrs.get("name").cloned().unwrap_or_default();
+        if name.is_empty() {
+            continue;
+        }
+        let typ = attrs.get("type").cloned().unwrap_or_else(|| "text".to_string());
+        let value = attrs.get("value").cloned().unwrap_or_default();
+        match typ.to_lowercase().as_str() {
+            "password" => pass_field = Some(name),
+            "submit" | "button" | "reset" | "checkbox" | "radio" | "file" => {}
+            "hidden" => pairs.push((name, value)),
+            _ => {
+                let nl = name.to_lowercase();
+                if nl.contains("user") || nl.contains("account") || nl.contains("uname") || nl.contains("login")
+                {
+                    user_field = Some(name);
+                } else if typ.eq_ignore_ascii_case("email") && user_field.is_none() {
+                    user_field = Some(name);
+                } else {
+                    pairs.push((name, value)); // 其余可见输入保留原值(多为空/占位)
+                }
+            }
+        }
+    }
+    let pass_name = pass_field?;
+    let user_name = user_field.unwrap_or_else(|| "username".to_string());
+    pairs.push((user_name, username.to_string()));
+    pairs.push((pass_name, password.to_string()));
+
+    let enc = |t: &str| {
+        let mut out = String::with_capacity(t.len());
+        for b in t.as_bytes() {
+            match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(*b as char),
+                b' ' => out.push('+'),
+                _ => out.push_str(&format!("%{b:02X}")),
+            }
+        }
+        out
+    };
+    let body = pairs
+        .iter()
+        .map(|(k, v)| format!("{}={}", enc(k), enc(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    Some((target, body))
+}
+
 /// 无 loginCheckJs 时的失败标记嗅探：站点常对任意账密回 200 + 会话 Cookie,
 /// 仅凭状态码会「假成功」——先扫常见失败文案并回带片段
 fn login_failure_marker(body: &str) -> Option<String> {
@@ -418,7 +504,49 @@ pub async fn login_http(
         None
     };
 
-    let resp = if method.eq_ignore_ascii_case("POST") {
+    // 裸 loginUrl（GET 且无占位符/后缀 body）：先取登录页, 自动解析表单改 POST
+    let auto_form = if method.eq_ignore_ascii_case("GET")
+        && body.is_none()
+        && !raw_url.contains("{user")
+        && !raw_url.contains("{pass")
+    {
+        if let Ok(page) = crawler::http_get_retry(
+            ns,
+            &url,
+            &req_headers,
+            20,
+            suffix.charset.as_deref(),
+            source.proxy_url.as_deref(),
+            suffix.retry,
+        )
+        .await
+        {
+            parse_login_form(&page.body, &page.url, &req.username, &req.password)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let resp = if let Some((form_url, form_body)) = &auto_form {
+        let mut h = req_headers.clone();
+        h.insert(
+            "Content-Type".to_string(),
+            "application/x-www-form-urlencoded".to_string(),
+        );
+        crawler::http_post_retry(
+            ns,
+            form_url,
+            &h,
+            20,
+            Some(form_body.as_str()),
+            suffix.charset.as_deref(),
+            source.proxy_url.as_deref(),
+            suffix.retry,
+        )
+        .await?
+    } else if method.eq_ignore_ascii_case("POST") {
         req_headers.insert(
             "Content-Type".to_string(),
             "application/x-www-form-urlencoded".to_string(),
@@ -539,7 +667,11 @@ pub async fn login_http(
             "登录失败：loginCheckJs 未通过".to_string()
         } else {
             login_failure_marker(&resp.body).unwrap_or_else(|| {
-                "无法校验登录结果：登录请求未返回 Cookie 且书源未配 loginCheckJs——请在工作台补 loginCheckJs, 或改用手动 Cookie".to_string()
+                if set_cookies.is_empty() {
+                    "无法校验登录结果：登录请求未返回 Cookie 且书源未配 loginCheckJs——请在工作台补 loginCheckJs, 或改用手动 Cookie".to_string()
+                } else {
+                    "登录后回访 loginUrl 仍展示登录表单：视为未登录（账号密码可能错误, 或站点登录规则需补 loginCheckJs）".to_string()
+                }
             })
         },
     })
@@ -1081,5 +1213,36 @@ mod send_tests {
         storage.pool.close().await;
         let dir = std::env::temp_dir().join(format!("reader-login-send-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 裸 loginUrl 场景: 自动解析登录页表单(action + 隐藏字段 + 账密输入名)
+    #[test]
+    fn 解析登录表单() {
+        let html = r#"
+        <html><body>
+        <form method="post" action="/login.php?do=submit">
+          <input type="hidden" name="token" value="abc123">
+          <input type="text" name="username" placeholder="账号">
+          <input type="password" name="pwd">
+          <input type="submit" value="登录">
+        </form>
+        </body></html>"#;
+        let (url, body) =
+            parse_login_form(html, "https://www.example.com/login.php", "hehecat", "p@ss w0rd")
+                .expect("应解析出表单");
+        assert_eq!(url, "https://www.example.com/login.php?do=submit");
+        assert!(body.contains("token=abc123"), "{body}");
+        assert!(body.contains("username=hehecat"), "{body}");
+        assert!(body.contains("pwd=p%40ss+w0rd"), "{body}");
+        // 无密码框的页面不解析
+        assert!(parse_login_form("<form><input name='a'></form>", "https://x.com/", "u", "p").is_none());
+    }
+
+    /// 失败标记嗅探: 站点回 200 但正文含失败文案
+    #[test]
+    fn 失败标记嗅探() {
+        assert!(login_failure_marker("<div>用户名或密码错误, 请重试</div>").is_some());
+        assert!(login_failure_marker("<html>login failed</html>").is_some());
+        assert!(login_failure_marker("<html>欢迎回来, 登录成功</html>").is_none());
     }
 }
