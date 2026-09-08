@@ -1,5 +1,6 @@
 //! 路由：/health + /reader3/*（兼容 legacy API）
 
+use tower_http::compression::predicate::Predicate as _CompressionPredicate;
 use std::collections::HashMap;
 
 use axum::body::{Body, Bytes};
@@ -107,7 +108,16 @@ pub fn router(config: crate::AppConfig, storage: Storage) -> axum::Router {
         .nest_service("/simple", simple_service.clone())
         .nest_service("/simple-web", simple_service)
         // 弱网优化：响应压缩（gzip/brotli）
-        .layer(tower_http::compression::CompressionLayer::new())
+        // SSE 流式接口排除压缩: gzip 编码器缓冲 event-stream 致首事件延迟数十秒
+        .layer(
+            tower_http::compression::CompressionLayer::new().compress_when(
+                tower_http::compression::predicate::DefaultPredicate::new().and(
+                    tower_http::compression::predicate::NotForContentType::new(
+                        "text/event-stream",
+                    ),
+                ),
+            ),
+        )
         .route("/opds", get(opds_dispatch))
         .route("/opds-save", post(opds_save_post).get(opds_save_post))
         .route("/opds/*rest", get(opds_dispatch))
@@ -1399,7 +1409,7 @@ fn merge_login_params(
 // ==================== 自定义字体（按用户存库, 阅读设置可选用/删除） ====================
 
 const FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "woff", "woff2"];
-const FONT_MAX_MB: u64 = 100;
+const FONT_MAX_MB: u64 = 40;
 
 fn fonts_dir(state: &AppState, ns: &str) -> std::path::PathBuf {
     state
@@ -3565,11 +3575,13 @@ async fn set_book_source(
             .await
             {
                 Ok(chapters) => {
-                    if let Ok(json) = serde_json::to_string(&chapters) {
-                        let _ = state
-                            .storage
-                            .cache_toc(&namespace, &new_url, &toc_url_new, &json)
-                            .await;
+                    if !chapters.is_empty() {
+                        if let Ok(json) = serde_json::to_string(&chapters) {
+                            let _ = state
+                                .storage
+                                .cache_toc(&namespace, &new_url, &toc_url_new, &json)
+                                .await;
+                        }
                     }
                 }
                 Err(e) => tracing::warn!("setBookSource 新目录预取失败（忽略）: {e}"),
@@ -3990,12 +4002,15 @@ async fn get_book_toc(
     .await
     {
         Ok(chapters) => {
-            // F-10：抓取成功后缓存目录（book_url 未知时以 toc_url 为键）
-            if let Ok(json) = serde_json::to_string(&chapters) {
-                let _ = state
-                    .storage
-                    .cache_toc(&namespace, &toc_url, &toc_url, &json)
-                    .await;
+            // F-10：抓取成功后缓存目录（book_url 未知时以 toc_url 为键）;
+            // 空目录不缓存——源瞬时故障的空结果若入库(默认 24h TTL)会毒化阅读器直到手动刷新
+            if !chapters.is_empty() {
+                if let Ok(json) = serde_json::to_string(&chapters) {
+                    let _ = state
+                        .storage
+                        .cache_toc(&namespace, &toc_url, &toc_url, &json)
+                        .await;
+                }
             }
             // F8：成功回写 latestChapterTitle/totalChapterNum/lastCheckTime，清 lastCheckError
             if let Some(shelf) = shelf_for_write.as_ref() {
