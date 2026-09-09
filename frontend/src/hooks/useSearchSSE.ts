@@ -106,7 +106,8 @@ function mergeBook(acc: Accumulator, book: SearchBook): boolean {
       book.origins !== undefined && book.origins.length > 0
         ? [...new Set([book.origin, ...book.origins])]
         : [book.origin];
-    const item: SearchBook = { ...book, origins };
+    const originUrls = { ...(book.originUrls ?? {}), [book.origin]: book.bookUrl };
+    const item: SearchBook = { ...book, origins, originUrls };
     acc.entries.set(aggKey, { index: acc.items.length, book: item });
     acc.items.push(item);
     return true;
@@ -119,6 +120,11 @@ function mergeBook(acc: Accumulator, book: SearchBook): boolean {
     origins: [
       ...new Set([...(previous.origins ?? [previous.origin]), ...(book.origins ?? []), book.origin]),
     ],
+    originUrls: {
+      ...(previous.originUrls ?? {}),
+      ...(book.originUrls ?? {}),
+      [book.origin]: book.bookUrl,
+    },
     kind: previous.kind ?? book.kind,
     coverUrl: previous.coverUrl ?? book.coverUrl,
     intro: previous.intro ?? book.intro,

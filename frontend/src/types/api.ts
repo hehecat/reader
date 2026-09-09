@@ -117,6 +117,8 @@ export const searchBookSchema = z.object({
   originOrder: z.number(),
   /** 后端聚合的书源列表 (LinkedHashSet) */
   origins: z.array(z.string()).optional(),
+  /** 聚合时保留的 源→bookUrl 映射: 换源面板直接换身份, 免按源重搜 */
+  originUrls: z.record(z.string(), z.string()).optional(),
 });
 
 /** BookGroup (io.legado.app.data.entities.BookGroup) */

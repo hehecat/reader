@@ -40,7 +40,6 @@ import {
   toAvailableBookSource,
   type AvailableBookSource,
 } from "@/services/explore";
-import { searchBook } from "@/services/search";
 import { getBookSourcesLite } from "@/services/sources";
 import type { Book, SearchBook } from "@/types/api";
 
@@ -130,51 +129,43 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
     enabled: switchOpen && exactInShelf,
   });
 
-  /** 搜索结果已告知「哪些源有这本书」(origins), 但候选接口默认只回当前源:
-   * 开面板时按 origin 并行单源搜索取该身份下的 bookUrl, 让多源徽标与候选列表一致 */
-  const originCandidates = useQuery({
-    queryKey: ["originCandidates", currentBookUrl],
-    queryFn: async (): Promise<Array<{ origin: string; candidate: AvailableBookSource | null }>> => {
-      const targets = (book.origins ?? []).filter((origin) => origin !== currentOrigin);
-      const settled = await Promise.all(
-        targets.map(async (origin): Promise<{ origin: string; candidate: AvailableBookSource | null }> => {
-          try {
-            const hits = await searchBook(book.name, origin);
-            const hit = hits.find((item) => item.name === book.name && item.author === book.author);
-            if (hit === undefined) {
-              return { origin, candidate: null };
-            }
-            return {
-              origin,
-              candidate: {
-                bookUrl: hit.bookUrl,
-                origin: hit.origin,
-                originName: hit.originName,
-                name: hit.name,
-                author: hit.author,
-                type: hit.type,
-                kind: hit.kind,
-                coverUrl: hit.coverUrl,
-                intro: hit.intro,
-                latestChapterTitle: hit.latestChapterTitle,
-              },
-            };
-          } catch {
-            return { origin, candidate: null };
-          }
-        }),
-      );
-      return settled;
-    },
-    enabled: switchOpen,
-    staleTime: 5 * 60_000,
-  });
   const sourcesQuery = useQuery({
     queryKey: ["sourcesLite"],
     queryFn: () => getBookSourcesLite(),
     enabled: switchOpen,
     staleTime: 5 * 60_000,
   });
+  /** 搜索聚合已保留各源 bookUrl(originUrls): 开面板直接构造候选, 不再按源重搜;
+   * 未保留 url 的源进 deadOrigins, 由界面按需重试 */
+  const originCandidatesData = React.useMemo<
+    Array<{ origin: string; candidate: AvailableBookSource | null }>
+  >(() => {
+    const lite = sourcesQuery.data ?? [];
+    return (book.origins ?? [])
+      .filter((origin) => origin !== currentOrigin)
+      .map((origin) => {
+        const url = book.originUrls?.[origin];
+        if (!url) {
+          return { origin, candidate: null };
+        }
+        const srcName = lite.find((item) => item.bookSourceUrl === origin)?.bookSourceName;
+        return {
+          origin,
+          candidate: {
+            bookUrl: url,
+            origin,
+            originName: srcName ?? origin,
+            name: book.name,
+            author: book.author,
+            type: book.type,
+            kind: book.kind,
+            coverUrl: book.coverUrl,
+            intro: book.intro,
+            latestChapterTitle: book.latestChapterTitle,
+          },
+        };
+      });
+  }, [book, currentOrigin, sourcesQuery.data]);
 
   /** 入架成功的公共副作用: 本地成员态 + 换源候选缓存 + 回报调用方 */
   const handleSaved = React.useCallback(
@@ -243,7 +234,7 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
   const candidates = React.useMemo(() => {
     const list = [...(available.data ?? [])];
     const known = new Set(list.map((item) => `${item.bookUrl}|${item.origin}`));
-    for (const entry of originCandidates.data ?? []) {
+    for (const entry of originCandidatesData ?? []) {
       const item = entry.candidate;
       if (item === null) {
         continue;
@@ -255,11 +246,11 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
       }
     }
     return list;
-  }, [available.data, originCandidates.data]);
+  }, [available.data, originCandidatesData]);
   /** 搜索命中过但现在取不到书的源: 灰行列出并说明, 不静默消失 */
   const deadOrigins = React.useMemo(
-    () => (originCandidates.data ?? []).filter((entry) => entry.candidate === null).map((entry) => entry.origin),
-    [originCandidates.data],
+    () => (originCandidatesData ?? []).filter((entry) => entry.candidate === null).map((entry) => entry.origin),
+    [originCandidatesData],
   );
   const busy = addToShelf.isPending || changeSource.isPending;
 
@@ -409,7 +400,7 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
                   未入架: 换源只作用于本次预览, 不会加入书架
                 </p>
               ) : null}
-              {(exactInShelf ? available.isLoading : originCandidates.isLoading) ? (
+              {(exactInShelf ? available.isLoading : sourcesQuery.isLoading) ? (
                 <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
                   <Spinner size="sm" label="读取可用书源" />
                   正在读取可用书源
