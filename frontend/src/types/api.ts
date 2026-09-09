@@ -144,7 +144,13 @@ export const loginResultSchema = z.object({
  * 书源规则对象 (SearchRule / ExploreRule / BookInfoRule / TocRule / ContentRule).
  * 后端所有规则字段均为 String?, 这里统一用宽松的 record 处理.
  */
-export const bookSourceRuleSchema = z.record(z.string(), z.string().optional());
+/** 规则字段兼容: 对象 / 字符串 / 数组(个别导入源 ruleExplore 是数组) 都归一成宽松对象,
+ * 单条异常规则不该让整页书源列表解析失败 */
+export const bookSourceRuleSchema = z
+  .record(z.string(), z.string().optional())
+  .or(z.array(z.unknown()))
+  .or(z.string())
+  .transform((v) => (typeof v === "string" ? {} : Array.isArray(v) ? {} : v));
 
 /** BookSource (io.legado.app.data.entities.BookSource) */
 export const bookSourceSchema = z.object({
