@@ -9,8 +9,6 @@ import { Button, EmptyState, PageIntro, Skeleton, Spinner, cn } from "@/componen
 import { useBookshelf } from "@/hooks/useBookshelf";
 import { useSearchHistory } from "@/hooks/useSearchHistory";
 import { useSearchSSE } from "@/hooks/useSearchSSE";
-import { useSettingsStore } from "@/stores/settings-store";
-import { getChapterList } from "@/services/book";
 import { humanizeError } from "@/lib/errors";
 import { getJSON, setJSON } from "@/lib/storage";
 import type { Book, SearchBook } from "@/types/api";
@@ -26,21 +24,6 @@ const GRID_CLASS =
 
 /** 搜索页布局偏好键 (与书架 LAYOUT_KEY 独立) */
 /** 目录探针缓存键/TTL: 7 天内同书同源不重复探针 */
-const TOC_PROBE_KEY = "reader.tocprobe.v1";
-const TOC_PROBE_TTL_MS = 7 * 24 * 3600 * 1000;
-const tocProbeKey = (bookUrl: string, origin: string): string => `${bookUrl}|${origin}`;
-function loadTocProbeCache(): Record<string, { n: number; t: number; latest?: string }> {
-  try {
-    const raw = JSON.parse(localStorage.getItem(TOC_PROBE_KEY) ?? "{}") as Record<
-      string,
-      { n: number; t: number; latest?: string }
-    >;
-    return raw !== null && typeof raw === "object" ? raw : {};
-  } catch {
-    return {};
-  }
-}
-
 const SEARCH_LAYOUT_KEY = "reader.search.layout";
 type SearchLayout = "grid" | "list";
 
@@ -189,106 +172,7 @@ export default function SearchPage() {
     setDetailOpen(true);
   };
 
-  /** 隐藏无章节结果: 后台并发 3 探针校验目录, 0 章即隐藏; 探针缓存 7 天 */
-  const hideEmptyToc = useSettingsStore((state) => state.hideEmptyTocResults);
-  const [emptyTocKeys, setEmptyTocKeys] = useState<ReadonlySet<string>>(() => new Set());
-  const tocProbeCache = useRef<Record<string, { n: number; t: number; latest?: string }> | null>(null);
-  /** 探针末章回填: 搜索规则不给 lastChapter 的源, 用目录末章补「最新」行 */
-  const [probeLatest, setProbeLatest] = useState<Readonly<Record<string, string>>>({});
-  if (tocProbeCache.current === null) {
-    tocProbeCache.current = loadTocProbeCache();
-  }
-  useEffect(() => {
-    // 探针始终跑(末章回填需要); 隐藏行为由开关控制
-    const cache = tocProbeCache.current ?? {};
-    const now = Date.now();
-    const cachedEmpty = new Set<string>();
-    const cachedLatest: Record<string, string> = {};
-    const queue: SearchBook[] = [];
-    for (const book of results) {
-      const key = tocProbeKey(book.bookUrl, book.origin);
-      const hit = cache[key];
-      if (hit !== undefined && now - hit.t < TOC_PROBE_TTL_MS) {
-        if (hit.n === 0) {
-          cachedEmpty.add(key);
-        }
-        if (hit.latest !== undefined && hit.latest.length > 0) {
-          cachedLatest[key] = hit.latest;
-        }
-      }
-      // stale-while-revalidate: 缓存先即时展示, 仍入队后台静默重验
-      // (重验走服务端 24h 目录缓存, 重复探针近似 sqlite 命中, 不压源站)
-      if (queue.length < 60) {
-        queue.push(book);
-      }
-    }
-    setEmptyTocKeys(hideEmptyToc ? cachedEmpty : new Set());
-    setProbeLatest(cachedLatest);
-    if (queue.length === 0) {
-      return;
-    }
-    let cancelled = false;
-    let cursor = 0;
-    let active = 0;
-    const pump = (): void => {
-      if (cancelled) {
-        return;
-      }
-      while (active < 3 && cursor < queue.length) {
-        const book = queue[cursor];
-        cursor += 1;
-        if (book === undefined) {
-          continue;
-        }
-        const key = tocProbeKey(book.bookUrl, book.origin);
-        active += 1;
-        void getChapterList(book.bookUrl, false, { bookSourceUrl: book.origin })
-          .then((chapters) => {
-            if (cancelled) {
-              return;
-            }
-            const latest = chapters.length > 0 ? (chapters[chapters.length - 1]?.title ?? "").trim() : "";
-            cache[key] = { n: chapters.length, t: Date.now(), latest };
-            if (chapters.length === 0) {
-              setEmptyTocKeys((prev) => (prev.has(key) ? prev : new Set([...prev, key])));
-            } else if (latest.length > 0) {
-              setProbeLatest((prev) => ({ ...prev, [key]: latest }));
-            }
-          })
-          .catch(() => undefined)
-          .finally(() => {
-            active -= 1;
-            try {
-              localStorage.setItem(TOC_PROBE_KEY, JSON.stringify(cache));
-            } catch {
-              /* 配额满忽略 */
-            }
-            pump();
-          });
-      }
-    };
-    pump();
-    return () => {
-      cancelled = true;
-    };
-  }, [results, hideEmptyToc]);
-  const visibleResults = useMemo(
-    () =>
-      (hideEmptyToc
-        ? results.filter((book) => !emptyTocKeys.has(tocProbeKey(book.bookUrl, book.origin)))
-        : results
-      ).map((book) => {
-        const trimmed = (book.latestChapterTitle ?? "").trim();
-        if (trimmed.length > 0) {
-          return book;
-        }
-        const latest = probeLatest[tocProbeKey(book.bookUrl, book.origin)];
-        return latest !== undefined && latest.length > 0
-          ? { ...book, latestChapterTitle: latest }
-          : book;
-      }),
-    [results, emptyTocKeys, hideEmptyToc, probeLatest],
-  );
+  const visibleResults = results;
 
   const initial = q.length === 0 && !searching && results.length === 0 && error === null;
   const showResults = visibleResults.length > 0;

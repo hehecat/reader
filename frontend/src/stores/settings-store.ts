@@ -65,7 +65,6 @@ export interface SettingsState {
   /** 单源搜索超时秒(3-60): 运行时下发后端, 即时保存生效, 调参无需重新构建 */
   searchTimeout: number;
   /** 隐藏目录解析 0 章的搜索结果(后台探针校验, 缓存 7 天) */
-  hideEmptyTocResults: boolean;
   /** 加入书架/导入后自动后台预热整书, 把首开抓取前移 (默认开) */
   preheatOnAdd: boolean;
   setTheme: (theme: ThemeMode) => void;
@@ -88,7 +87,6 @@ export interface SettingsState {
   setPreheatOnChapterEnd: (preheatOnChapterEnd: boolean) => void;
   setPreheatOnAdd: (preheatOnAdd: boolean) => void;
   setSearchTimeout: (searchTimeout: number) => void;
-  setHideEmptyTocResults: (hideEmptyTocResults: boolean) => void;
 }
 
 /** 可持久化的设置数据(不含 setter) */
@@ -116,7 +114,6 @@ export const defaultSettings: SettingsData = {
   preheatOnChapterEnd: false,
   preheatOnAdd: true,
   searchTimeout: 15,
-  hideEmptyTocResults: true,
 };
 
 export const useSettingsStore = create<SettingsState>()(
@@ -218,9 +215,6 @@ export const useSettingsStore = create<SettingsState>()(
         set({ searchTimeout: Math.min(Math.max(Math.round(searchTimeout), 3), 60) });
       },
 
-      setHideEmptyTocResults: (hideEmptyTocResults) => {
-        set({ hideEmptyTocResults });
-      },
 
     }),
     {
