@@ -1,4 +1,4 @@
-import { BookText, KeyRound, Pencil, SquareTerminal, ToolCase, Trash2 } from "lucide-react";
+import { BookText, KeyRound, Pencil, Search, SquareTerminal, ToolCase, Trash2 } from "lucide-react";
 
 import { Badge, IconButton, Switch, cn } from "@/components/ui";
 import type { SourceStat } from "@/services/sources";
@@ -25,6 +25,8 @@ export interface SourceListItemProps {
   onWorkbench?: (source: BookSource) => void;
   /** 书源配置了 loginUrl 时渲染「登录」入口(登录态按用户存库) */
   onLogin?: (source: BookSource) => void;
+  /** 渲染「试搜」入口: 单源直搜, 秒级验证该源可用性 */
+  onProbe?: (source: BookSource) => void;
   /** 该书源已存登录态(cookie 非空) */
   logged?: boolean;
   onEdit: (source: BookSource) => void;
@@ -52,6 +54,7 @@ export function SourceListItem({
   onToggleEnabled,
   onWorkbench,
   onLogin,
+  onProbe,
   logged = false,
   onEdit,
   onDebug,
@@ -145,6 +148,11 @@ export function SourceListItem({
       </div>
 
       <div className="flex shrink-0 items-center gap-0.5">
+        {onProbe !== undefined ? (
+          <IconButton size="sm" variant="ghost" tooltip="试搜(单源)" onClick={() => onProbe(source)}>
+            <Search aria-hidden />
+          </IconButton>
+        ) : null}
         {onLogin !== undefined && (source.loginUrl ?? "").trim().length > 0 ? (
           <IconButton size="sm" variant="ghost" tooltip="登录" onClick={() => onLogin(source)}>
             <KeyRound aria-hidden />

@@ -27,6 +27,7 @@ import { InvalidSourcesDialog } from "@/components/sources/InvalidSourcesDialog"
 import { SourceGroupTabs } from "@/components/sources/SourceGroupTabs";
 import { SourceListItem } from "@/components/sources/SourceListItem";
 import { SourceLoginDialog } from "@/components/sources/SourceLoginDialog";
+import { SourceProbeDialog } from "@/components/sources/SourceProbeDialog";
 import {
   SOURCE_GROUP_ALL,
   buildSourceGroups,
@@ -120,6 +121,7 @@ export default function SourcesPage() {
   const [importOpen, setImportOpen] = React.useState(false);
   const [editSource, setEditSource] = React.useState<BookSource | null>(null);
   const [loginSource, setLoginSource] = React.useState<BookSource | null>(null);
+  const [probeSource, setProbeSource] = React.useState<BookSource | null>(null);
   /** 书源登录态(cookie 按用户存库): 行徽标 + 登录对话框横幅 */
   const cookiesQuery = useQuery({
     queryKey: SOURCE_COOKIES_QUERY_KEY,
@@ -575,6 +577,7 @@ export default function SourcesPage() {
                   logged={cookieMap.has(source.bookSourceUrl)}
                   onEdit={setEditSource}
                   onLogin={setLoginSource}
+                  onProbe={setProbeSource}
                   onDebug={setDebugSource}
                   onDelete={setPendingDelete}
                 />
@@ -592,6 +595,14 @@ export default function SourcesPage() {
         open={editSource !== null}
         onOpenChange={(open) => {
           if (!open) setEditSource(null);
+        }}
+      />
+
+      <SourceProbeDialog
+        source={probeSource}
+        open={probeSource !== null}
+        onOpenChange={(open) => {
+          if (!open) setProbeSource(null);
         }}
       />
 
