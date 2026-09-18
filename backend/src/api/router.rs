@@ -2850,14 +2850,18 @@ async fn search_book_multi(
     }
     // 置信度排序快照 (稳定排序): 死/慢源往后放, 优质源靠前; 冷启动 0.5 不惩罚新源
     if let Ok(stats) = state.storage.get_source_stats(&namespace).await {
-        let map: std::collections::HashMap<String, f64> = stats
-            .into_iter()
-            .map(|st| (st.source_url.clone(), st.confidence()))
-            .collect();
+        // 置信度降序 + 平均延时升序: 同置信度下快源先跑, 慢源沉到队尾
+        let mut map: std::collections::HashMap<String, (f64, i64)> =
+            std::collections::HashMap::new();
+        for st in stats {
+            map.insert(st.source_url.clone(), (st.confidence(), st.avg_latency_ms()));
+        }
         sources.sort_by(|a, b| {
-            let ca = map.get(&a.book_source_url).copied().unwrap_or(0.5);
-            let cb = map.get(&b.book_source_url).copied().unwrap_or(0.5);
-            cb.partial_cmp(&ca).unwrap_or(std::cmp::Ordering::Equal)
+            let (ca, la) = map.get(&a.book_source_url).copied().unwrap_or((0.5, 3000));
+            let (cb, lb) = map.get(&b.book_source_url).copied().unwrap_or((0.5, 3000));
+            cb.partial_cmp(&ca)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| la.cmp(&lb))
         });
     }
     // 置信度跳过: 垫底源(连败/低成功率)6h 内不搜, 到期放行一次探针; all=1 强制全搜
@@ -8784,14 +8788,18 @@ async fn search_book_multi_sse(
         .collect();
     // 置信度排序快照 (稳定排序): 死/慢源往后放, 优质源靠前; 冷启动 0.5 不惩罚新源
     if let Ok(stats) = state.storage.get_source_stats(&namespace).await {
-        let map: std::collections::HashMap<String, f64> = stats
-            .into_iter()
-            .map(|st| (st.source_url.clone(), st.confidence()))
-            .collect();
+        // 置信度降序 + 平均延时升序: 同置信度下快源先跑, 慢源沉到队尾
+        let mut map: std::collections::HashMap<String, (f64, i64)> =
+            std::collections::HashMap::new();
+        for st in stats {
+            map.insert(st.source_url.clone(), (st.confidence(), st.avg_latency_ms()));
+        }
         sources.sort_by(|a, b| {
-            let ca = map.get(&a.book_source_url).copied().unwrap_or(0.5);
-            let cb = map.get(&b.book_source_url).copied().unwrap_or(0.5);
-            cb.partial_cmp(&ca).unwrap_or(std::cmp::Ordering::Equal)
+            let (ca, la) = map.get(&a.book_source_url).copied().unwrap_or((0.5, 3000));
+            let (cb, lb) = map.get(&b.book_source_url).copied().unwrap_or((0.5, 3000));
+            cb.partial_cmp(&ca)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| la.cmp(&lb))
         });
     }
     // 置信度跳过: 垫底源(连败/低成功率)6h 内不搜, 到期放行一次探针; all=1 强制全搜
@@ -8904,7 +8912,28 @@ async fn search_book_multi_sse(
         let window_t0 = std::time::Instant::now();
         let mut done: std::collections::HashSet<usize> = std::collections::HashSet::new();
         let mut last = last_index;
-        while let Some((i, text)) = tasks.next().await {
+        // 全量模式(本窗已覆盖到最后一个源): 一连接搜完, 不做预算收口 ——
+        // 分窗+每次重算源列表会让游标漂移(死源区间每窗只推进 1 个源, 实测 30s×5 才走 5 个)
+        let full_scan = end >= total.max(0) as usize;
+        let hard_cap = window_budget * 3; // 慢源区间上限(默认 30s)
+        loop {
+            // timeout 包住 next(): 窗内长时间无源返回时也能按时收口(否则检查点稀疏, 实测拖到 56s)
+            let (i, text) = if full_scan {
+                match tasks.next().await {
+                    Some(v) => v,
+                    None => break, // 全部源搜完
+                }
+            } else {
+                let left = hard_cap.checked_sub(window_t0.elapsed()).unwrap_or_default();
+                if left.is_zero() {
+                    break;
+                }
+                match tokio::time::timeout(left, tasks.next()).await {
+                    Ok(Some(v)) => v,
+                    Ok(None) => break,
+                    Err(_) => break, // 硬上限到: 余下慢源留给前端下一窗
+                }
+            };
             last = i;
             done.insert(i as usize);
             if tx.send(Ok(Bytes::from(text))).await.is_err() {
@@ -8912,16 +8941,25 @@ async fn search_book_multi_sse(
             }
             // 预算耗尽且已完成 ≥8 源才收口: 保证游标实质推进(续接点用连续前缀),
             // 又不被窗尾慢源拖满整窗
-            if window_t0.elapsed() > window_budget && done.len() >= 8 {
+            // 常规收口: 预算耗尽且已完成 ≥8 源
+            if !full_scan && done.len() >= 8 && window_t0.elapsed() > window_budget {
                 break; // 余下源留给前端下一窗(见 next_from)
             }
         }
         // 续接点 = 已完成连续前缀的末位(第一个未完成源下标 - 1), 且不低于本窗起点 - 1:
         // 保证下一窗从第一个未完成源继续, 不重搜已完成的连续段, 也不会倒退成死循环
-        let next_from = (start..end)
-            .find(|i| !done.contains(i))
-            .map(|i| (i as i64 - 1).max(last_index))
-            .unwrap_or(last);
+        let next_from = match (start..end).find(|i| !done.contains(i)) {
+            Some(i) => {
+                let cand = (i as i64 - 1).max(last_index);
+                if cand <= last_index && !done.is_empty() {
+                    // 窗首源没完成: 跳过它本身, 保证游标前进(该源本窗放弃, 可加载更多重试)
+                    (i as i64).min(end as i64 - 1)
+                } else {
+                    cand
+                }
+            }
+            None => last,
+        };
         let end_payload =
             serde_json::json!({ "lastIndex": next_from, "isEnd": next_from >= total - 1 });
         let _ = tx

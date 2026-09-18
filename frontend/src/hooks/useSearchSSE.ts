@@ -44,12 +44,9 @@ export interface UseSearchSSEResult {
   /** 会话快照恢复: 以已聚合结果直接进入「已停止」态, 不重新起搜 */
   hydrate: (key: string, items: SearchBook[], fromIndex: number) => void;
 }
-/** 单连接搜索窗口 (与服务端 searchSize 一致): 空轮按窗推进游标, 避免死源区间重复搜.
- * 100 = app 版批次规模, 配合并发 32 让一窗多数源在存活上限内跑完 */
-const SEARCH_WINDOW = 100;
-/** 单连接最长存活: 到点主动断开 → onClose 立即续接下一窗,
- * 避免被窗口内最慢源(超时 15s)拖住整窗才推进(这是"百源搜很久"的第二个主因) */
-const SSE_WINDOW_MS = 10_000;
+/** 单连接一次搜全部源(对齐 app 版): 分窗+每次重算源列表会让游标漂移,
+ * 死源区间实测每窗只推进 1 个源(30s×5 窗才走 5 个) —— 改为一次连接边搜边推, 直到搜完 */
+const SEARCH_WINDOW = 100_000;
 
 /**
  * 聚合累加器.
@@ -178,8 +175,6 @@ export function useSearchSSE(): UseSearchSSEResult {
 
   const accRef = useRef<Accumulator>({ items: [], seen: new Set(), entries: new Map() });
   const cancelRef = useRef<(() => void) | null>(null);
-  /** 单连接存活上限定时器 */
-  const windowTimerRef = useRef<number | null>(null);
   /** 服务端 end 事件回报的续接点(未完成源起点 - 1) */
   const endCursorRef = useRef<number | null>(null);
   const keyRef = useRef<string | null>(null);
@@ -279,11 +274,7 @@ export function useSearchSSE(): UseSearchSSEResult {
   );
 
   const connect = useCallback((key: string, fromIndex: number, concurrentCount?: number) => {
-    // 切换关键词/续搜前必须断开旧连接
-    if (windowTimerRef.current !== null) {
-      window.clearTimeout(windowTimerRef.current);
-      windowTimerRef.current = null;
-    }
+    // 切换关键词/重搜前必须断开旧连接
     cancelRef.current?.();
     cancelRef.current = null;
 
@@ -383,11 +374,6 @@ export function useSearchSSE(): UseSearchSSEResult {
         },
       },
     );
-    // 到点主动收口当前连接: onClose 会按 lastIndex 续接下一窗, 用户更早看到"更多"
-    windowTimerRef.current = window.setTimeout(() => {
-      windowTimerRef.current = null;
-      cancelRef.current?.();
-    }, SSE_WINDOW_MS);
   }, [enqueueEnrich]);
 
   connectRef.current = connect;
