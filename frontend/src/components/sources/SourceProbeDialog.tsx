@@ -77,7 +77,8 @@ export function SourceProbeDialog({
     setBooks(null);
     const t0 = performance.now();
     try {
-      const hits = await searchBook(trimmed, source.bookSourceUrl, 1);
+      // 单源搜索可能命中慢源(后端单源超时上限 60s): 放宽前端超时, 别被 30s 默认值提前判死
+      const hits = await searchBook(trimmed, source.bookSourceUrl, 1, { timeout: 65_000 });
       setElapsed(performance.now() - t0);
       setBooks(hits);
     } catch (e) {
