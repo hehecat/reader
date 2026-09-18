@@ -44,8 +44,12 @@ export interface UseSearchSSEResult {
   /** 会话快照恢复: 以已聚合结果直接进入「已停止」态, 不重新起搜 */
   hydrate: (key: string, items: SearchBook[], fromIndex: number) => void;
 }
-/** 单连接搜索窗口 (与服务端 searchSize 一致): 空轮按窗推进游标, 避免死源区间重复搜 */
-const SEARCH_WINDOW = 50;
+/** 单连接搜索窗口 (与服务端 searchSize 一致): 空轮按窗推进游标, 避免死源区间重复搜.
+ * 100 = app 版批次规模, 配合并发 32 让一窗多数源在存活上限内跑完 */
+const SEARCH_WINDOW = 100;
+/** 单连接最长存活: 到点主动断开 → onClose 立即续接下一窗,
+ * 避免被窗口内最慢源(超时 15s)拖住整窗才推进(这是"百源搜很久"的第二个主因) */
+const SSE_WINDOW_MS = 10_000;
 
 /**
  * 聚合累加器.
@@ -174,6 +178,10 @@ export function useSearchSSE(): UseSearchSSEResult {
 
   const accRef = useRef<Accumulator>({ items: [], seen: new Set(), entries: new Map() });
   const cancelRef = useRef<(() => void) | null>(null);
+  /** 单连接存活上限定时器 */
+  const windowTimerRef = useRef<number | null>(null);
+  /** 服务端 end 事件回报的续接点(未完成源起点 - 1) */
+  const endCursorRef = useRef<number | null>(null);
   const keyRef = useRef<string | null>(null);
   const lastIndexRef = useRef(-1);
   const concurrentRef = useRef<number | undefined>(undefined);
@@ -272,6 +280,10 @@ export function useSearchSSE(): UseSearchSSEResult {
 
   const connect = useCallback((key: string, fromIndex: number, concurrentCount?: number) => {
     // 切换关键词/续搜前必须断开旧连接
+    if (windowTimerRef.current !== null) {
+      window.clearTimeout(windowTimerRef.current);
+      windowTimerRef.current = null;
+    }
     cancelRef.current?.();
     cancelRef.current = null;
 
@@ -288,7 +300,7 @@ export function useSearchSSE(): UseSearchSSEResult {
       {
         key,
         lastIndex: fromIndex,
-        concurrentCount,
+        concurrentCount: concurrentCount ?? 32,
         searchSize: SEARCH_WINDOW,
         // 运行时超时(设置页即时保存): 后端 clamp 3..60
         timeout: useSettingsStore.getState().searchTimeout,
@@ -313,8 +325,13 @@ export function useSearchSSE(): UseSearchSSEResult {
             enqueueEnrich();
           }
         },
-        onEnd: () => {
+        onEnd: (payload) => {
+          // 服务端提前收口的续接点(未完成源起点 - 1): 优先于批次游标, 保证不漏源;
           // 收口与续搜统一在 onClose 处理 (end/error/中断都会走到)
+          const cursor = (payload as { lastIndex?: unknown } | null)?.lastIndex;
+          if (typeof cursor === "number") {
+            endCursorRef.current = cursor;
+          }
         },
         onError: (err) => {
           cancelRef.current = null;
@@ -340,10 +357,16 @@ export function useSearchSSE(): UseSearchSSEResult {
               return;
             }
             const advanced = lastIndexRef.current > roundFromRef.current;
-            // 空轮(死源区间)无数据批次: 游标按窗推进, 不重复搜同一区间
-            const nextFrom = advanced
-              ? lastIndexRef.current
-              : roundFromRef.current + SEARCH_WINDOW;
+            const serverCursor = endCursorRef.current;
+            endCursorRef.current = null;
+            // 空轮(死源区间)无数据批次: 游标按窗推进, 不重复搜同一区间;
+            // 服务端提前收口时以它回报的"未完成源起点-1"续接(≥本窗起点才采信, 防倒退死循环)
+            const nextFrom =
+              serverCursor !== null && serverCursor >= roundFromRef.current
+                ? serverCursor
+                : advanced
+                  ? lastIndexRef.current
+                  : roundFromRef.current + SEARCH_WINDOW;
             if (!advanced) {
               stallRef.current += 1;
             } else {
@@ -360,6 +383,11 @@ export function useSearchSSE(): UseSearchSSEResult {
         },
       },
     );
+    // 到点主动收口当前连接: onClose 会按 lastIndex 续接下一窗, 用户更早看到"更多"
+    windowTimerRef.current = window.setTimeout(() => {
+      windowTimerRef.current = null;
+      cancelRef.current?.();
+    }, SSE_WINDOW_MS);
   }, [enqueueEnrich]);
 
   connectRef.current = connect;

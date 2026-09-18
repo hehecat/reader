@@ -8841,10 +8841,14 @@ async fn search_book_multi_sse(
             let ns = ns.clone();
             let storage = storage.clone();
             let source = sources[i].clone();
-            let ramp_ms = (i - start) as u64 * 150;
+            // 错峰斜坡: 原实现 150ms/源(50 源窗口末位等 7.35s 才起步, 是"搜得久"的主因);
+            // 现仅在并发 >32 时保留 40ms/源 的小斜率, 常规并发直接并发起(对齐 app 版体验)
+            let ramp_ms = if concurrent_count > 32 {
+                (i - start) as u64 * 40
+            } else {
+                0
+            };
             tasks.push(Box::pin(async move {
-                // 错峰斜坡: 避免整窗瞬时并发壅塞家庭出口(实测 50 并发首事件 30s),
-                // 同时让排名靠后的源尽早进入在飞集合(免轮次边界等待)
                 if ramp_ms > 0 {
                     tokio::time::sleep(std::time::Duration::from_millis(ramp_ms)).await;
                 }
@@ -8898,14 +8902,33 @@ async fn search_book_multi_sse(
                 (i as i64, format!("data: {payload}\n\n"))
             }));
         }
+        // 窗口预算：到点提前收口(不再被窗内最慢源拖满整窗), 并把
+        // 「未完成源的最小下标 - 1」回报给前端续接 → 提前收口不漏源
+        let window_budget = std::time::Duration::from_secs(sse_window_budget_secs());
+        let window_t0 = std::time::Instant::now();
+        let mut done: std::collections::HashSet<usize> = std::collections::HashSet::new();
         let mut last = last_index;
         while let Some((i, text)) = tasks.next().await {
             last = i;
+            done.insert(i as usize);
             if tx.send(Ok(Bytes::from(text))).await.is_err() {
                 break; // 客户端断开
             }
+            // 预算耗尽且已完成足量(≥30% 且至少 8 源)才收口: 保证游标实质推进,
+            // 又不被窗尾慢源拖满整窗(全窗以超时源为主时会等到自然结束, 不会更差)
+            let min_done = std::cmp::max(8, (end - start) * 3 / 10);
+            if window_t0.elapsed() > window_budget && done.len() >= min_done {
+                break; // 余下源留给前端下一窗(见 next_from)
+            }
         }
-        let end_payload = serde_json::json!({ "lastIndex": last, "isEnd": last >= total - 1 });
+        // 续接点 = 已完成连续前缀的末位(第一个未完成源下标 - 1), 且不低于本窗起点 - 1:
+        // 保证下一窗从第一个未完成源继续, 不重搜已完成的连续段, 也不会倒退成死循环
+        let next_from = (start..end)
+            .find(|i| !done.contains(i))
+            .map(|i| (i as i64 - 1).max(last_index))
+            .unwrap_or(last);
+        let end_payload =
+            serde_json::json!({ "lastIndex": next_from, "isEnd": next_from >= total - 1 });
         let _ = tx
             .send(Ok(Bytes::from(format!(
                 "event: end\ndata: {end_payload}\n\n"
@@ -8926,6 +8949,19 @@ async fn search_book_multi_sse(
 }
 
 /// 搜索单源超时(秒): 前端设置项运行时下发, clamp 3..60, 缺省 15
+/// SSE 单窗预算(秒, env READER_SEARCH_WINDOW_SECS 覆盖, 默认 10):
+/// 到点提前收口当前窗并回报未完成源续接点, 用户更早看到结果且不漏源
+fn sse_window_budget_secs() -> u64 {
+    static B: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *B.get_or_init(|| {
+        std::env::var("READER_SEARCH_WINDOW_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|v: &u64| *v > 0)
+            .unwrap_or(10)
+    })
+}
+
 fn search_timeout_param(params: &HashMap<String, String>, body_json: Option<&serde_json::Value>) -> u64 {
     let raw = param_of(params, body_json, "timeout").parse::<i64>().unwrap_or(15);
     raw.clamp(3, 60) as u64
