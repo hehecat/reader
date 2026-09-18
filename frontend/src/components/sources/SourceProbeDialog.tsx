@@ -1,5 +1,10 @@
 import { Search as SearchIcon } from "lucide-react";
 import * as React from "react";
+import { useQueryClient } from "@tanstack/react-query";
+
+import { BookDetailDialog } from "@/components/book/BookDetailDialog";
+import { SearchResultCard } from "@/components/search/SearchResultCard";
+import { BOOKS_QUERY_KEY, useBookshelf } from "@/hooks/useBookshelf";
 
 import {
   Button,
@@ -38,6 +43,17 @@ export function SourceProbeDialog({
   const [books, setBooks] = React.useState<SearchBook[] | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [elapsed, setElapsed] = React.useState<number | null>(null);
+  /** 点卡片 → 复用搜索页详情弹窗(简介/目录/阅读/换源) */
+  const [selected, setSelected] = React.useState<SearchBook | null>(null);
+  const queryClient = useQueryClient();
+  const { books: shelfBooks } = useBookshelf();
+  const shelfKeys = React.useMemo(
+    () => new Set(shelfBooks.flatMap((b) => [b.bookUrl, `${b.name}\u0000${b.author ?? ""}`])),
+    [shelfBooks],
+  );
+  const handleAdded = React.useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: BOOKS_QUERY_KEY });
+  }, [queryClient]);
 
   React.useEffect(() => {
     if (open) {
@@ -117,19 +133,36 @@ export function SourceProbeDialog({
           ) : null}
 
           {books !== null && books.length > 0 ? (
-            <ul className="border-border/70 max-h-72 divide-y divide-border/70 overflow-y-auto rounded-md border">
+            <div className="flex max-h-80 flex-col gap-2 overflow-y-auto pr-1">
               {books.map((b) => (
-                <li key={`${b.bookUrl}|${b.origin}`} className="px-3 py-2">
-                  <p className="truncate text-sm font-medium">{b.name}</p>
-                  <p className="text-muted-foreground truncate text-xs">
-                    {b.author || "未知作者"}
-                    {b.latestChapterTitle ? ` · ${b.latestChapterTitle}` : ""}
-                  </p>
-                </li>
+                <SearchResultCard
+                  key={`${b.bookUrl}|${b.origin}`}
+                  layout="list"
+                  book={b}
+                  keyword={key}
+                  inShelf={
+                    shelfKeys.has(b.bookUrl) ||
+                    shelfKeys.has(`${b.name}\u0000${b.author ?? ""}`)
+                  }
+                  onSelect={setSelected}
+                  onAdded={handleAdded}
+                />
               ))}
-            </ul>
+            </div>
           ) : null}
         </div>
+
+        {/* 复用搜索页详情弹窗: 简介/封面/目录/开始阅读/加入书架/换源都在这里 */}
+        {selected !== null ? (
+          <BookDetailDialog
+            book={selected}
+            open
+            onOpenChange={(open) => {
+              if (!open) setSelected(null);
+            }}
+            onAdded={handleAdded}
+          />
+        ) : null}
       </DialogContent>
     </Dialog>
   );
