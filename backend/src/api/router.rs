@@ -8841,13 +8841,9 @@ async fn search_book_multi_sse(
             let ns = ns.clone();
             let storage = storage.clone();
             let source = sources[i].clone();
-            // 错峰斜坡: 原实现 150ms/源(50 源窗口末位等 7.35s 才起步, 是"搜得久"的主因);
-            // 现仅在并发 >32 时保留 40ms/源 的小斜率, 常规并发直接并发起(对齐 app 版体验)
-            let ramp_ms = if concurrent_count > 32 {
-                (i - start) as u64 * 40
-            } else {
-                0
-            };
+            // 错峰斜坡 150ms/源: 实测去掉斜坡+并发 32 会让出口瞬时壅塞(首结果 6s→113s),
+            // 保留既有验证过的斜率(并发 24 时约 3.5s 爬满, 平滑不壅塞)
+            let ramp_ms = (i - start) as u64 * 150;
             tasks.push(Box::pin(async move {
                 if ramp_ms > 0 {
                     tokio::time::sleep(std::time::Duration::from_millis(ramp_ms)).await;
@@ -8914,10 +8910,9 @@ async fn search_book_multi_sse(
             if tx.send(Ok(Bytes::from(text))).await.is_err() {
                 break; // 客户端断开
             }
-            // 预算耗尽且已完成足量(≥30% 且至少 8 源)才收口: 保证游标实质推进,
-            // 又不被窗尾慢源拖满整窗(全窗以超时源为主时会等到自然结束, 不会更差)
-            let min_done = std::cmp::max(8, (end - start) * 3 / 10);
-            if window_t0.elapsed() > window_budget && done.len() >= min_done {
+            // 预算耗尽且已完成 ≥8 源才收口: 保证游标实质推进(续接点用连续前缀),
+            // 又不被窗尾慢源拖满整窗
+            if window_t0.elapsed() > window_budget && done.len() >= 8 {
                 break; // 余下源留给前端下一窗(见 next_from)
             }
         }

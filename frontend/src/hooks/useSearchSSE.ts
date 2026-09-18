@@ -300,7 +300,7 @@ export function useSearchSSE(): UseSearchSSEResult {
       {
         key,
         lastIndex: fromIndex,
-        concurrentCount: concurrentCount ?? 32,
+        concurrentCount: concurrentCount ?? 24,  // 实测 24 是本机出口的流畅上限(32 会壅塞)
         searchSize: SEARCH_WINDOW,
         // 运行时超时(设置页即时保存): 后端 clamp 3..60
         timeout: useSettingsStore.getState().searchTimeout,
