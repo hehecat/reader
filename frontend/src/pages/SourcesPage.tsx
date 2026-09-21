@@ -213,6 +213,27 @@ export default function SourcesPage() {
     return list;
   }, [sources, currentGroup, keyword, statusFilter, invalidUrls, premiumSet, poorSet, sortByConf, statMap]);
 
+  // ---- 分页: 大列表(数百源)只渲染当前页, 页码/每页条数额度本地记忆 ----
+  const PAGE_SIZE_KEY = "reader.sources.pageSize";
+  const [pageSize, setPageSize] = React.useState<number>(() => {
+    const raw = Number(localStorage.getItem(PAGE_SIZE_KEY));
+    return Number.isFinite(raw) && raw >= 10 ? raw : 50;
+  });
+  const [page, setPage] = React.useState(1);
+  const pageCount = Math.max(1, Math.ceil(visibleSources.length / pageSize));
+  const safePage = Math.min(Math.max(1, page), pageCount);
+  const pagedSources = React.useMemo(
+    () => visibleSources.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [visibleSources, safePage, pageSize],
+  );
+  // 筛选/排序变化回到第一页(否则可能停在越界页)
+  React.useEffect(() => {
+    setPage(1);
+  }, [keyword, currentGroup, statusFilter, sortByConf]);
+  React.useEffect(() => {
+    localStorage.setItem(PAGE_SIZE_KEY, String(pageSize));
+  }, [pageSize]);
+
   // 只有正在切换的那一行开关进入忙碌态
   const busyUrl = toggleEnabled.isPending ? toggleEnabled.variables?.url : undefined;
 
@@ -499,9 +520,20 @@ export default function SourcesPage() {
                   <input
                     type="checkbox"
                     className="size-4 accent-[var(--accent)]"
-                    checked={selected.size === visibleSources.length && visibleSources.length > 0}
+                    checked={
+                      pagedSources.length > 0 &&
+                      pagedSources.every((s) => selected.has(s.bookSourceUrl))
+                    }
                     onChange={(event) =>
-                      setSelected(event.target.checked ? new Set(visibleSources.map((s) => s.bookSourceUrl)) : new Set())
+                      setSelected(
+                        event.target.checked
+                          ? new Set([...selected, ...pagedSources.map((s) => s.bookSourceUrl)])
+                          : new Set(
+                              [...selected].filter(
+                                (url) => !pagedSources.some((s) => s.bookSourceUrl === url),
+                              ),
+                            ),
+                      )
                     }
                   />
                   全选本页
@@ -556,7 +588,7 @@ export default function SourcesPage() {
               id={LIST_ID}
               className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border bg-surface"
             >
-              {visibleSources.map((source) => (
+              {pagedSources.map((source) => (
                 <SourceListItem
                   key={source.bookSourceUrl}
                   source={source}
@@ -583,6 +615,47 @@ export default function SourcesPage() {
                 />
               ))}
             </ul>
+            {visibleSources.length > 0 ? (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
+                <span className="tabular-nums">
+                  共 {visibleSources.length} 个源 · 第 {safePage} / {pageCount} 页
+                </span>
+                <div className="flex items-center gap-2">
+                  <label className="flex items-center gap-1.5">
+                    每页
+                    <select
+                      value={pageSize}
+                      onChange={(event) => setPageSize(Number(event.target.value))}
+                      className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+                      aria-label="每页条数"
+                    >
+                      {[20, 50, 100, 200].map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                    条
+                  </label>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={safePage <= 1}
+                    onClick={() => setPage(safePage - 1)}
+                  >
+                    上一页
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={safePage >= pageCount}
+                    onClick={() => setPage(safePage + 1)}
+                  >
+                    下一页
+                  </Button>
+                </div>
+              </div>
+            ) : null}
             </>
           )}
         </div>
