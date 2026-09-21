@@ -150,6 +150,8 @@ export function useChapterContent(
   chapterCount?: number,
   nextChapterUrl?: string,
   nextChapterUrl2?: string,
+  nextChapterTitle?: string,
+  nextChapterTitle2?: string,
 ): UseChapterContentResult {
   const queryClient = useQueryClient();
 
@@ -174,9 +176,9 @@ export function useChapterContent(
     if (!isSuccess || bookUrl === "") {
       return;
     }
-    for (const [offset, url] of [
-      [1, nextChapterUrl],
-      [2, nextChapterUrl2],
+    for (const [offset, url, nextTitle] of [
+      [1, nextChapterUrl, nextChapterTitle],
+      [2, nextChapterUrl2, nextChapterTitle2],
     ] as const) {
       if (url === undefined) {
         continue;
@@ -192,7 +194,7 @@ export function useChapterContent(
             cache: true,
             bookSourceUrl: origin,
             bookUrl,
-            title: chapter?.title,
+            title: nextTitle,
           }),
         staleTime: 5 * 60_000,
       });

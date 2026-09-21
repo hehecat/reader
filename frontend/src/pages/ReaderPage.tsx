@@ -173,6 +173,8 @@ export default function ReaderPage() {
     chapters.length,
     chapters[progress.index + 1]?.url,
     chapters[progress.index + 2]?.url,
+    chapters[progress.index + 1]?.title,
+    chapters[progress.index + 2]?.title,
   );
 
   const toc = useToc({ book, onNavigate: goToChapter });
