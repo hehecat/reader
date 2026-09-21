@@ -78,15 +78,10 @@ export function BookCard({
   const chapter = book.durChapterTitle?.trim();
   /** 阅读进度文案: 读至章节名/序号 + 总章数; 未读开时退化为最新章节 */
   // 章节名常超长被截断: 卡片只用序号(短且对齐), 章节名在详情弹窗看
-  /** 章号优先取保存标题里的「第N章」(与阅读器所见一致);
-   * 源站标题缺号/换源错位时 index+1 会与用户所见差一章, 故标题优先、序号兜底 */
-  const titleChapterNo = (() => {
-    const m = /第\s*(\d+)\s*章/.exec(book.durChapterTitle ?? "");
-    return m ? Number(m[1]) : null;
-  })();
+  // 章号以进度下标为准(index+1): 标题可能滞后于进度(换源/源站缺号), 不作为章号来源
   const progressText =
     book.totalChapterNum > 0
-      ? `读至第 ${titleChapterNo ?? book.durChapterIndex + 1} 章 · 共 ${book.totalChapterNum} 章`
+      ? `读至第 ${book.durChapterIndex + 1} 章 · 共 ${book.totalChapterNum} 章`
       : (book.latestChapterTitle?.trim() ? `最新 ${book.latestChapterTitle.trim()}` : "");
   const intro = (book.customIntro ?? book.intro ?? "").trim();
   const groupNames = groups === undefined ? [] : bookGroupNames(book, groups);

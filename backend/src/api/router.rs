@@ -8502,10 +8502,12 @@ async fn save_book_progress(
             }
         }
     }
-    if let Some(len) = toc_len {
-        if index >= len {
-            return Json(ReturnData::err("章节不存在"));
-        }
+    // 越界不拒绝: 目录来源(count_book_chapters / toc 缓存)可能落后于实际目录
+    // (换源/追更后仍指向旧源: 实测换到 422 章的源后, 用旧源 125 章的目录校验 →
+    //  所有进度保存被拒 → 书架进度与标题永远停在旧源, 表现为"差一章")
+    let _ = toc_len;
+    if index < 0 {
+        return Json(ReturnData::err("章节不存在"));
     }
     let title = if params.contains_key("durChapterTitle") {
         params.get("durChapterTitle").cloned()
