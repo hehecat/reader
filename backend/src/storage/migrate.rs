@@ -31,6 +31,11 @@ pub async fn migrate_if_needed(storage: &Storage) -> Result<()> {
     if backfilled > 0 {
         tracing::info!("补全迁移书籍 toc_url：{backfilled} 本（从 raw_json 恢复 tocUrl）");
     }
+    // 早期封面按源扩展名落盘, HEIC 在浏览器渲染不出 → 启动时转 JPEG(幂等)
+    let covers_fixed = convert_heic_covers(storage).await?;
+    if covers_fixed > 0 {
+        tracing::info!("封面 HEIC 转 JPEG：{covers_fixed} 张");
+    }
     // 修复入架时漏写 can_update 的网络书(否则「刷新书架」永远跳过它们)。每次启动扫描, 幂等。
     let can_update_fixed = backfill_book_can_update(&storage.pool).await?;
     if can_update_fixed > 0 {
@@ -317,6 +322,62 @@ async fn backfill_book_can_update(pool: &SqlitePool) -> Result<usize> {
     .await?
     .rows_affected();
     Ok(updated as usize)
+}
+
+/// 历史封面修复：早期版本按源 URL 扩展名落盘封面，源站给 HEIC 的封面直接存成
+/// `.heic`，而浏览器（Chrome/Firefox/Edge）无法渲染 → 书架空封面。启动时把
+/// `assets/*/covers/*.heic` 转 JPEG、改指 books.cover_url 并删除原文件。
+/// 转换不可用（heif-convert 缺失）时保持原样，下次启动重试 —— 幂等。
+async fn convert_heic_covers(storage: &Storage) -> Result<usize> {
+    let assets = storage.config.storage_dir().join("assets");
+    let Ok(namespaces) = std::fs::read_dir(&assets) else {
+        return Ok(0);
+    };
+    let mut converted = 0usize;
+    for ns_entry in namespaces.flatten() {
+        let ns = ns_entry.file_name().to_string_lossy().to_string();
+        let covers = ns_entry.path().join("covers");
+        let Ok(files) = std::fs::read_dir(&covers) else {
+            continue;
+        };
+        for file in files.flatten() {
+            let path = file.path();
+            let ext = path
+                .extension()
+                .map(|e| e.to_string_lossy().to_ascii_lowercase())
+                .unwrap_or_default();
+            if ext != "heic" && ext != "heif" {
+                continue;
+            }
+            let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().to_string()) else {
+                continue;
+            };
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            let Ok(Some(jpeg)) =
+                tokio::task::spawn_blocking(move || crate::service::imaging::heif_to_jpeg(&bytes))
+                    .await
+            else {
+                continue;
+            };
+            let target = covers.join(format!("{stem}.jpg"));
+            if std::fs::write(&target, &jpeg).is_err() {
+                continue;
+            }
+            let old_url = format!("/assets/{ns}/covers/{stem}.{ext}");
+            let new_url = format!("/assets/{ns}/covers/{stem}.jpg");
+            sqlx::query("UPDATE books SET cover_url = ?1 WHERE cover_url = ?2")
+                .bind(&new_url)
+                .bind(&old_url)
+                .execute(&storage.pool)
+                .await?;
+            let _ = std::fs::remove_file(&path);
+            converted += 1;
+            tracing::debug!("封面 HEIC → JPEG: {old_url}");
+        }
+    }
+    Ok(converted)
 }
 
 /// 从 books.raw_json 恢复漏写的 toc_url（旧迁移版本未写 toc_url 字段）。

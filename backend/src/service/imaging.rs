@@ -8,6 +8,9 @@
 //!
 //! P1 解压炸弹防护：解码会完整展开像素（恶意超大尺寸图片可耗尽内存）——
 //! 先读图片**头尺寸**（不解码像素）预检，单边超 8000px 或总像素超 40MP 拒绝转码。
+//!
+//! 另含封面归一：源站封面常为 HEIC/HEIF（番茄类 API 的 thumb_url），浏览器无法渲染，
+//! 入架落盘前经 `heif-convert`（镜像内 libheif-examples）转 JPEG。
 
 use anyhow::{anyhow, Result};
 
@@ -57,9 +60,108 @@ pub fn to_webp(bytes: &[u8], quality: u8) -> Option<Vec<u8>> {
     Some(out.into_inner())
 }
 
+/// 是否 HEIC/HEIF 封面：扩展名或 Content-Type 任一命中即需转码。
+/// 两者都不可靠（源 URL 可能无扩展名、Content-Type 可能是 octet-stream），
+/// 任一命中即转 —— 转码失败由调用方降级，不会因此毁掉封面。
+pub fn is_heif(ext: &str, content_type: Option<&str>) -> bool {
+    let ext = ext.trim_start_matches('.').to_ascii_lowercase();
+    if ext == "heic" || ext == "heif" {
+        return true;
+    }
+    content_type
+        .map(|ct| {
+            let ct = ct.to_ascii_lowercase();
+            ct.contains("heic") || ct.contains("heif")
+        })
+        .unwrap_or(false)
+}
+
+/// HEIC/HEIF 字节 → JPEG 字节（质量 82）。阻塞（外部进程 + 临时文件 IO），
+/// 调用方应走 `spawn_blocking`。`heif-convert` 缺失或失败 → None。
+pub fn heif_to_jpeg(bytes: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Write;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir();
+    let input = dir.join(format!("reader-cover-{}-{stamp}.heic", std::process::id()));
+    let output = input.with_extension("jpg");
+    let result = (|| {
+        let mut file = std::fs::File::create(&input).ok()?;
+        file.write_all(bytes).ok()?;
+        drop(file);
+        let status = std::process::Command::new("heif-convert")
+            .arg("-q")
+            .arg("82")
+            .arg(&input)
+            .arg(&output)
+            .status()
+            .ok()?;
+        if !status.success() {
+            tracing::debug!("heif-convert 退出码异常: {status}");
+            return None;
+        }
+        let data = std::fs::read(&output).ok()?;
+        if data.is_empty() {
+            None
+        } else {
+            Some(data)
+        }
+    })();
+    let _ = std::fs::remove_file(&input);
+    let _ = std::fs::remove_file(&output);
+    result
+}
+
+/// 封面归一入口：返回 (最终扩展名, 最终字节)。无需转码时原样返回；
+/// 需转码但不可用（命令缺失/转换失败）→ None，调用方降级为不落盘并保留远程 URL。
+pub async fn normalize_cover(
+    ext: &str,
+    content_type: Option<&str>,
+    bytes: Vec<u8>,
+) -> Option<(String, Vec<u8>)> {
+    let ext = if ext.trim().is_empty() {
+        "jpg".to_string()
+    } else {
+        ext.trim_start_matches('.').to_ascii_lowercase()
+    };
+    if !is_heif(&ext, content_type) {
+        return Some((ext, bytes));
+    }
+    let converted = tokio::task::spawn_blocking(move || heif_to_jpeg(&bytes))
+        .await
+        .ok()
+        .flatten()?;
+    Some(("jpg".to_string(), converted))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_heif_by_ext_or_content_type() {
+        assert!(is_heif("heic", None));
+        assert!(is_heif(".HEIF", None));
+        assert!(is_heif("bin", Some("image/heic")));
+        assert!(is_heif("jpg", Some("image/heif; charset=binary")));
+        assert!(!is_heif("jpg", Some("image/jpeg")));
+        assert!(!is_heif("png", None));
+        assert!(!is_heif("", Some("image/webp")));
+    }
+
+    #[tokio::test]
+    async fn test_normalize_cover_passthrough_and_default_ext() {
+        let bytes = vec![1u8, 2, 3];
+        let (ext, data) = normalize_cover("png", Some("image/png"), bytes.clone())
+            .await
+            .expect("非 heic 无需转码");
+        assert_eq!(ext, "png");
+        assert_eq!(data, bytes);
+        let (ext, _) = normalize_cover("", None, vec![9u8]).await.expect("空扩展名回退 jpg");
+        assert_eq!(ext, "jpg");
+    }
 
     /// 生成 4x4 PNG 测试图 → webp 转码：RIFF/WEBP 头 + 可解码回原尺寸
     #[test]

@@ -68,6 +68,7 @@ RUN apt-get update \
         libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
         libxfixes3 libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2 \
         libgtk-3-0 \
+        libheif-examples \
     && ln -sf /usr/bin/tini /sbin/tini \
     && rm -rf /var/lib/apt/lists/*
 

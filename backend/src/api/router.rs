@@ -8395,25 +8395,40 @@ async fn save_book(
                 )
                 .await
                 {
-                    Ok((bytes, _, _)) if !bytes.is_empty() => {
+                    Ok((bytes, content_type, _)) if !bytes.is_empty() => {
                         // 剥掉 URL 查询串再取扩展名：`x.png?token=1` 否则产出含 `?`
                         // 的非法文件名（Windows fs::write 必败 → 封面静默不落盘）
                         let cov_path = cov.split('?').next().unwrap_or(&cov);
                         let ext = crate::service::local_book::file_ext(cov_path);
-                        let ext = if ext.is_empty() { "jpg" } else { &ext };
-                        let md5 = crate::util::md5::md5_encode(&cov);
-                        let dir = state
-                            .storage
-                            .config
-                            .storage_dir()
-                            .join("assets")
-                            .join(&namespace)
-                            .join("covers");
-                        if std::fs::create_dir_all(&dir).is_ok() {
-                            let fname = format!("{md5}.{ext}");
-                            if std::fs::write(dir.join(&fname), &bytes).is_ok() {
-                                b.cover_url = Some(format!("/assets/{namespace}/covers/{fname}"));
+                        // 源站封面常为 HEIC（浏览器无法渲染）→ 落盘前归一为 JPEG；
+                        // 转换不可用 → 不落盘，保留远程 URL（封面可能空白但不写坏数据）
+                        match crate::service::imaging::normalize_cover(
+                            &ext,
+                            content_type.as_deref(),
+                            bytes,
+                        )
+                        .await
+                        {
+                            Some((ext, data)) => {
+                                let md5 = crate::util::md5::md5_encode(&cov);
+                                let dir = state
+                                    .storage
+                                    .config
+                                    .storage_dir()
+                                    .join("assets")
+                                    .join(&namespace)
+                                    .join("covers");
+                                if std::fs::create_dir_all(&dir).is_ok() {
+                                    let fname = format!("{md5}.{ext}");
+                                    if std::fs::write(dir.join(&fname), &data).is_ok() {
+                                        b.cover_url =
+                                            Some(format!("/assets/{namespace}/covers/{fname}"));
+                                    }
+                                }
                             }
+                            None => tracing::debug!(
+                                "saveBook 封面转码不可用（保留原 URL）: {cov}"
+                            ),
                         }
                     }
                     _ => tracing::debug!("saveBook 封面下载失败（保留原 URL）: {cov}"),
