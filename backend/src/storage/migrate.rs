@@ -31,6 +31,11 @@ pub async fn migrate_if_needed(storage: &Storage) -> Result<()> {
     if backfilled > 0 {
         tracing::info!("补全迁移书籍 toc_url：{backfilled} 本（从 raw_json 恢复 tocUrl）");
     }
+    // 修复入架时漏写 can_update 的网络书(否则「刷新书架」永远跳过它们)。每次启动扫描, 幂等。
+    let can_update_fixed = backfill_book_can_update(&storage.pool).await?;
+    if can_update_fixed > 0 {
+        tracing::info!("修复书籍更新开关 can_update：{can_update_fixed} 本置为可更新");
+    }
     // 管理员 default 残留个人数据回迁：管理员默认使用本人账号命名空间，
     // default 仅作系统配置层；若 default 中混入个人数据（书架/进度等），
     // 启动时归位到管理员本人命名空间，幂等。
@@ -297,6 +302,21 @@ async fn migrate_admin_default_personal_data_back(pool: &SqlitePool) -> Result<u
     }
     tx.commit().await?;
     Ok(total)
+}
+
+/// 历史缺陷补全：搜索入架的书未带 canUpdate（后端实体默认 false），落库 can_update=0 →
+/// 「刷新书架」的 list_updatable_books 只取 can_update=1，这些书章数永远停在入架那一刻。
+/// 前端至今没有该开关，故 0 必为缺陷：非本地书一律置 1（本地书无源可抓，保持原值）。幂等。
+async fn backfill_book_can_update(pool: &SqlitePool) -> Result<usize> {
+    let updated = sqlx::query(
+        "UPDATE books SET can_update = 1 \
+         WHERE can_update = 0 AND origin != 'local' \
+           AND book_url NOT LIKE 'local://%' AND book_url NOT LIKE '%.txt'",
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(updated as usize)
 }
 
 /// 从 books.raw_json 恢复漏写的 toc_url（旧迁移版本未写 toc_url 字段）。

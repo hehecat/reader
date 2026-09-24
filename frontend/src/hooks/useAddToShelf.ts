@@ -20,7 +20,16 @@ export function toSaveBookInput(book: SearchBook): SaveBookInput {
     intro: book.intro,
     latestChapterTitle: book.latestChapterTitle,
     totalChapterNum: 0,
+    // 入架即允许书架刷新更新章数: 缺省 canUpdate 后端实体默认 false(DB 默认 0),
+    // 会让"刷新书架"跳过本书(list_updatable_books 只取 can_update=1), 章数永远落后.
+    // 本地书(local:// / *.txt)无源可抓, 保持 false.
+    canUpdate: !isLocalBookUrl(book.bookUrl),
   };
+}
+
+/** 本地书判定: 与后端 run_shelf_update 的跳过条件一致 */
+function isLocalBookUrl(bookUrl: string): boolean {
+  return bookUrl.startsWith("local://") || bookUrl.endsWith(".txt");
 }
 
 export interface UseAddToShelfOptions {
