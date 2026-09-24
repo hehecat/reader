@@ -87,17 +87,25 @@ export default function ExplorePage() {
         if (item === undefined) {
           return;
         }
+        // 试前两个分类: 任一返回内容即算可用 —— 首分类恰为空(站点分类本身没书)不算源失效
         let ok = false;
-        try {
-          const firstMenu = item.menus[0];
-          const hits = await exploreBook({
-            bookSourceUrl: item.source.bookSourceUrl,
-            ruleFindUrl: firstMenu?.url ?? "",
-            page: 1,
-          });
-          ok = hits.length > 0;
-        } catch {
-          ok = false;
+        for (const menu of item.menus.slice(0, 2)) {
+          try {
+            const hits = await exploreBook({
+              bookSourceUrl: item.source.bookSourceUrl,
+              ruleFindUrl: menu.url,
+              page: 1,
+            });
+            if (hits.length > 0) {
+              ok = true;
+              break;
+            }
+          } catch {
+            /* 该分类失败, 继续试下一个 */
+          }
+          if (!probingRef.current) {
+            return;
+          }
         }
         markSourceHealth(item.source.bookSourceUrl, ok);
         done += 1;
@@ -236,7 +244,7 @@ export default function ExplorePage() {
             ? "读取书源中"
             : `${exploreSources.length} 个可探索书源${
                 hiddenByHealth > 0 ? ` · 已隐藏 ${hiddenByHealth} 个无内容源` : ""
-              }${menus.length > 0 ? ` · ${menus.length} 个发现分类` : ""}`}
+              }${menus.length > 0 ? ` · 当前源 ${menus.length} 个分类` : ""}`}
         </p>
         <ExploreMenuTabs
           menus={menus}
