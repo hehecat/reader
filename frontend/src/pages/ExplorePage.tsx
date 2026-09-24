@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { CircleAlert, Compass, Library, RotateCw } from "lucide-react";
+import { CircleAlert, Compass, Library, RotateCw, ScanSearch } from "lucide-react";
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -206,6 +206,19 @@ export default function ExplorePage() {
             />
             <IconButton
               variant="ghost"
+              aria-label="重新检测书海源"
+              tooltip={
+                probing !== null
+                  ? `检测中 ${probing.done}/${probing.total} · 点击中止`
+                  : "重新检测书海源(隐藏无内容源)"
+              }
+              disabled={sourcesQuery.isLoading || allExploreSources.length === 0}
+              onClick={recheckAll}
+            >
+              <ScanSearch aria-hidden className={cn(probing !== null && "ui-spin")} />
+            </IconButton>
+            <IconButton
+              variant="ghost"
               aria-label="刷新书源列表"
               tooltip="刷新书源"
               disabled={sourcesQuery.isFetching}
@@ -218,26 +231,13 @@ export default function ExplorePage() {
       />
 
       <div ref={toolbarRef} className="mb-6 flex flex-col gap-2">
-        <div className="flex items-end justify-between gap-2">
-          <Button
-            size="sm"
-            variant="ghost"
-            className="text-xs"
-            disabled={sourcesQuery.isLoading || allExploreSources.length === 0}
-            onClick={recheckAll}
-          >
-            {probing !== null
-              ? `检测中 ${probing.done}/${probing.total}(点击中止)`
-              : "重新检测书海源"}
-          </Button>
-          <p className="self-end text-xs text-muted-foreground">
-            {sourcesQuery.isLoading
-              ? "读取书源中"
-              : `${exploreSources.length} 个可探索书源${
-                  hiddenByHealth > 0 ? ` · 已隐藏 ${hiddenByHealth} 个无内容源` : ""
-                }${menus.length > 0 ? ` · ${menus.length} 个发现分类` : ""}`}
-          </p>
-        </div>
+        <p className="self-end text-xs text-muted-foreground">
+          {sourcesQuery.isLoading
+            ? "读取书源中"
+            : `${exploreSources.length} 个可探索书源${
+                hiddenByHealth > 0 ? ` · 已隐藏 ${hiddenByHealth} 个无内容源` : ""
+              }${menus.length > 0 ? ` · ${menus.length} 个发现分类` : ""}`}
+        </p>
         <ExploreMenuTabs
           menus={menus}
           value={menuIndex}
