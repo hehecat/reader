@@ -12,6 +12,7 @@ import { Button, EmptyState, IconButton, PageIntro, cn } from "@/components/ui";
 import { errorMessage } from "@/hooks/useBookshelf";
 import { humanizeError } from "@/lib/errors";
 import { exploreBook, isExplorable, parseExploreMenus } from "@/services/explore";
+import { useExploreHealth } from "@/hooks/useExploreHealth";
 import { getBookSources } from "@/services/sources";
 import type { SearchBook } from "@/types/api";
 
@@ -40,7 +41,9 @@ export default function ExplorePage() {
     staleTime: 5 * 60_000,
   });
 
-  const exploreSources = React.useMemo<ExploreSource[]>(() => {
+  /** 书海自动筛选: 已判定"无内容"的源(6h 内)不显示, 避免点进去一片空白 */
+  const health = useExploreHealth();
+  const allExploreSources = React.useMemo<ExploreSource[]>(() => {
     const list: ExploreSource[] = [];
     for (const source of sourcesQuery.data ?? []) {
       if (isExplorable(source)) {
@@ -49,6 +52,62 @@ export default function ExplorePage() {
     }
     return list;
   }, [sourcesQuery.data]);
+  const exploreSources = React.useMemo(
+    () => allExploreSources.filter((item) => !health.isHidden(item.source.bookSourceUrl)),
+    [allExploreSources, health],
+  );
+  const hiddenByHealth = allExploreSources.length - exploreSources.length;
+
+  /** 批量重新检测: 并发 3 只探每个源的首个发现分类, 结果写回本地(空源自动隐藏); 再次点击可中止 */
+  const [probing, setProbing] = React.useState<{ done: number; total: number } | null>(null);
+  const probingRef = React.useRef(false);
+  const recheckAll = () => {
+    if (probingRef.current) {
+      probingRef.current = false; // 中止
+      setProbing(null);
+      return;
+    }
+    const list = allExploreSources.filter((item) => item.menus.length > 0);
+    if (list.length === 0) {
+      return;
+    }
+    probingRef.current = true;
+    setProbing({ done: 0, total: list.length });
+    let cursor = 0;
+    let done = 0;
+    const worker = async () => {
+      while (probingRef.current) {
+        const i = cursor;
+        cursor += 1;
+        if (i >= list.length) {
+          return;
+        }
+        const item = list[i];
+        if (item === undefined) {
+          return;
+        }
+        let ok = false;
+        try {
+          const firstMenu = item.menus[0];
+          const hits = await exploreBook({
+            bookSourceUrl: item.source.bookSourceUrl,
+            ruleFindUrl: firstMenu?.url ?? "",
+            page: 1,
+          });
+          ok = hits.length > 0;
+        } catch {
+          ok = false;
+        }
+        health.mark(item.source.bookSourceUrl, ok);
+        done += 1;
+        setProbing({ done, total: list.length });
+      }
+    };
+    void Promise.all(Array.from({ length: Math.min(3, list.length) }, worker)).then(() => {
+      probingRef.current = false;
+      setProbing(null);
+    });
+  };
 
   const [selection, setSelection] = React.useState(INITIAL_SELECTION);
   const [selected, setSelected] = React.useState<SearchBook | null>(null);
@@ -76,6 +135,16 @@ export default function ExplorePage() {
       ),
     enabled: canExplore,
   });
+
+  // 探测结果落库: 本次分类有内容 → 标记可用; 空 → 标记无内容(下次进书海隐藏)
+  const exploreFetchedOk = exploreQuery.isSuccess;
+  const exploreEmpty = exploreQuery.isSuccess && (exploreQuery.data?.length ?? 0) === 0;
+  React.useEffect(() => {
+    if (!canExplore || !exploreFetchedOk) {
+      return;
+    }
+    health.mark(sourceUrl, !exploreEmpty);
+  }, [canExplore, exploreFetchedOk, exploreEmpty, sourceUrl, health]);
 
   // 书源自身的发现页可能重复列出同一本书, 按 bookUrl|origin 去重
   const books = React.useMemo(() => {
@@ -148,13 +217,26 @@ export default function ExplorePage() {
       />
 
       <div ref={toolbarRef} className="mb-6 flex flex-col gap-2">
-        <p className="self-end text-xs text-muted-foreground">
-          {sourcesQuery.isLoading
-            ? "读取书源中"
-            : `${exploreSources.length} 个可探索书源${
-                menus.length > 0 ? ` · ${menus.length} 个发现分类` : ""
-              }`}
-        </p>
+        <div className="flex items-end justify-between gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-xs"
+            disabled={sourcesQuery.isLoading || allExploreSources.length === 0}
+            onClick={recheckAll}
+          >
+            {probing !== null
+              ? `检测中 ${probing.done}/${probing.total}(点击中止)`
+              : "重新检测书海源"}
+          </Button>
+          <p className="self-end text-xs text-muted-foreground">
+            {sourcesQuery.isLoading
+              ? "读取书源中"
+              : `${exploreSources.length} 个可探索书源${
+                  hiddenByHealth > 0 ? ` · 已隐藏 ${hiddenByHealth} 个无内容源` : ""
+                }${menus.length > 0 ? ` · ${menus.length} 个发现分类` : ""}`}
+          </p>
+        </div>
         <ExploreMenuTabs
           menus={menus}
           value={menuIndex}
