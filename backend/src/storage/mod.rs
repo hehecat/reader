@@ -5229,19 +5229,20 @@ pub async fn run_shelf_update(storage: &Storage) -> Result<usize> {
         {
             continue;
         }
-        // 与 getChapterList 一致: toc_url 为空时回退 book_url —— 搜索入架的书常只有 book_url,
-        // 不能因此跳过更新
-        let toc_url = if book.toc_url.trim().is_empty() {
-            book.book_url.clone()
-        } else {
-            book.toc_url.clone()
-        };
         // 书源缺失（用户/系统均无）→ 无法抓取，跳过
         let Ok(Some(source)) = storage
             .find_book_source(&book.user_namespace, &book.origin)
             .await
         else {
             continue;
+        };
+        // 目录端点常与书页不同(如 fq 的 /toc/<id>): toc_url 为空时按 ruleBookInfo 推导,
+        // 与 getChapterList 走同一解析(含 book vars 缓存), 否则会把书页当目录页抓 → 0 章
+        let toc_url = if book.toc_url.trim().is_empty() {
+            crate::service::book::resolve_toc_url(&book.user_namespace, &source, &book.book_url)
+                .await
+        } else {
+            book.toc_url.clone()
         };
         match crate::service::book::analyze_toc(
             &book.user_namespace,

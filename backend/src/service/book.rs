@@ -280,6 +280,33 @@ pub fn analyze_related_books(
 }
 
 /// 详情解析（ruleBookInfo 字段应用于详情页 HTML）
+/// 目录 URL 解析（legacy WebBook.getChapterList 语义）：书页与目录页常是独立端点
+/// （如 fq 源的 `/toc/<id>`），book.toc_url 为空时先查 book vars 的 `tocUrl` 缓存（推导过
+/// 就不再抓书页），再抓书页按 ruleBookInfo.tocUrl 推导，结果写回 vars 供复用。
+/// 推导不出 → 返回 book_url 兜底（部分源的目录确实就在书页）。
+pub async fn resolve_toc_url(ns: &str, source: &crate::model::BookSource, book_url: &str) -> String {
+    if book_url.is_empty() {
+        return String::new();
+    }
+    let mut vars = crate::parser::rule::load_book_vars(ns, &source.book_source_url, book_url);
+    let cached = vars.get("tocUrl").cloned().unwrap_or_default();
+    if !cached.is_empty() && cached != book_url {
+        return cached;
+    }
+    if let Ok(resp) = fetch_url(ns, book_url, source).await {
+        let info = analyze_book_info(ns, &resp.body, &resp.url, source, book_url, None);
+        if let Some(t) = info.toc_url {
+            if !t.is_empty() && t != book_url {
+                vars.insert("tocUrl".to_string(), t.clone());
+                crate::parser::rule::save_book_vars(ns, &source.book_source_url, book_url, &vars);
+                return t;
+            }
+        }
+    }
+    book_url.to_string()
+}
+
+
 /// F12/AR4：`book_name` 为解析前已知的书名（搜索结果/书架）——@get:{bookName} 回退源
 #[allow(clippy::too_many_arguments)]
 pub fn analyze_book_info(
