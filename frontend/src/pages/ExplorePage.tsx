@@ -239,13 +239,12 @@ export default function ExplorePage() {
       />
 
       <div ref={toolbarRef} className="mb-6 flex flex-col gap-2">
-        <p className="self-end text-xs text-muted-foreground">
-          {sourcesQuery.isLoading
-            ? "读取书源中"
-            : `${exploreSources.length} 个可探索书源${
-                hiddenByHealth > 0 ? ` · 已隐藏 ${hiddenByHealth} 个无内容源` : ""
-              }${menus.length > 0 ? ` · 当前源 ${menus.length} 个分类` : ""}`}
-        </p>
+        {/* 统计只在检测书源时实时显示, 平时不占版面(进度/中止在按钮 tooltip) */}
+        {probing !== null ? (
+          <p className="self-end text-xs text-muted-foreground">
+            {exploreSources.length} 个可探索书源 · 已隐藏 {hiddenByHealth} 个无内容源
+          </p>
+        ) : null}
         <ExploreMenuTabs
           menus={menus}
           value={menuIndex}
