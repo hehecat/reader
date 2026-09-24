@@ -75,11 +75,15 @@ RUN apt-get update \
 COPY --from=camo /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
 COPY --from=camo /root/.cache/camoufox /root/.cache/camoufox
 COPY backend/scripts/camoufox_solver.py /usr/local/bin/camoufox_solver.py
+COPY backend/scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 ENV TZ=Asia/Shanghai
 ENV READER_APP_WEB_ROOT=/app/web-ui/dist
-# 未配置 READER_CAMOUFOX_URL → 首次用到浏览器时自动 spawn python3 camoufox_solver.py --port 8196
+# entrypoint 常驻拉起 camoufox 求解服务(见 docker-entrypoint.sh); 此处显式指向它,
+# 后端不再惰性 spawn(那条路径日志被丢弃且首次质询要等 20s 健康轮询)
 ENV READER_CAMOUFOX_SCRIPT=/usr/local/bin/camoufox_solver.py
+ENV READER_CAMOUFOX_URL=http://127.0.0.1:8196
 
 COPY --from=builder /app/target/release/reader-dev /usr/local/bin/reader-dev
 # 唯一高频变化层（二进制 + dist）放末尾, 稳定层前置
@@ -87,5 +91,5 @@ COPY --from=builder /app/web-ui/dist /app/web-ui/dist
 
 EXPOSE 8080
 VOLUME ["/data"]
-ENTRYPOINT ["/usr/bin/tini", "--"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
 CMD ["reader-dev"]
