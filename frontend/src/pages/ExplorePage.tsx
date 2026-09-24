@@ -52,9 +52,10 @@ export default function ExplorePage() {
     }
     return list;
   }, [sourcesQuery.data]);
+  const { isHidden: isHiddenSource, mark: markSourceHealth } = health;
   const exploreSources = React.useMemo(
-    () => allExploreSources.filter((item) => !health.isHidden(item.source.bookSourceUrl)),
-    [allExploreSources, health],
+    () => allExploreSources.filter((item) => !isHiddenSource(item.source.bookSourceUrl)),
+    [allExploreSources, isHiddenSource],
   );
   const hiddenByHealth = allExploreSources.length - exploreSources.length;
 
@@ -98,7 +99,7 @@ export default function ExplorePage() {
         } catch {
           ok = false;
         }
-        health.mark(item.source.bookSourceUrl, ok);
+        markSourceHealth(item.source.bookSourceUrl, ok);
         done += 1;
         setProbing({ done, total: list.length });
       }
@@ -143,8 +144,8 @@ export default function ExplorePage() {
     if (!canExplore || !exploreFetchedOk) {
       return;
     }
-    health.mark(sourceUrl, !exploreEmpty);
-  }, [canExplore, exploreFetchedOk, exploreEmpty, sourceUrl, health]);
+    markSourceHealth(sourceUrl, !exploreEmpty);
+  }, [canExplore, exploreFetchedOk, exploreEmpty, sourceUrl, markSourceHealth]);
 
   // 书源自身的发现页可能重复列出同一本书, 按 bookUrl|origin 去重
   const books = React.useMemo(() => {
