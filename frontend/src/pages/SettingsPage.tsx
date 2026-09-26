@@ -3,7 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { ReadingPreferencesCard } from "@/components/settings/ReadingPreferencesCard";
 import { TtsPreferencesCard } from "@/components/settings/TtsPreferencesCard";
 import { WebdavPanel } from "@/components/settings/WebdavPanel";
-import { PageIntro, SettingCard, SettingRow } from "@/components/ui";
+import { Button, PageIntro, SettingCard, SettingRow } from "@/components/ui";
+import { usePwaInstall } from "@/hooks/usePwaInstall";
 import { getSystemInfo } from "@/services/auth";
 import { useSettingsStore } from "@/stores/settings-store";
 import { version as appVersion } from "../../package.json";
@@ -29,6 +30,31 @@ function formatUptime(totalSeconds: number): string {
 /**
  * 设置页: 阅读偏好 + 朗读与音色 (独立卡) + 数据与备份 (WebDAV) + 关于.
  */
+/** 把砚台装到桌面/主屏: 支持原生安装弹窗时给按钮, iOS 给手动添加指引. */
+function InstallCard() {
+  const { canInstall, installed, needsIosHint, install } = usePwaInstall();
+  const desc = installed
+    ? "已在独立窗口中运行"
+    : canInstall
+      ? "独立窗口打开, 无地址栏; 断网仍能打开应用外壳"
+      : needsIosHint
+        ? "Safari: 分享 → 添加到主屏幕"
+        : "当前浏览器暂不提供安装入口";
+  return (
+    <SettingCard title="安装为应用" desc={desc}>
+      <SettingRow label="砚台 PWA" value="桌面/主屏图标 · 独立窗口 · 断网可用外壳(正文仍走书源)">
+        {installed ? (
+          <span className="text-xs text-muted-foreground">已安装</span>
+        ) : (
+          <Button size="sm" variant="secondary" disabled={!canInstall} onClick={install}>
+            安装到桌面
+          </Button>
+        )}
+      </SettingRow>
+    </SettingCard>
+  );
+}
+
 export default function SettingsPage() {
   const searchTimeout = useSettingsStore((state) => state.searchTimeout);
   const setSearchTimeout = useSettingsStore((state) => state.setSearchTimeout);
@@ -80,6 +106,7 @@ export default function SettingsPage() {
               />
             ) : null}
           </SettingCard>
+          <InstallCard />
         </div>
       </div>
     </div>

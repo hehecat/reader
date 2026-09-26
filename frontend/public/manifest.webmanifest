@@ -1,0 +1,29 @@
+{
+  "name": "砚台 · 在线小说阅读",
+  "short_name": "砚台",
+  "description": "多书源在线小说阅读器：书架、搜索、书海发现与沉浸式阅读。",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "background_color": "#fcfaf6",
+  "theme_color": "#1c1917",
+  "categories": ["books", "entertainment"],
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    {
+      "src": "/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    { "name": "书架", "short_name": "书架", "url": "/" },
+    { "name": "搜索", "short_name": "搜索", "url": "/search" },
+    { "name": "书海", "short_name": "书海", "url": "/library" }
+  ]
+}
