@@ -1,7 +1,8 @@
 import { BookOpen, PanelLeft } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
-import { NAV_ITEMS, SETTINGS_NAV_ITEM, type NavItem } from "./nav";
+import { useAppMode } from "@/hooks/useAppMode";
+import { ADMIN_NAV_ITEM, NAV_ITEMS, SETTINGS_NAV_ITEM, type NavItem } from "./nav";
 import { Tooltip, cn } from "@/components/ui";
 
 export interface SideNavProps {
@@ -62,6 +63,8 @@ function SideNavItem({
 
 /** 侧栏本体: 品牌块 + 分组导航 + 分隔线 + 设置项 + 折叠按钮, 桌面 aside 与移动 slide-over 共用. */
 export function SideNavContent({ collapsed, onNavigate, onToggleCollapse }: SideNavContentProps) {
+  // 用户管理仅管理员可见(后端同样校验, 这里只是不暴露入口)
+  const { isAdmin } = useAppMode();
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div
@@ -94,6 +97,9 @@ export function SideNavContent({ collapsed, onNavigate, onToggleCollapse }: Side
         ))}
         <div className="my-3 border-t border-border/60" />
         <SideNavItem item={SETTINGS_NAV_ITEM} collapsed={collapsed} onNavigate={onNavigate} />
+        {isAdmin ? (
+          <SideNavItem item={ADMIN_NAV_ITEM} collapsed={collapsed} onNavigate={onNavigate} />
+        ) : null}
       </nav>
       {onToggleCollapse ? (
         <button

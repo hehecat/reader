@@ -753,6 +753,9 @@ async fn login(
         crate::util::login_limit::record_failure(&username, &ip);
         return Json(ReturnData::err("密码错误"));
     }
+    if user.disabled {
+        return Json(ReturnData::err("账号已停用, 请联系管理员"));
+    }
     crate::util::login_limit::reset(&username, &ip); // GAP 59：生成新 token 并追加到 token_map（多设备会话，上限 5；uuid v4 随机防预测）
     let now = now_millis();
     let token = uuid::Uuid::new_v4().simple().to_string();
@@ -835,6 +838,7 @@ async fn register(
         token_map: None,
         // 首个注册用户自动成为管理员（secure 模式可操作系统 default 配置）
         is_admin: count == 0,
+        disabled: false,
         enable_webdav: config.default_user_enable_webdav,
         enable_local_store: config.default_user_enable_local_store,
         enable_book_source: config.default_user_enable_book_source,
@@ -945,6 +949,7 @@ async fn add_user(
         token: token.clone(),
         token_map: None,
         is_admin: bool_param("isAdmin", false),
+        disabled: false,
         enable_webdav: bool_param("enableWebdav", config.default_user_enable_webdav),
         enable_local_store: bool_param("enableLocalStore", config.default_user_enable_local_store),
         enable_book_source: bool_param("enableBookSource", config.default_user_enable_book_source),
@@ -6657,6 +6662,7 @@ fn user_admin_json(user: &User) -> Value {
         "bookSourceLimit": user.book_source_limit,
         "bookLimit": user.book_limit,
         "isAdmin": user.is_admin,
+        "disabled": user.disabled,
         "lastLoginAt": user.last_login_at,
         "createdAt": user.created_at,
     })
@@ -6695,10 +6701,14 @@ async fn update_user(
         params.get(key).and_then(|v| v.parse::<i64>().ok())
     };
     // 最后一名管理员禁止撤销管理员身份（保证 default 系统配置始终可管理）
-    if bool_param("isAdmin") == Some(false) {
+    if bool_param("isAdmin") == Some(false) || bool_param("disabled") == Some(true) {
         if let Ok(Some(target)) = state.storage.find_user(&username).await {
             if target.is_admin && state.storage.count_admins().await.unwrap_or(1) <= 1 {
-                return Json(ReturnData::err("不能撤销最后一名管理员"));
+                return Json(ReturnData::err(if bool_param("disabled") == Some(true) {
+                    "不能停用最后一名管理员"
+                } else {
+                    "不能撤销最后一名管理员"
+                }));
             }
         }
     }
@@ -6713,6 +6723,7 @@ async fn update_user(
             int_param("bookSourceLimit"),
             int_param("bookLimit"),
             bool_param("isAdmin"),
+            bool_param("disabled"),
         )
         .await
     {
@@ -6892,9 +6903,10 @@ async fn reset_user_password(
     }
 }
 
-/// 管理校验（legacy checkManagerAuth）：
-/// - secure 模式：secureKey 匹配，失败返回 NEED_SECURE_KEY（errorMsg=请输入管理密码）
-/// - 非 secure 模式：仅管理员（is_admin）可执行用户管理，普通用户拒绝
+/// 管理校验（legacy checkManagerAuth 语义收紧）：
+/// - 多用户（secure）：**身份先行** —— 必须已登录且 `is_admin`；配置了 secureKey 时再校验
+///   管理密码（第二因子）。旧实现只看 secureKey，等于"任何人拿到密码即可管理"，已废弃。
+/// - 单用户（非 secure）：无登录概念 —— 配置了 secureKey 则校验之，否则放行。
 async fn check_manager_auth(
     state: &AppState,
     params: &HashMap<String, String>,
@@ -6902,23 +6914,37 @@ async fn check_manager_auth(
     body: Option<&serde_json::Value>,
 ) -> Result<(), ReturnData> {
     let config = &state.storage.config;
-    if config.secure && !config.secure_key.is_empty() {
-        let secure_key = param_of(params, body, "secureKey");
-        if !crate::util::constant_time::ct_eq(&secure_key, &config.secure_key) {
-            return Err(ReturnData {
-                is_success: false,
-                error_msg: "请输入管理密码".to_string(),
-                data: json!("NEED_SECURE_KEY"),
-            });
+    if !config.secure {
+        if config.secure_key.is_empty() {
+            return Ok(());
         }
+        return check_secure_key(config, params, body);
+    }
+    let user = resolve_current_user(state, params, headers).await?;
+    if !user.is_admin {
+        return Err(ReturnData::err("仅管理员可执行该操作"));
+    }
+    if config.secure_key.is_empty() {
         return Ok(());
     }
-    // 非 secure（或未配置 secureKey）：区分管理员用户——普通用户不得管理
-    match resolve_current_user(state, params, headers).await {
-        Ok(u) if u.is_admin => Ok(()),
-        Ok(_) => Err(ReturnData::err("仅管理员可执行该操作")),
-        Err(ret) => Err(ret),
+    check_secure_key(config, params, body)
+}
+
+/// 管理密码（第二因子）校验：不匹配返回 NEED_SECURE_KEY（前端据此弹管理密码输入）
+fn check_secure_key(
+    config: &crate::AppConfig,
+    params: &HashMap<String, String>,
+    body: Option<&serde_json::Value>,
+) -> Result<(), ReturnData> {
+    let secure_key = param_of(params, body, "secureKey");
+    if !crate::util::constant_time::ct_eq(&secure_key, &config.secure_key) {
+        return Err(ReturnData {
+            is_success: false,
+            error_msg: "请输入管理密码".to_string(),
+            data: json!("NEED_SECURE_KEY"),
+        });
     }
+    Ok(())
 }
 
 // ---------------- GAP #58 权限开关实际执行 ----------------
@@ -7257,11 +7283,14 @@ async fn backup_to_mongodb(
     headers: HeaderMap,
     body: Option<axum::body::Bytes>,
 ) -> Json<ReturnData> {
-    // 认证解析保持不变（secure 模式校验 accessToken；非 secure 放行）
     if let Err(ret) = resolve_namespace(&state, &params, &headers).await {
         return Json(ret);
     }
     let body_json = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    // 管理操作：uri/ns 均可由请求指定且 ns 留空 = 遍历全部用户 → 必须管理员
+    if let Err(ret) = check_manager_auth(&state, &params, &headers, body_json.as_ref()).await {
+        return Json(ret);
+    }
     let namespace = mongo_backup_ns(&params, body_json.as_ref());
     let (uri, db) = match mongo_backup_params(&params, body_json.as_ref()) {
         Ok(v) => v,
@@ -7292,11 +7321,14 @@ async fn restore_from_mongodb(
     headers: HeaderMap,
     body: Option<axum::body::Bytes>,
 ) -> Json<ReturnData> {
-    // 认证解析保持不变（secure 模式校验 accessToken；非 secure 放行）
     if let Err(ret) = resolve_namespace(&state, &params, &headers).await {
         return Json(ret);
     }
     let body_json = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    // 管理操作：可指定任意 uri/ns（含覆盖全站数据）→ 必须管理员
+    if let Err(ret) = check_manager_auth(&state, &params, &headers, body_json.as_ref()).await {
+        return Json(ret);
+    }
     let namespace = mongo_backup_ns(&params, body_json.as_ref());
     let (uri, db) = match mongo_backup_params(&params, body_json.as_ref()) {
         Ok(v) => v,
@@ -7519,6 +7551,10 @@ pub(crate) async fn resolve_current_user(
                 || crate::model::user::token_map_valid(&user.token_map, token, now_millis());
             if !token_ok {
                 return Err(login_required());
+            }
+            // 账号停用: 既有 token 一律失效(管理员在用户管理页启停)
+            if user.disabled {
+                return Err(ReturnData::err("账号已停用, 请联系管理员"));
             }
             // GAP 118：token 过期——基于 users.last_login_at + READER_TOKEN_TTL_DAYS（默认 30 天）；
             // 过期（或 legacy 用户 last_login_at=0 从未登录）→ NEED_LOGIN 重新登录；ttl<=0 永不过期
@@ -10622,10 +10658,33 @@ async fn import_default_txt_toc_rules(
 /// online/bookSource（与 getServerStats 相同聚合）。
 async fn get_system_info(
     State(state): State<AppState>,
-    Query(_params): Query<HashMap<String, String>>,
+    Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Json<ReturnData> {
-    let _ = headers;
+    let config = &state.storage.config;
+    // 普通用户只看与自身相关的开关: 内存/CPU/请求计数/在线会话/端口属运维信息, 仅管理员可见
+    let is_admin = !config.secure
+        || matches!(
+            resolve_current_user(&state, &params, &headers).await,
+            Ok(u) if u.is_admin
+        );
+    // 运行模式: 显式 READER_APP_MODE(single|multi) 优先, 缺省由 secure 推导
+    // —— secure 同时承担"是否要登录"与"是否多用户", 语义混杂, 这里给出显式口径
+    let mode = std::env::var("READER_APP_MODE")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| v == "single" || v == "multi")
+        .unwrap_or_else(|| if config.secure { "multi".into() } else { "single".into() });
+    if !is_admin {
+        return Json(ReturnData::ok(json!({
+            "secure": config.secure,
+            "mode": mode,
+            "isAdmin": false,
+            "version": env!("CARGO_PKG_VERSION"),
+            "inviteRequired": !config.invite_code.is_empty(),
+            "userLimit": config.user_limit,
+        })));
+    }
     let user_count = state.storage.count_users().await.unwrap_or(0);
     let book_count = state.storage.count_books().await.unwrap_or(0);
     let source_count = state.storage.count_all_book_sources().await.unwrap_or(0);
@@ -10638,6 +10697,11 @@ async fn get_system_info(
     data["bookCount"] = json!(book_count);
     data["bookSourceCount"] = json!(source_count);
     // legacy 兼容字段（真实值，单位 MB 字符串）
+    data["secure"] = json!(config.secure);
+    data["mode"] = json!(mode);
+    data["isAdmin"] = json!(true);
+    data["inviteRequired"] = json!(!config.invite_code.is_empty());
+    data["userLimit"] = json!(config.user_limit);
     data["freeMemory"] = json!(format!("{}M", agg.memory.available_mb));
     data["totalMemory"] = json!(format!("{}M", agg.memory.total_mb));
     data["maxMemory"] = json!(format!("{}M", agg.memory.total_mb));
@@ -10649,7 +10713,15 @@ async fn get_system_info(
 /// 内存（总量/可用/已用/进程，MB + 百分比）、CPU（短采样 ~200ms）、请求计数
 /// （总数/今日/按接口 Top10）、在线会话（有效 token 数）、书源成功率（最近一次检测
 /// 结果，未检测则 successRate=null + 说明）、uptime。
-async fn get_server_stats(State(state): State<AppState>) -> Json<ReturnData> {
+async fn get_server_stats(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Json<ReturnData> {
+    // 运维信息(内存/CPU/请求计数/在线会话/端口): 仅管理员; 单用户模式(非 secure)放行
+    if let Err(ret) = check_manager_auth(&state, &params, &headers, None).await {
+        return Json(ret);
+    }
     let agg = crate::service::monitor::collect(&state.storage).await;
     let mut data = agg.to_json();
     data["version"] = json!(env!("CARGO_PKG_VERSION"));
@@ -14442,7 +14514,12 @@ mod tests {
         // 模拟最近一次书源检测
         crate::service::monitor::record_book_source_check("default", 10, 3);
 
-        let ret = get_server_stats(AxumState(state.clone())).await;
+        let ret = get_server_stats(
+            AxumState(state.clone()),
+            axum::extract::Query(std::collections::HashMap::new()),
+            axum::http::HeaderMap::new(),
+        )
+        .await;
         assert!(ret.0.is_success, "{} {}", ret.0.error_msg, ret.0.data);
         let d = &ret.0.data;
         // 版本/端口
@@ -14761,6 +14838,8 @@ mod tests {
             .storage
             .insert_user(&User {
                 username: "admin".into(),
+                // 管理接口要求 is_admin（新语义）: 旧测试靠 secureKey 即放行, 现需管理员身份
+                is_admin: true,
                 token: "t1".into(),
                 enable_webdav: true,
                 enable_book_source: false,
@@ -14860,6 +14939,8 @@ mod tests {
             .insert_user(&User {
                 username: "alice".into(),
                 token: "t1".into(),
+                // 管理接口要求 is_admin（新语义）：alice 在测试里是管理操作者
+                is_admin: true,
                 enable_webdav: false,
                 enable_local_store: false,
                 enable_book_source: true,
@@ -14973,8 +15054,9 @@ mod tests {
             .storage
             .insert_user(&User {
                 username: "admin".into(),
-                token: "t1".into(),
+                // 管理接口要求 is_admin（新语义）: 旧测试靠 secureKey 即放行, 现需管理员身份
                 is_admin: true,
+                token: "t1".into(),
                 ..Default::default()
             })
             .await
@@ -15058,8 +15140,9 @@ mod tests {
             .storage
             .insert_user(&User {
                 username: "admin".into(),
-                token: "t1".into(),
+                // 管理接口要求 is_admin（新语义）: 旧测试靠 secureKey 即放行, 现需管理员身份
                 is_admin: true,
+                token: "t1".into(),
                 ..Default::default()
             })
             .await
@@ -15129,8 +15212,9 @@ mod tests {
             .storage
             .insert_user(&User {
                 username: "admin".into(),
-                token: "t1".into(),
+                // 管理接口要求 is_admin（新语义）: 旧测试靠 secureKey 即放行, 现需管理员身份
                 is_admin: true,
+                token: "t1".into(),
                 ..Default::default()
             })
             .await
@@ -15145,7 +15229,7 @@ mod tests {
             .await
             .unwrap();
         let auth: HashMap<String, String> = [
-            ("accessToken".into(), "op:t3".into()),
+            ("accessToken".into(), "admin:t1".into()),
             ("secureKey".into(), "sk".into()),
         ]
         .into_iter()
@@ -15163,9 +15247,9 @@ mod tests {
         assert!(!ret.0.is_success);
         assert_eq!(ret.0.error_msg, "不能撤销最后一名管理员");
 
-        // 删除最后一名管理员 → 拒绝
-        let body = Bytes::from(r#"{"username":"admin"}"#);
-        let ret = delete_user(
+        // 停用最后一名管理员 → 拒绝（与撤销管理员同等保护）
+        let body = Bytes::from(r#"{"username":"admin","disabled":true}"#);
+        let ret = update_user(
             AxumState(state.clone()),
             Query(auth.clone()),
             HeaderMap::new(),
@@ -15173,7 +15257,17 @@ mod tests {
         )
         .await;
         assert!(!ret.0.is_success);
-        assert_eq!(ret.0.error_msg, "不能删除最后一名管理员");
+        assert_eq!(ret.0.error_msg, "不能停用最后一名管理员");
+        // 删除普通用户 op → 成功（管理员删除路径仍可用）
+        let body = Bytes::from(r#"{"username":"op"}"#);
+        let ret = delete_user(
+            AxumState(state.clone()),
+            Query(auth.clone()),
+            HeaderMap::new(),
+            Some(body),
+        )
+        .await;
+        assert!(ret.0.is_success, "删除普通用户应成功: {}", ret.0.error_msg);
 
         // 第二位管理员加入后允许撤销
         state
@@ -15223,6 +15317,8 @@ mod tests {
             .storage
             .insert_user(&User {
                 username: "admin".into(),
+                // 管理接口要求 is_admin（新语义）: 旧测试靠 secureKey 即放行, 现需管理员身份
+                is_admin: true,
                 token: "t1".into(),
                 ..Default::default()
             })
@@ -15307,6 +15403,8 @@ mod tests {
                 .insert_user(&User {
                     username: u.into(),
                     token: t.into(),
+                    // 管理接口要求 is_admin（新语义）：旧测试靠 secureKey 即放行
+                    is_admin: u == "admin",
                     ..Default::default()
                 })
                 .await
@@ -15420,6 +15518,8 @@ mod tests {
                 password: "old".into(),
                 salt: "oldsalt".into(),
                 token: "t1".into(),
+                // 管理接口要求 is_admin（新语义）：alice 在测试里是管理操作者
+                is_admin: true,
                 ..Default::default()
             })
             .await
@@ -20118,6 +20218,8 @@ mod tests {
             .insert_user(&User {
                 username: "alice".into(),
                 token: "t1".into(),
+                // 管理接口要求 is_admin（新语义）：本测试用 alice 调 resetPassword 别名
+                is_admin: true,
                 ..Default::default()
             })
             .await
@@ -20799,7 +20901,7 @@ mod tests {
         // 开启后放行（无书源 → 走正常业务错误，说明权限已过）
         state
             .storage
-            .update_user_permissions("alice", None, None, Some(true), None, None, None, None)
+            .update_user_permissions("alice", None, None, Some(true), None, None, None, None, None)
             .await
             .unwrap();
         let ret = search_book(
@@ -20914,7 +21016,7 @@ mod tests {
         // 开启后放行
         state
             .storage
-            .update_user_permissions("alice", None, None, None, Some(true), None, None, None)
+            .update_user_permissions("alice", None, None, None, Some(true), None, None, None, None)
             .await
             .unwrap();
         let ret = get_rss_sources(

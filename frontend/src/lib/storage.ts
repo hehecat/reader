@@ -53,18 +53,41 @@ export function clearAccessToken(): void {
   removeItem(ACCESS_TOKEN_KEY);
 }
 
-/** 管理密码 (secureKey), 用户管理等接口需要 */
+/**
+ * 管理密码 (secureKey), 用户管理等接口的第二因子.
+ * 存 sessionStorage(而非 localStorage): 关闭标签即失效, 降低被长期窃取的风险.
+ */
+function safeSession(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
 export function getSecureKey(): string | null {
-  const key = readItem(SECURE_KEY_KEY);
-  return key && key.length > 0 ? key : null;
+  try {
+    const key = safeSession()?.getItem(SECURE_KEY_KEY) ?? null;
+    return key && key.length > 0 ? key : null;
+  } catch {
+    return null;
+  }
 }
 
 export function setSecureKey(key: string): void {
-  writeItem(SECURE_KEY_KEY, key);
+  try {
+    safeSession()?.setItem(SECURE_KEY_KEY, key);
+  } catch {
+    /* 存储不可用时无需处理 */
+  }
 }
 
 export function clearSecureKey(): void {
-  removeItem(SECURE_KEY_KEY);
+  try {
+    safeSession()?.removeItem(SECURE_KEY_KEY);
+  } catch {
+    /* 存储不可用时无需处理 */
+  }
 }
 
 /** 读取并解析 JSON, 不存在或解析失败返回 null */

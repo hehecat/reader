@@ -856,6 +856,7 @@ pub async fn init(config: &AppConfig) -> Result<Storage> {
     ensure_column_typed(&pool, "book_sources", "js_lib", "TEXT").await?;
     // 管理员标记（旧库升级：users 缺 is_admin 列时补列）
     ensure_column_typed(&pool, "users", "is_admin", "INTEGER DEFAULT 0").await?;
+    ensure_column_typed(&pool, "users", "disabled", "INTEGER DEFAULT 0").await?;
     // 用户私有删除覆盖标记（旧库升级：book_sources / source_subs 缺 hidden 列时补列）
     ensure_column_typed(&pool, "book_sources", "hidden", "INTEGER DEFAULT 0").await?;
     ensure_column_typed(&pool, "source_subs", "hidden", "INTEGER DEFAULT 0").await?;
@@ -4335,6 +4336,7 @@ impl Storage {
         book_source_limit: Option<i64>,
         book_limit: Option<i64>,
         is_admin: Option<bool>,
+        disabled: Option<bool>,
     ) -> Result<u64> {
         let r = sqlx::query(
             r#"
@@ -4345,8 +4347,9 @@ impl Storage {
                 enable_rss_source  = COALESCE(?4, enable_rss_source),
                 book_source_limit  = COALESCE(?5, book_source_limit),
                 book_limit         = COALESCE(?6, book_limit),
-                is_admin           = COALESCE(?7, is_admin)
-            WHERE username = ?8
+                is_admin           = COALESCE(?7, is_admin),
+                disabled           = COALESCE(?8, disabled)
+            WHERE username = ?9
             "#,
         )
         .bind(enable_webdav)
@@ -4356,6 +4359,7 @@ impl Storage {
         .bind(book_source_limit)
         .bind(book_limit)
         .bind(is_admin)
+        .bind(disabled)
         .bind(username)
         .execute(&self.pool)
         .await?;
@@ -7767,6 +7771,7 @@ mod tests {
                 Some(99),
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -7783,7 +7788,17 @@ mod tests {
         // 不存在的用户 → 0 行
         assert_eq!(
             storage
-                .update_user_permissions("ghost", Some(true), None, None, None, None, None, None)
+                .update_user_permissions(
+                    "ghost",
+                    Some(true),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await
                 .unwrap(),
             0

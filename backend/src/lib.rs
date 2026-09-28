@@ -70,14 +70,15 @@ impl AppConfig {
             token_ttl_days: env_i64("READER_TOKEN_TTL_DAYS", 30),
             web_root: std::env::var("READER_APP_WEB_ROOT")
                 .unwrap_or_else(|_| "web-ui/dist".to_string()),
-            // 注册默认权限全开（未配置时 true；显式 false 可关闭）
+            // 注册默认权限：书源/RSS 开（核心阅读能力），WebDAV 备份与本地存储默认关
+            // （涉及服务器侧数据导出/落盘，按需由管理员在用户管理里开启）
             default_user_enable_webdav: env_flag_default(
                 "READER_APP_DEFAULTUSERENABLEWEBDAV",
-                true,
+                false,
             ),
             default_user_enable_local_store: env_flag_default(
                 "READER_APP_DEFAULTUSERENABLELOCALSTORE",
-                true,
+                false,
             ),
             default_user_enable_book_source: env_flag_default(
                 "READER_APP_DEFAULTUSERENABLEBOOKSOURCE",

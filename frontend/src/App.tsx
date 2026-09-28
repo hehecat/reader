@@ -19,6 +19,7 @@ const RssPage = lazyPage(() => import("@/pages/RssPage"));
 const PurifyPage = lazyPage(() => import("@/pages/PurifyPage"));
 const SettingsPage = lazyPage(() => import("@/pages/SettingsPage"));
 const MePage = lazyPage(() => import("@/pages/MePage"));
+const UsersPage = lazyPage(() => import("@/pages/UsersPage"));
 const ReaderPage = lazyPage(() => import("@/pages/ReaderPage"));
 
 export default function App() {
@@ -57,6 +58,8 @@ export default function App() {
           <Route path="/purify" element={<PurifyPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/me" element={<MePage />} />
+          {/* 用户管理: 入口仅管理员可见(侧栏), 页面内亦有角色兜底 */}
+          <Route path="/users" element={<UsersPage />} />
         </Route>
         {/* 阅读器沉浸式全屏, 不进 AppShell, 单独受保护 */}
         <Route

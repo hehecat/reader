@@ -22,6 +22,9 @@ pub struct User {
     /// 管理员（secure 模式下可修改 default 系统配置；首个注册用户自动成为管理员）
     #[serde(default)]
     pub is_admin: bool,
+    /// 账号停用：登录与既有 token 一律拒绝（管理员可在用户管理页启停）
+    #[serde(default)]
+    pub disabled: bool,
     pub last_login_at: i64,
     pub created_at: i64,
     #[serde(skip)]

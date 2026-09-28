@@ -7,6 +7,7 @@ import {
   Settings2,
   Sparkles,
   UserRound,
+  UsersRound,
   type LucideIcon,
 } from "lucide-react";
 
@@ -37,6 +38,9 @@ export const NAV_ITEMS: NavItem[] = [
 /** 分隔线之后的独立导航项 */
 export const SETTINGS_NAV_ITEM: NavItem = { to: "/settings", label: "设置", icon: Settings2 };
 
+/** 仅管理员可见的导航项(用户管理) */
+export const ADMIN_NAV_ITEM: NavItem = { to: "/users", label: "用户", icon: UsersRound };
+
 export interface RouteMeta {
   /** 顶栏第一行小标 */
   kicker: string;
@@ -54,6 +58,7 @@ export const ROUTE_META: Record<string, RouteMeta> = {
   "/purify": { kicker: "偏好与数据", title: "正文净化" },
   "/settings": { kicker: "偏好与数据", title: "设置" },
   "/me": { kicker: "我的数据", title: "我的" },
+  "/users": { kicker: "服务器管理", title: "用户管理" },
 };
 
 const FALLBACK_META: RouteMeta = { kicker: "我的阅读空间", title: "阅读" };

@@ -64,6 +64,7 @@ export default function SettingsPage() {
     staleTime: Infinity,
   });
   const systemInfo = systemQuery.data;
+  const mode = systemInfo?.mode ?? (systemInfo?.secure === false ? "single" : "multi");
   const uptime = systemInfo?.uptimeSeconds;
   const memory = systemInfo?.memory;
 
@@ -95,6 +96,10 @@ export default function SettingsPage() {
           <WebdavPanel />
           <SettingCard title="关于" desc="砚台 · 安静地陪你读完每一本">
             <SettingRow label="前端" value={`砚台 React 阅读器 · v${appVersion}`} />
+            <SettingRow
+              label="运行模式"
+              value={mode === "single" ? "单用户(无需登录)" : "多用户(需登录)"}
+            />
             <SettingRow label="后端" value="warp Rust 后端" />
             {uptime !== undefined ? (
               <SettingRow label="运行时长" value={formatUptime(uptime)} />

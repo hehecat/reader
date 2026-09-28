@@ -25,6 +25,15 @@ export const userInfoSchema = z.object({
 export const systemInfoSchema = z.object({
   version: z.string().optional(),
   timestamp: z.number().optional(),
+  /** 多用户模式(需登录); 单用户模式为 false —— 前端据此跳过登录页 */
+  secure: z.boolean().optional(),
+  /** 运行模式: single(单用户) | multi(多用户) */
+  mode: z.enum(["single", "multi"]).optional(),
+  /** 当前请求者是否管理员(未登录=false; 内存/CPU 等运维字段仅管理员可见) */
+  isAdmin: z.boolean().optional(),
+  /** 注册是否需要邀请码 */
+  inviteRequired: z.boolean().optional(),
+  userLimit: z.number().optional(),
   /** 服务已运行秒数 */
   uptimeSeconds: z.number().optional(),
   memory: z
