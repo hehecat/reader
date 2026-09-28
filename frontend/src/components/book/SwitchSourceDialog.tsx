@@ -11,13 +11,16 @@ import {
 } from "@/components/ui";
 import { toast } from "@/components/ui/Toast";
 import { BOOKS_QUERY_KEY, errorMessage } from "@/hooks/useBookshelf";
+import { matchChapter } from "@/lib/chapter-match";
 import { humanizeError } from "@/lib/errors";
 import { getBookContent, getChapterList } from "@/services/book";
 import { getAvailableBookSource, setBookSource, type AvailableBookSource } from "@/services/explore";
 import type { Book } from "@/types/api";
 
-/** 单个候选源的本章比对结果 */
-type ChapterProbe = { title: string; words: number } | { missing: string };
+/** 单个候选源的本章比对结果; kind = 对齐方式(number 章号 / title 标题 / index 位置兜底) */
+type ChapterProbe =
+  | { kind: "number" | "title" | "index"; title: string; words: number }
+  | { missing: string };
 
 export interface SwitchSourceDialogProps {
   /** 目标书(需已在书架, 候选接口只查书架书); null 时保持关闭 */
@@ -32,7 +35,7 @@ export interface SwitchSourceDialogProps {
   addingToShelf?: boolean;
   /** 当前章节索引(阅读器场景): 启用「比对各源本章」——看各源同一章是否缺章/字数是否异常 */
   chapterIndex?: number;
-  /** 当前章节名(仅用于提示文案) */
+  /** 当前章节名: 比对时用于按章号/标题对齐各源目录(不传则退化为按位置) */
   chapterTitle?: string;
   /** 换源成功(已拿到新书)后回调: 阅读器用它重载, 书架详情用它关闭自身 */
   onSwitched?: (candidate: AvailableBookSource) => void;
@@ -104,8 +107,8 @@ export function SwitchSourceDialog({
   });
 
   /**
-   * 逐源比对当前章: 拉候选源目录 → 取同序章节 → 拉该章正文统计字数.
-   * 并发 3(两个请求/源, 控制对源站压力), 再次点击可中止.
+   * 逐源比对当前章: 拉候选源目录 → **按章号/标题对齐**(跳过上架感言/卷等干扰项) →
+   * 拉该章正文统计字数. 并发 3(两个请求/源, 控制对源站压力), 再次点击可中止.
    */
   const probeChapters = React.useCallback(async () => {
     const list = candidates.data ?? [];
@@ -134,14 +137,16 @@ export function SwitchSourceDialog({
         }
         try {
           const toc = await getChapterList(candidate.bookUrl);
-          const target = toc[chapterIndex];
-          if (target === undefined) {
+          const match = matchChapter(chapterTitle ?? "", chapterIndex, toc);
+          if (match.chapter === undefined) {
             results[candidate.bookUrl] = { missing: "缺少本章" };
           } else {
-            const content = await getBookContent(target.url, chapterIndex, {
+            const target = match.chapter;
+            const content = await getBookContent(target.url, target.index, {
               bookSourceUrl: candidate.origin,
             });
             results[candidate.bookUrl] = {
+              kind: match.kind,
               title: target.title,
               words: content.content.replace(/\s+/g, "").length,
             };
@@ -157,7 +162,7 @@ export function SwitchSourceDialog({
     await Promise.all(Array.from({ length: Math.min(3, list.length) }, worker));
     probeAbort.current = false;
     setProbeProgress(null);
-  }, [candidates.data, chapterIndex, probeProgress]);
+  }, [candidates.data, chapterIndex, chapterTitle, probeProgress]);
 
   if (book === null) {
     return <Dialog open={false} onOpenChange={onOpenChange} />;
@@ -178,6 +183,11 @@ export function SwitchSourceDialog({
     }
     return (
       <>
+        {probe.kind === "index" ? (
+          <span className="mr-1 text-warn" title="该源目录无同章号/同名章节, 取同位置(可能错位)">
+            按位置
+          </span>
+        ) : null}
         {probe.title}
         <span className="ml-1 text-foreground/50">· {probe.words} 字</span>
       </>
@@ -203,7 +213,7 @@ export function SwitchSourceDialog({
                 ? `比对中 ${probeProgress.done}/${probeProgress.total}(点击中止)`
                 : probed > 0
                   ? `已比对 ${probed} 个源 · 字数异常或显示"缺少本章"的源不建议换`
-                  : "比对各源同一章: 缺章 / 字数异常(含乱码防盗)一眼可见 · 字数=去空白字符数"}
+                  : "按章号/标题对齐(自动跳过上架感言·卷), 字数=去空白字符数; 标注「按位置」的源可能错位"}
             </span>
             <Button
               size="sm"
