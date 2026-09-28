@@ -1,6 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { BookMarked, BookOpen, ImagePlus, Play, Trash2 } from "lucide-react";
+import { ArrowLeftRight, BookMarked, BookOpen, ImagePlus, Play, Trash2 } from "lucide-react";
 import * as React from "react";
+
+import { SwitchSourceDialog } from "@/components/book/SwitchSourceDialog";
 
 import {
   Badge,
@@ -57,6 +59,7 @@ export function BookInfoDialog({
 }: BookInfoDialogProps) {
   const queryClient = useQueryClient();
   const [coverEdit, setCoverEdit] = React.useState(false);
+  const [switchOpen, setSwitchOpen] = React.useState(false);
   const [coverDraft, setCoverDraft] = React.useState("");
   const saveCover = useMutation({
     mutationFn: (url: string) =>
@@ -164,6 +167,12 @@ export function BookInfoDialog({
               换封面
             </Button>
           )}
+          {book.origin === LOCAL_ORIGIN ? null : (
+            <Button size="sm" variant="secondary" onClick={() => setSwitchOpen(true)}>
+              <ArrowLeftRight aria-hidden />
+              换源
+            </Button>
+          )}
         </div>
 
         <div className="mt-4 px-4 md:px-5">
@@ -195,6 +204,13 @@ export function BookInfoDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
+      {/* 换源后面板里的 bookUrl 已失效, 关闭详情由书架列表反映新源 */}
+      <SwitchSourceDialog
+        book={book}
+        open={switchOpen}
+        onOpenChange={setSwitchOpen}
+        onSwitched={() => onOpenChange(false)}
+      />
     </Dialog>
   );
 }

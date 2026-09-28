@@ -5905,13 +5905,15 @@ async fn get_available_book_source(
     }
     let key = format!("{}_{}", book.name.trim(), book.author.trim());
 
-    // 持久化候选：非刷新模式直接返回
+    // 持久化候选：非刷新模式**只读缓存**
+    // （旧实现「无缓存即全量并发搜索」= 首次换源必挂数分钟：177 源 × 慢源；
+    //   现语义与接口注释一致：空候选立即返回，由前端提供「用全部书源重新搜索」）
     let cached = state
         .storage
         .get_book_candidates(&namespace, &key)
         .await
         .unwrap_or_default();
-    if !cached.is_empty() && refresh <= 0 {
+    if refresh <= 0 {
         return Json(ReturnData::ok(
             serde_json::to_value(cached).unwrap_or(serde_json::Value::Null),
         ));
@@ -5953,10 +5955,38 @@ async fn get_available_book_source(
                 .unwrap_or_default()
         }));
     }
+    // 全量搜索预算：单源 15s 超时挡不住"若干慢源叠加"，超预算即用已收集结果收口
+    // （模式与 search_book_multi 一致：select_all 逐个收，deadline 到点即停）
+    const EARLY_HITS: usize = 60;
+    let budget = std::time::Duration::from_secs(
+        std::env::var("READER_SWITCH_SEARCH_BUDGET_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(60),
+    );
+    let deadline = tokio::time::Instant::now() + budget;
+    let mut rest = handles;
     let mut all: Vec<crate::service::search::SearchBook> = Vec::new();
-    for h in handles {
-        if let Ok(books) = h.await {
-            all.extend(books);
+    loop {
+        if rest.is_empty() || all.len() >= EARLY_HITS {
+            break;
+        }
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() {
+            tracing::warn!("换源全量搜索超预算 {}s，返回已收集", budget.as_secs());
+            break;
+        }
+        match tokio::time::timeout(left, futures::future::select_all(rest)).await {
+            Ok((joined, _idx, remaining)) => {
+                rest = remaining;
+                if let Ok(books) = joined {
+                    all.extend(books);
+                }
+            }
+            Err(_) => {
+                tracing::warn!("换源全量搜索超预算 {}s，返回已收集", budget.as_secs());
+                break;
+            }
         }
     }
     let mut seen = std::collections::HashSet::new();

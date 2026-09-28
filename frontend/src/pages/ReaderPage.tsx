@@ -19,17 +19,8 @@ import { SettingsPanel } from "@/components/reader/SettingsPanel";
 import { TocDrawer } from "@/components/reader/TocDrawer";
 import { TtsBar } from "@/components/reader/TtsBar";
 import { useShelfToggle } from "@/components/reader/useShelfToggle";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Button,
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  EmptyState,
-  cn,
-  toast,
-} from "@/components/ui";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Button, EmptyState, cn, toast } from "@/components/ui";
 import { useBookData } from "@/hooks/useBookData";
 import { useChapterContent } from "@/hooks/useChapterContent";
 import { useReaderProgress } from "@/hooks/useReaderProgress";
@@ -39,7 +30,7 @@ import { useTts } from "@/hooks/useTts";
 import { humanizeError } from "@/lib/errors";
 import { BOOKS_QUERY_KEY, errorMessage } from "@/hooks/useBookshelf";
 import { saveBook } from "@/services/bookshelf";
-import { getAvailableBookSource, setBookSource, type AvailableBookSource } from "@/services/explore";
+import { SwitchSourceDialog } from "@/components/book/SwitchSourceDialog";
 import { createBookmark, type Bookmark } from "@/services/bookmarks";
 import {
   NO_ANNOTATIONS,
@@ -126,14 +117,9 @@ export default function ReaderPage() {
   });
   const { stepChapter, goToChapter } = progress;
 
-  // 空正文救出口: 候选源列表 → setBookSource → 失效重载
+  // 换源: 面板见 SwitchSourceDialog(与书架详情共用); 未入架时需先入架才能查候选
   const queryClient = useQueryClient();
   const [switchOpen, setSwitchOpen] = React.useState(false);
-  const switchCandidates = useQuery({
-    queryKey: ["switchCandidates", bookUrl],
-    queryFn: () => getAvailableBookSource(bookUrl),
-    enabled: switchOpen && bookUrl !== "",
-  });
   /** 刚点过「加入书架」: 后端读缓存数秒, 书架列表不会立刻反映, 面板分支用它兜底 */
   const [justAdded, setJustAdded] = React.useState(false);
   /** 未入架书换源前置: 用户显式点击才入架 (候选接口只查书架书) */
@@ -142,25 +128,9 @@ export default function ReaderPage() {
     onSuccess: () => {
       setJustAdded(true);
       void queryClient.invalidateQueries({ queryKey: BOOKS_QUERY_KEY });
-      void queryClient.invalidateQueries({ queryKey: ["switchCandidates", bookUrl] });
     },
     onError: (error) => {
       toast.error(humanizeError(errorMessage(error, "加入书架失败")));
-    },
-  });
-
-  const applySwitch = useMutation({
-    mutationFn: (candidate: AvailableBookSource) =>
-      setBookSource({ bookUrl, newBookUrl: candidate.bookUrl, bookSourceUrl: candidate.origin }),
-    onSuccess: () => {
-      setSwitchOpen(false);
-      toast.success("已换源, 正在重新加载");
-      void queryClient.invalidateQueries({ queryKey: ["bookInfo", bookUrl] });
-      void queryClient.invalidateQueries({ queryKey: ["chapters", bookUrl] });
-      void queryClient.invalidateQueries({ queryKey: ["content", bookUrl] });
-    },
-    onError: (error) => {
-      toast.error(humanizeError(errorMessage(error, "换源失败")));
     },
   });
 
@@ -636,53 +606,21 @@ export default function ReaderPage() {
       />
       <SettingsPanel />
 
-      <Dialog open={switchOpen} onOpenChange={setSwitchOpen}>
-        <DialogContent width="sm">
-          <DialogHeader>
-            <DialogTitle>切换书源</DialogTitle>
-          </DialogHeader>
-          <div className="max-h-80 overflow-y-auto px-4 md:px-5">
-            {!inShelf && !justAdded ? (
-              <div className="flex flex-col items-center gap-3 py-6 text-center text-sm text-muted-foreground">
-                <p>未入架的书换源需要先加入书架 (用于保存进度与同步)</p>
-                <Button
-                  size="sm"
-                  loading={addForSwitch.isPending}
-                  disabled={book === undefined}
-                  onClick={() => {
-                    if (book !== undefined) {
-                      addForSwitch.mutate(book);
-                    }
-                  }}
-                >
-                  加入书架并继续换源
-                </Button>
-              </div>
-            ) : switchCandidates.isLoading ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">正在获取候选书源…</p>
-            ) : (switchCandidates.data ?? []).length === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">暂无其他可用书源</p>
-            ) : (
-              <div className="divide-y divide-border/70">
-                {(switchCandidates.data ?? []).map((candidate) => (
-                  <button
-                    key={candidate.bookUrl}
-                    type="button"
-                    disabled={applySwitch.isPending}
-                    onClick={() => applySwitch.mutate(candidate)}
-                    className="flex w-full cursor-pointer items-center justify-between gap-3 py-3 text-left text-sm hover:text-accent disabled:opacity-50"
-                  >
-                    <span className="min-w-0 truncate">{candidate.originName || candidate.origin}</span>
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      {candidate.latestChapterTitle ?? ""}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+      <SwitchSourceDialog
+        book={book ?? null}
+        open={switchOpen}
+        onOpenChange={setSwitchOpen}
+        inShelf={inShelf || justAdded}
+        addingToShelf={addForSwitch.isPending}
+        onAddToShelf={
+          book === undefined
+            ? undefined
+            : () => {
+                addForSwitch.mutate(book);
+              }
+        }
+        onSwitched={() => toast.success("已换源, 正在重新加载")}
+      />
     </ReaderFrame>
   );
 }
