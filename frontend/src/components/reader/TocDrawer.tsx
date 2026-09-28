@@ -1,3 +1,4 @@
+import { ArrowLeftRight } from "lucide-react";
 import * as React from "react";
 import { useSearchParams } from "react-router-dom";
 import { Virtuoso } from "react-virtuoso";
@@ -41,6 +42,8 @@ export interface TocDrawerProps {
   onToggleReversed: () => void;
   /** 点击章节: 切章并关闭抽屉 */
   onSelect: (index: number) => void;
+  /** 打开换源面板(本地书不传): 本章出问题时从目录直接换源 */
+  onSwitchSource?: () => void;
 }
 
 /** 目录抽屉: 左侧滑出 (书名 + 作者抬头), 虚拟列表承载数千章节, 当前章节高亮, 支持倒序 */
@@ -54,6 +57,7 @@ export function TocDrawer({
   reversed,
   onToggleReversed,
   onSelect,
+  onSwitchSource,
 }: TocDrawerProps) {
   const ordered = React.useMemo(
     () => (reversed ? [...chapters].reverse() : chapters),
@@ -231,7 +235,14 @@ export function TocDrawer({
           />
         </DrawerBody>
         <DrawerFooter className="justify-between">
-          <span className="text-sm text-muted-foreground">倒序目录</span>
+          {onSwitchSource !== undefined && !isLocal ? (
+            <Button size="sm" variant="ghost" onClick={onSwitchSource} aria-label="换源">
+              <ArrowLeftRight aria-hidden />
+              换源
+            </Button>
+          ) : (
+            <span className="text-sm text-muted-foreground">倒序目录</span>
+          )}
           <Switch checked={reversed} onCheckedChange={onToggleReversed} aria-label="倒序目录" />
         </DrawerFooter>
       </DrawerContent>

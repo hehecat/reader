@@ -554,6 +554,10 @@ export default function ReaderPage() {
         bookAuthor={book.author}
         chapters={chapters}
         currentIndex={progress.index}
+        onSwitchSource={() => {
+          toc.setTocOpen(false);
+          setSwitchOpen(true);
+        }}
         reversed={toc.reversed}
         onToggleReversed={toc.toggleReversed}
         onSelect={toc.selectChapter}
@@ -610,6 +614,8 @@ export default function ReaderPage() {
         book={book ?? null}
         open={switchOpen}
         onOpenChange={setSwitchOpen}
+        chapterIndex={progress.index}
+        chapterTitle={chapters[progress.index]?.title}
         inShelf={inShelf || justAdded}
         addingToShelf={addForSwitch.isPending}
         onAddToShelf={
