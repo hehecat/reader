@@ -20,6 +20,9 @@ pub struct AppConfig {
     pub work_dir: String,
     /// 服务端口
     pub port: u16,
+    /// 运行模式（READER_APP_MODE）："single" 单用户免登录 / "multi" 多用户需登录。
+    /// 缺省由 READER_APP_SECURE 推导；显式 single 时强制关闭 secure（两者语义一致）。
+    pub mode: String,
     /// 是否启用登录鉴权（多用户）
     pub secure: bool,
     /// 管理密码
@@ -61,7 +64,28 @@ impl AppConfig {
             work_dir,
             port,
             cache_chapter_content: env_flag_default("READER_APP_CACHECHAPTERCONTENT", true),
-            secure: env_flag("READER_APP_SECURE"),
+            mode: {
+                let explicit = std::env::var("READER_APP_MODE")
+                    .ok()
+                    .map(|v| v.trim().to_ascii_lowercase())
+                    .filter(|v| v == "single" || v == "multi");
+                explicit.unwrap_or_else(|| {
+                    if env_flag("READER_APP_SECURE") {
+                        "multi".into()
+                    } else {
+                        "single".into()
+                    }
+                })
+            },
+            // mode=single → 强制免登录：前端跳过登录页与注册入口, 后端不校验登录
+            secure: if std::env::var("READER_APP_MODE")
+                .map(|v| v.trim().eq_ignore_ascii_case("single"))
+                .unwrap_or(false)
+            {
+                false
+            } else {
+                env_flag("READER_APP_SECURE")
+            },
             secure_key: std::env::var("READER_APP_SECUREKEY").unwrap_or_default(),
             user_limit: env_i64("READER_APP_USERLIMIT", 500_000),
             user_book_limit: env_i64("READER_APP_USERBOOKLIMIT", 500_000),

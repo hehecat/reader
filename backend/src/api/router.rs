@@ -10668,13 +10668,8 @@ async fn get_system_info(
             resolve_current_user(&state, &params, &headers).await,
             Ok(u) if u.is_admin
         );
-    // 运行模式: 显式 READER_APP_MODE(single|multi) 优先, 缺省由 secure 推导
-    // —— secure 同时承担"是否要登录"与"是否多用户", 语义混杂, 这里给出显式口径
-    let mode = std::env::var("READER_APP_MODE")
-        .ok()
-        .map(|v| v.trim().to_ascii_lowercase())
-        .filter(|v| v == "single" || v == "multi")
-        .unwrap_or_else(|| if config.secure { "multi".into() } else { "single".into() });
+    // 运行模式（配置层已归一：mode=single 时 secure 强制 false）
+    let mode = config.mode.clone();
     if !is_admin {
         return Json(ReturnData::ok(json!({
             "secure": config.secure,

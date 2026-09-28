@@ -5,7 +5,9 @@ import { getSystemInfo } from "@/services/auth";
 export interface AppModeInfo {
   /** 首次请求尚未返回 */
   loading: boolean;
-  /** 多用户模式(需登录); false = 单用户模式, 直接进入应用 */
+  /** 单用户模式(免登录): 后端不校验登录, 前端跳过登录页与注册入口 */
+  singleUser: boolean;
+  /** 多用户模式(需登录) */
   secure: boolean;
   /** 当前请求者是否管理员(未登录时为 false) */
   isAdmin: boolean;
@@ -36,8 +38,10 @@ export function useAppMode(): AppModeInfo {
   const data = query.data;
   // 响应缺失(离线/后端老版本) → 按多用户处理(保守: 要求登录), 除非本地已有 token
   const secure = data?.secure ?? true;
+  const singleUser = data?.mode === "single" || data?.secure === false;
   return {
     loading: query.isLoading && !hasToken(),
+    singleUser,
     secure,
     isAdmin: data?.isAdmin ?? false,
     inviteRequired: data?.inviteRequired ?? false,

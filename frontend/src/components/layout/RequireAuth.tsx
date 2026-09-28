@@ -15,12 +15,12 @@ interface RouteGuardProps {
  */
 export function RequireAuth({ children }: RouteGuardProps): ReactElement {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-  const { secure, loading } = useAppMode();
+  const { singleUser, loading } = useAppMode();
   const location = useLocation();
   if (loading) {
     return <div className="min-h-dvh" />;
   }
-  if (!secure) {
+  if (singleUser) {
     return children;
   }
   if (!isAuthenticated) {
@@ -32,10 +32,10 @@ export function RequireAuth({ children }: RouteGuardProps): ReactElement {
 /** 访客专属守卫: 已登录用户访问 /login → 回到 redirect 目标或 "/" */
 export function GuestOnly({ children }: RouteGuardProps): ReactElement {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-  const { secure, loading } = useAppMode();
+  const { singleUser, loading } = useAppMode();
   const location = useLocation();
   // 单用户模式没有登录概念: 直接进应用
-  if (!loading && !secure) {
+  if (!loading && singleUser) {
     return <Navigate to={resolveRedirect(new URLSearchParams(location.search).get("redirect"))} replace />;
   }
   if (isAuthenticated) {
