@@ -2729,13 +2729,29 @@ impl Storage {
     /// 清理某本书的目录缓存（缓存键可能是 book_url，也可能是解析出的 toc_url）。
     /// 用途：书架刷新拿到新章数后失效旧快照，避免"书架 438 章 / 阅读器只有 436 章"长期打架。
     pub async fn clear_toc_cache_for_book(&self, ns: &str, book_url: &str) -> Result<u64> {
-        let r = sqlx::query(
-            "DELETE FROM toc_cache WHERE user_namespace = ?1 AND (book_url = ?2 OR toc_url = ?2)",
-        )
-        .bind(ns)
-        .bind(book_url)
-        .execute(&self.pool)
-        .await?;
+        // 缓存键常是目录端点（`/toc/<id>`）而书是详情页（`/book/<id>`）——单靠等值匹配会漏，
+        // 故再用 URL 末段 id 兜底（`%/ <id>` 形式，避免误伤同前缀的其它书）。
+        let tail = book_url.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+        let r = if tail.is_empty() {
+            sqlx::query(
+                "DELETE FROM toc_cache WHERE user_namespace = ?1 AND (book_url = ?2 OR toc_url = ?2)",
+            )
+            .bind(ns)
+            .bind(book_url)
+            .execute(&self.pool)
+            .await?
+        } else {
+            let pattern = format!("%/{tail}");
+            sqlx::query(
+                "DELETE FROM toc_cache WHERE user_namespace = ?1 \
+                 AND (book_url = ?2 OR toc_url = ?2 OR book_url LIKE ?3 OR toc_url LIKE ?3)",
+            )
+            .bind(ns)
+            .bind(book_url)
+            .bind(&pattern)
+            .execute(&self.pool)
+            .await?
+        };
         Ok(r.rows_affected())
     }
 
