@@ -344,13 +344,13 @@ export function TocDrawer({
             </div>
           )}
           <TocSearchField value={query} onChange={setQuery} />
+          {totalChapterNum !== undefined && totalChapterNum > chapters.length ? (
+            <p className="mt-2 rounded-lg border border-accent/30 bg-surface px-2.5 py-1.5 text-xs text-accent">
+              目录只有 {chapters.length} 章, 但书架记录 {totalChapterNum} 章 —— 可能抓取不完整或缓存陈旧,
+              可点下方「刷新目录」重取。
+            </p>
+          ) : null}
         </DrawerHeader>
-        {totalChapterNum !== undefined && totalChapterNum > chapters.length ? (
-          <p className="mx-3 mb-1 rounded-lg bg-accent/10 px-2.5 py-1.5 text-xs text-accent">
-            目录只有 {chapters.length} 章, 但书架记录 {totalChapterNum} 章 —— 可能抓取不完整或缓存陈旧,
-            可点下方「刷新目录」重取。
-          </p>
-        ) : null}
         <DrawerBody className="overflow-hidden p-2">
           {query.trim() === "" ? (
             <Virtuoso
