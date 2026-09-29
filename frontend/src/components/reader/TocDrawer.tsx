@@ -72,7 +72,9 @@ const TocSearchField = React.memo(function TocSearchField({
         placeholder="搜索章节名 / 正文"
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="pl-8"
+        // 独立合成层: 目录列表滚动/重绘时不重画输入框(否则 placeholder 文字会闪);
+        // 过渡只留颜色类属性, 避免尺寸/布局过渡引发重排
+        className="pl-8 [transform:translateZ(0)] [will-change:transform] [transition-property:border-color,box-shadow,background-color]"
       />
     </div>
   );
@@ -311,7 +313,7 @@ export function TocDrawer({
   return (
     <Drawer side="left" open={open} onOpenChange={onOpenChange}>
       <DrawerContent className="w-80 max-w-[85vw]">
-        <DrawerHeader className="relative z-10 bg-surface p-5">
+        <DrawerHeader className="relative z-10 bg-surface p-5 [transform:translateZ(0)] [contain:paint]">
           <DrawerTitle className="font-display text-lg leading-tight font-semibold">
             {bookName}
           </DrawerTitle>
