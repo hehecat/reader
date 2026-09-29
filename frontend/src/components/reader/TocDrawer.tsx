@@ -50,6 +50,34 @@ function highlight(text: string, query: string): React.ReactNode {
   );
 }
 
+/**
+ * 书内搜索输入框(模块级 memo): 抽屉内还有缓存进度流、目录刷新等高频 state,
+ * 父级重渲染时若连带重建输入框, PC 上会看到文字/光标闪动 —— 这里 props 不变即不重渲染。
+ */
+const TocSearchField = React.memo(function TocSearchField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  return (
+    <div className="relative mt-3">
+      <Search
+        aria-hidden
+        className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+      />
+      <Input
+        aria-label="书内搜索"
+        placeholder="搜索章节名 / 正文"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="pl-8"
+      />
+    </div>
+  );
+});
+
 export interface TocDrawerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -315,19 +343,7 @@ export function TocDrawer({
               )}
             </div>
           )}
-          <div className="relative mt-3">
-            <Search
-              aria-hidden
-              className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-            />
-            <Input
-              aria-label="书内搜索"
-              placeholder="搜索章节名 / 正文"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              className="pl-8"
-            />
-          </div>
+          <TocSearchField value={query} onChange={setQuery} />
         </DrawerHeader>
         {totalChapterNum !== undefined && totalChapterNum > chapters.length ? (
           <p className="mx-3 mb-1 rounded-lg bg-accent/10 px-2.5 py-1.5 text-xs text-accent">
