@@ -117,6 +117,47 @@ export default function ReaderPage() {
   });
   const { stepChapter, goToChapter } = progress;
 
+  /**
+   * 多端进度提示: 回到前台/窗口获得焦点时重取服务端进度, 若明显更靠后则提示跳转
+   * (PC 读到 220 而手机停在第 100 章时, 手机上给一条「其他设备读到第 220 章」)。
+   * 只提示"服务端更靠后"的情况; 已忽略过的位置不再重复打扰。
+   */
+  const [remoteHint, setRemoteHint] = React.useState<{ index: number; title: string } | null>(null);
+  const dismissedRemote = React.useRef<number | null>(null);
+  const progressIndexRef = React.useRef(progress.index);
+  React.useEffect(() => {
+    progressIndexRef.current = progress.index;
+  }, [progress.index]);
+  React.useEffect(() => {
+    const check = async (): Promise<void> => {
+      if (document.visibilityState !== "visible" || bookUrl === "") {
+        return;
+      }
+      const result = await bookQuery.refetch();
+      const remoteIndex = result.data?.durChapterIndex;
+      if (remoteIndex === undefined) {
+        return;
+      }
+      if (remoteIndex > progressIndexRef.current + 1 && dismissedRemote.current !== remoteIndex) {
+        setRemoteHint({
+          index: remoteIndex,
+          title: result.data?.durChapterTitle ?? "",
+        });
+      }
+    };
+    const onVisible = (): void => {
+      if (document.visibilityState === "visible") {
+        void check();
+      }
+    };
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [bookQuery, bookUrl]);
+
   // 换源: 面板见 SwitchSourceDialog(与书架详情共用); 未入架时需先入架才能查候选
   const queryClient = useQueryClient();
   const [switchOpen, setSwitchOpen] = React.useState(false);
@@ -479,6 +520,36 @@ export default function ReaderPage() {
 
   return (
     <ReaderFrame immersive={immersive}>
+      {remoteHint !== null ? (
+        <div className="fixed left-1/2 top-3 z-50 -translate-x-1/2">
+          <div className="flex items-center gap-3 rounded-full border border-border bg-surface/95 px-3 py-1.5 text-xs shadow-lg backdrop-blur-sm">
+            <span className="text-muted-foreground">其他设备读到</span>
+            <span className="max-w-40 truncate">
+              {remoteHint.title || `第 ${remoteHint.index + 1} 章`}
+            </span>
+            <button
+              type="button"
+              className="cursor-pointer font-medium text-accent"
+              onClick={() => {
+                goToChapter(remoteHint.index);
+                setRemoteHint(null);
+              }}
+            >
+              跳转
+            </button>
+            <button
+              type="button"
+              className="cursor-pointer text-muted-foreground"
+              onClick={() => {
+                dismissedRemote.current = remoteHint.index;
+                setRemoteHint(null);
+              }}
+            >
+              忽略
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div className="flex h-full flex-col">
         <ReaderTopBar
           bookName={book.name}

@@ -69,9 +69,11 @@ export function useBookData(bookUrl: string, sourceHint?: string): UseBookDataRe
     },
     enabled: ready,
     // 书架书: 书架记录即完整 Book; 其余书: 24h 客户端详情缓存. 两者都作初始数据秒渲染,
-    // 详情后台静默刷新写回缓存; staleTime 内返回/重进不重复往返
+    // 随后必然向服务端取一次(含跨设备的最新阅读进度) —— 多端场景: 本端 5 分钟缓存内进书
+    // 会拿到旧进度, 继续读会把新进度覆盖, 故这里不做 staleTime 复用。
     initialData: shelfBook ?? getBookInfoCache(bookUrl),
-    staleTime: 5 * 60_000,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
   const chaptersQuery = useQuery({
