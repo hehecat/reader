@@ -10660,25 +10660,28 @@ async fn get_system_info(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
-) -> Json<ReturnData> {
+) -> Response {
     let config = &state.storage.config;
-    // 普通用户只看与自身相关的开关: 内存/CPU/请求计数/在线会话/端口属运维信息, 仅管理员可见
-    let is_admin = !config.secure
-        || matches!(
-            resolve_current_user(&state, &params, &headers).await,
-            Ok(u) if u.is_admin
-        );
     // 运行模式（配置层已归一：mode=single 时 secure 强制 false）
     let mode = config.mode.clone();
+    let current_user = resolve_current_user(&state, &params, &headers).await.ok();
+    // 已登录: 顺手下发数据文件访问 Cookie（/epub、/book-assets 的 img/iframe 带不了自定义头）
+    let cookie = system_info_cookie(&state, current_user.as_ref());
+    // 普通用户只看与自身相关的开关: 内存/CPU/请求计数/在线会话/端口属运维信息, 仅管理员可见
+    let is_admin = !config.secure
+        || current_user.as_ref().map(|u| u.is_admin).unwrap_or(false);
     if !is_admin {
-        return Json(ReturnData::ok(json!({
+        return system_info_response(
+            json!({
             "secure": config.secure,
             "mode": mode,
             "isAdmin": false,
             "version": env!("CARGO_PKG_VERSION"),
             "inviteRequired": !config.invite_code.is_empty(),
             "userLimit": config.user_limit,
-        })));
+        }),
+            cookie,
+        );
     }
     let user_count = state.storage.count_users().await.unwrap_or(0);
     let book_count = state.storage.count_books().await.unwrap_or(0);
@@ -10700,7 +10703,37 @@ async fn get_system_info(
     data["freeMemory"] = json!(format!("{}M", agg.memory.available_mb));
     data["totalMemory"] = json!(format!("{}M", agg.memory.total_mb));
     data["maxMemory"] = json!(format!("{}M", agg.memory.total_mb));
-    Json(ReturnData::ok(data))
+    system_info_response(data, cookie)
+}
+
+/// 已登录时下发数据文件访问 Cookie（值同 accessToken：`username:token`）。
+/// HttpOnly 防脚本读取; SameSite=Lax 允许同站静态请求携带且挡跨站提交。
+fn system_info_cookie(state: &AppState, user: Option<&crate::model::User>) -> Option<String> {
+    if !state.storage.config.secure {
+        return None; // 单用户模式无需 Cookie
+    }
+    let user = user?;
+    let ttl_secs = state.storage.config.token_ttl_days.max(0) * 86_400;
+    let max_age = if ttl_secs > 0 {
+        format!("; Max-Age={ttl_secs}")
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "reader_token={}:{}; Path=/; SameSite=Lax; HttpOnly{max_age}",
+        user.username, user.token
+    ))
+}
+
+/// /getSystemInfo 响应装配（可选附带 Set-Cookie）
+fn system_info_response(data: serde_json::Value, cookie: Option<String>) -> Response {
+    let mut resp = Json(ReturnData::ok(data)).into_response();
+    if let Some(value) = cookie {
+        if let Ok(hv) = axum::http::HeaderValue::from_str(&value) {
+            resp.headers_mut().insert(axum::http::header::SET_COOKIE, hv);
+        }
+    }
+    resp
 }
 
 /// GET /reader3/getServerStats：服务监控聚合
@@ -11798,6 +11831,47 @@ fn webdav_status_404() -> Response {
 /// 以 storage/data/ 为 Web 根服务 EPUB 解压后的图片/CSS/章节 HTML 等书籍资源；
 /// HTML（html/htm/xhtml）响应在 </body> 前注入
 /// `<script>window.__API_ROOT__="{base}"</script>`（legacy
+/// 取 Cookie 明文值（同名取首个）
+fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    let raw = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
+    raw.split(';').find_map(|part| {
+        let (k, v) = part.trim().split_once('=')?;
+        (k == name).then(|| v.to_string())
+    })
+}
+
+/// 数据文件（/epub/*、/book-assets/*）访问校验。
+/// 浏览器 img/iframe 发起的请求带不了自定义头, 故登录态由 Cookie（reader_token）承载；
+/// 多用户模式要求「已登录 + 路径命名空间属于自己」, 管理员可跨命名空间。
+async fn data_file_access_allowed(
+    state: &AppState,
+    headers: &HeaderMap,
+    rel: &std::path::Path,
+) -> bool {
+    if !state.storage.config.secure {
+        return true; // 单用户模式: 无登录概念
+    }
+    let Some(ns) = rel.iter().next().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    if ns == "default" {
+        return false; // 系统配置层不经静态路由暴露
+    }
+    let mut params = HashMap::new();
+    if let Some(token) = cookie_value(headers, "reader_token") {
+        params.insert("accessToken".to_string(), token);
+    }
+    match resolve_current_user(state, &params, headers).await {
+        Ok(user) => user.is_admin || user.username == ns,
+        Err(_) => false,
+    }
+}
+
+/// 静态数据文件未授权响应
+fn data_file_unauthorized() -> Response {
+    (axum::http::StatusCode::UNAUTHORIZED, "unauthorized").into_response()
+}
+
 /// BookConfig.injectJavascriptToEpubChapter 为磁盘改写注入，此处改为响应级注入，
 /// 不落盘、天然幂等）。文件不存在/目录/不安全路径 → 404。
 async fn serve_data_file(
@@ -11817,6 +11891,10 @@ async fn serve_data_file(
     };
     if !file_abs.starts_with(&root_abs) || !file_abs.is_file() {
         return webdav_status_404();
+    }
+    // 归属校验: 多用户模式下只允许读自己命名空间下的数据文件
+    if !data_file_access_allowed(state, headers, &rel).await {
+        return data_file_unauthorized();
     }
     let bytes = match tokio::fs::read(&file_abs).await {
         Ok(b) => b,
@@ -14449,12 +14527,22 @@ mod tests {
             .await
             .unwrap();
 
-        let ret = get_system_info(
+        // 返回 Response（含可选 Set-Cookie）: 读回 body 后仍按 Json<ReturnData> 断言
+        let resp = get_system_info(
             AxumState(state.clone()),
             Query(HashMap::new()),
             HeaderMap::new(),
         )
         .await;
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let ret = Json(ReturnData {
+            is_success: v["isSuccess"].as_bool().unwrap_or(false),
+            error_msg: v["errorMsg"].as_str().unwrap_or_default().to_string(),
+            data: v["data"].clone(),
+        });
         assert!(ret.0.is_success);
         assert_eq!(ret.0.data["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(ret.0.data["port"], 8080, "默认端口");
