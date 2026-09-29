@@ -1,4 +1,4 @@
-import { ArrowLeftRight, Search } from "lucide-react";
+import { ArrowLeftRight, RotateCw, Search } from "lucide-react";
 import * as React from "react";
 import { useSearchParams } from "react-router-dom";
 import { Virtuoso } from "react-virtuoso";
@@ -65,6 +65,10 @@ export interface TocDrawerProps {
   onSelect: (index: number) => void;
   /** 书架记录的章数: 大于目录长度时提示目录可能不完整(翻页残缺/缓存陈旧) */
   totalChapterNum?: number;
+  /** 重取目录(跳过服务端缓存); 传了才显示「刷新目录」按钮 */
+  onRefreshToc?: () => void;
+  /** 目录重取进行中 */
+  refreshingToc?: boolean;
   /** 打开换源面板(本地书不传): 本章出问题时从目录直接换源 */
   onSwitchSource?: () => void;
 }
@@ -82,6 +86,8 @@ export function TocDrawer({
   onSelect,
   onSwitchSource,
   totalChapterNum,
+  onRefreshToc,
+  refreshingToc = false,
 }: TocDrawerProps) {
   const ordered = React.useMemo(
     () => (reversed ? [...chapters].reverse() : chapters),
@@ -112,6 +118,27 @@ export function TocDrawer({
   const [hits, setHits] = React.useState<BookContentHit[]>([]);
   const [searching, setSearching] = React.useState(false);
   const [searchError, setSearchError] = React.useState<string | null>(null);
+
+  /** 书架章数多于目录长度 → 打开抽屉时自动重取一次目录(只一次, 避免反复请求) */
+  const autoRefreshed = React.useRef(false);
+  React.useEffect(() => {
+    if (open) {
+      autoRefreshed.current = false;
+    }
+  }, [open]);
+  React.useEffect(() => {
+    if (
+      open &&
+      !autoRefreshed.current &&
+      onRefreshToc !== undefined &&
+      totalChapterNum !== undefined &&
+      totalChapterNum > chapters.length &&
+      query.trim() === ""
+    ) {
+      autoRefreshed.current = true;
+      onRefreshToc();
+    }
+  }, [open, totalChapterNum, chapters.length, onRefreshToc, query]);
 
   /** 章节名命中(本地即时过滤) */
   const titleHits = React.useMemo(() => {
@@ -304,8 +331,8 @@ export function TocDrawer({
         </DrawerHeader>
         {totalChapterNum !== undefined && totalChapterNum > chapters.length ? (
           <p className="mx-3 mb-1 rounded-lg bg-accent/10 px-2.5 py-1.5 text-xs text-accent">
-            目录只有 {chapters.length} 章, 但书架记录 {totalChapterNum} 章 —— 可能翻页抓取不完整或缓存陈旧,
-            可点顶部「刷新目录」重取。
+            目录只有 {chapters.length} 章, 但书架记录 {totalChapterNum} 章 —— 可能抓取不完整或缓存陈旧,
+            可点下方「刷新目录」重取。
           </p>
         ) : null}
         <DrawerBody className="overflow-hidden p-2">
@@ -396,6 +423,18 @@ export function TocDrawer({
           )}
         </DrawerBody>
         <DrawerFooter className="justify-between">
+          {onRefreshToc !== undefined ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              loading={refreshingToc}
+              onClick={onRefreshToc}
+              aria-label="刷新目录"
+            >
+              <RotateCw aria-hidden />
+              刷新目录
+            </Button>
+          ) : null}
           {onSwitchSource !== undefined && !isLocal ? (
             <Button size="sm" variant="ghost" onClick={onSwitchSource} aria-label="换源">
               <ArrowLeftRight aria-hidden />

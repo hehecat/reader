@@ -2726,6 +2726,19 @@ impl Storage {
     }
 
     /// F-10 目录缓存读取（同 tocUrl 直读；超过 max_age_ms 视为未命中）——P0 按命名空间隔离
+    /// 清理某本书的目录缓存（缓存键可能是 book_url，也可能是解析出的 toc_url）。
+    /// 用途：书架刷新拿到新章数后失效旧快照，避免"书架 438 章 / 阅读器只有 436 章"长期打架。
+    pub async fn clear_toc_cache_for_book(&self, ns: &str, book_url: &str) -> Result<u64> {
+        let r = sqlx::query(
+            "DELETE FROM toc_cache WHERE user_namespace = ?1 AND (book_url = ?2 OR toc_url = ?2)",
+        )
+        .bind(ns)
+        .bind(book_url)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
     pub async fn get_toc_cache(
         &self,
         ns: &str,
@@ -5276,7 +5289,25 @@ pub async fn run_shelf_update(storage: &Storage) -> Result<usize> {
                     )
                     .await
                 {
-                    Ok(_) => updated += 1,
+                    Ok(_) => {
+                        updated += 1;
+                        // 章数有变化 → 旧目录缓存作废（阅读器下次重取，保持与书架一致）
+                        if total != book.total_chapter_num {
+                            match storage
+                                .clear_toc_cache_for_book(&book.user_namespace, &book.book_url)
+                                .await
+                            {
+                                Ok(n) if n > 0 => tracing::info!(
+                                    "章数变化({}→{})，失效目录缓存 {n} 条 [{}]",
+                                    book.total_chapter_num,
+                                    total,
+                                    book.book_url
+                                ),
+                                Ok(_) => {}
+                                Err(e) => tracing::warn!("失效目录缓存失败 [{}]: {e:#}", book.book_url),
+                            }
+                        }
+                    }
                     Err(e) => tracing::warn!("书架更新回写失败 [{}]: {e:#}", book.book_url),
                 }
             }

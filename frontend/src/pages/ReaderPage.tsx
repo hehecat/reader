@@ -555,6 +555,10 @@ export default function ReaderPage() {
         chapters={chapters}
         currentIndex={progress.index}
         totalChapterNum={book?.totalChapterNum}
+        refreshingToc={tocRefreshing}
+        onRefreshToc={() => {
+          void refreshChapters();
+        }}
         onSwitchSource={() => {
           toc.setTocOpen(false);
           setSwitchOpen(true);
