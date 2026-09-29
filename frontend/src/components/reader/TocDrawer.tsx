@@ -144,6 +144,22 @@ export function TocDrawer({
     return () => window.clearTimeout(timer);
   }, [query, bookUrl]);
 
+  /**
+   * 正文命中的目录序号: 书源书缓存以「章节 URL 的 hash」为键(md5),
+   * 不是目录序号, 因此按标题回查当前目录定位; 定位不到则提示目录可能已变化。
+   */
+  const resolveIndex = React.useCallback(
+    (hit: BookContentHit): number | null => {
+      const target = hit.title.trim();
+      if (target === "") {
+        return null;
+      }
+      const found = chapters.find((c) => c.title.trim() === target);
+      return found ? found.index : null;
+    },
+    [chapters],
+  );
+
   const [progress, setProgress] = React.useState<CacheProgress | null>(null);
   const [cancelling, setCancelling] = React.useState(false);
   const streamRef = React.useRef<(() => void) | null>(null);
@@ -347,11 +363,18 @@ export function TocDrawer({
                     <button
                       key={`content-${hit.chapterIndex}`}
                       type="button"
-                      onClick={() => onSelect(hit.chapterIndex)}
+                      onClick={() => {
+                        const index = resolveIndex(hit);
+                        if (index === null) {
+                          toast.info("未在目录中定位到该章节(目录可能已更新)");
+                          return;
+                        }
+                        onSelect(index);
+                      }}
                       className="flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-3 py-2 text-left hover:bg-surface-muted"
                     >
                       <span className="text-xs text-muted-foreground">
-                        {hit.title || `第 ${hit.chapterIndex + 1} 章`}
+                        {hit.title || "（无标题）"}
                       </span>
                       <span className="line-clamp-2 text-sm text-foreground/80">
                         {highlight(hit.snippet, query)}
