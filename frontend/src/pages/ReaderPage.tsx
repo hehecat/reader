@@ -640,7 +640,7 @@ export default function ReaderPage() {
         bookAuthor={book.author}
         chapters={chapters}
         currentIndex={progress.index}
-        totalChapterNum={book?.totalChapterNum}
+        totalChapterNum={shelfBook?.totalChapterNum ?? book?.totalChapterNum}
         refreshingToc={tocRefreshing}
         onRefreshToc={() => {
           void refreshChapters();
