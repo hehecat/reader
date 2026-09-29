@@ -72,9 +72,15 @@ const TocSearchField = React.memo(function TocSearchField({
         placeholder="搜索章节名 / 正文"
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        // 独立合成层: 目录列表滚动/重绘时不重画输入框(否则 placeholder 文字会闪);
-        // 过渡只留颜色类属性, 避免尺寸/布局过渡引发重排
-        className="pl-8 [transform:translateZ(0)] [will-change:transform] [transition-property:border-color,box-shadow,background-color]"
+        className="pl-8"
+        // 内联样式(优先级最高, 不被 Input 内置 transition 覆盖):
+        // 独立合成层 → 目录列表滚动/重绘时不重画输入框(否则 placeholder 文字会闪);
+        // 过渡只保留颜色类属性, 避免尺寸/布局过渡引发重排重绘
+        style={{
+          transform: "translateZ(0)",
+          willChange: "transform",
+          transitionProperty: "border-color, box-shadow, background-color",
+        }}
       />
     </div>
   );
