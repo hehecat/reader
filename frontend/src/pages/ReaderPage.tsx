@@ -537,7 +537,7 @@ export default function ReaderPage() {
     <ReaderFrame immersive={immersive}>
       {remoteHint !== null ? (
         <div className="fixed left-1/2 top-3 z-50 -translate-x-1/2">
-          <div className="flex items-center gap-3 rounded-full border border-border bg-surface/95 px-3 py-1.5 text-xs shadow-lg backdrop-blur-sm">
+          <div className="flex items-center gap-3 rounded-full border border-border bg-surface px-3 py-1.5 text-xs shadow-lg">
             <span className="text-muted-foreground">其他设备读到</span>
             <span className="max-w-40 truncate">
               {remoteHint.title || `第 ${remoteHint.index + 1} 章`}
