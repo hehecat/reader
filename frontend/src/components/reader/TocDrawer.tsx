@@ -63,6 +63,8 @@ export interface TocDrawerProps {
   onToggleReversed: () => void;
   /** 点击章节: 切章并关闭抽屉 */
   onSelect: (index: number) => void;
+  /** 书架记录的章数: 大于目录长度时提示目录可能不完整(翻页残缺/缓存陈旧) */
+  totalChapterNum?: number;
   /** 打开换源面板(本地书不传): 本章出问题时从目录直接换源 */
   onSwitchSource?: () => void;
 }
@@ -79,6 +81,7 @@ export function TocDrawer({
   onToggleReversed,
   onSelect,
   onSwitchSource,
+  totalChapterNum,
 }: TocDrawerProps) {
   const ordered = React.useMemo(
     () => (reversed ? [...chapters].reverse() : chapters),
@@ -299,6 +302,12 @@ export function TocDrawer({
             />
           </div>
         </DrawerHeader>
+        {totalChapterNum !== undefined && totalChapterNum > chapters.length ? (
+          <p className="mx-3 mb-1 rounded-lg bg-accent/10 px-2.5 py-1.5 text-xs text-accent">
+            目录只有 {chapters.length} 章, 但书架记录 {totalChapterNum} 章 —— 可能翻页抓取不完整或缓存陈旧,
+            可点顶部「刷新目录」重取。
+          </p>
+        ) : null}
         <DrawerBody className="overflow-hidden p-2">
           {query.trim() === "" ? (
             <Virtuoso

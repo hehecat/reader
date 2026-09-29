@@ -554,6 +554,7 @@ export default function ReaderPage() {
         bookAuthor={book.author}
         chapters={chapters}
         currentIndex={progress.index}
+        totalChapterNum={book?.totalChapterNum}
         onSwitchSource={() => {
           toc.setTocOpen(false);
           setSwitchOpen(true);

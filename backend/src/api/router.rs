@@ -4022,9 +4022,24 @@ async fn get_book_toc(
     .await
     {
         Ok(chapters) => {
+            let prev_total = shelf_for_write
+                .as_ref()
+                .map(|b| b.total_chapter_num)
+                .unwrap_or(0);
+            // 质量门：残缺目录（章数少于已知总数）既不入缓存也不回写章数。
+            // 多页目录若翻页提前终止（末页 next 解析为空/源站结构变化）会少若干章，
+            // 一旦入库(24h TTL)就会永久毒化阅读器, 表现为"读到倒数第二章即提示已是最后一章"。
+            let looks_partial = prev_total > 0 && (chapters.len() as i64) < prev_total;
+            if looks_partial {
+                tracing::warn!(
+                    "目录疑似残缺({}/{}), 跳过缓存与章数回写 [{toc_url}]",
+                    chapters.len(),
+                    prev_total
+                );
+            }
             // F-10：抓取成功后缓存目录（book_url 未知时以 toc_url 为键）;
             // 空目录不缓存——源瞬时故障的空结果若入库(默认 24h TTL)会毒化阅读器直到手动刷新
-            if !chapters.is_empty() {
+            if !chapters.is_empty() && !looks_partial {
                 if let Ok(json) = serde_json::to_string(&chapters) {
                     let _ = state
                         .storage
@@ -4036,7 +4051,9 @@ async fn get_book_toc(
             if let Some(shelf) = shelf_for_write.as_ref() {
                 let latest = chapters.last().map(|c| c.title.clone());
                 let mut patch = serde_json::Map::new();
-                patch.insert("totalChapterNum".into(), json!(chapters.len() as i64));
+                if !looks_partial {
+                    patch.insert("totalChapterNum".into(), json!(chapters.len() as i64));
+                }
                 patch.insert("lastCheckTime".into(), json!(now_millis()));
                 patch.insert("lastCheckError".into(), json!(Value::Null));
                 if let Some(t) = latest {
