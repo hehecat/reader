@@ -5,11 +5,9 @@ import {
   parseWith,
   post,
   stripNullsDeep,
-  type ApiParams,
   type ApiRequestConfig,
 } from "@/lib/api-client";
 import { connectSSE } from "@/lib/sse";
-import { getSecureKey } from "@/lib/storage";
 import { bookSourceListSchema, bookSourceSchema, type BookSource } from "@/types/api";
 
 /** `/getInvalidBookSources` 返回项 */
@@ -74,20 +72,30 @@ export async function deleteBookSources(
 }
 
 /**
- * 管理操作: 把某个用户的书源设为系统默认书源(对之后注册的用户生效).
- * 后端 body 是 `{username}`, 管理密码走 query 参数 secureKey(未显式传入时取 localStorage).
+ * 公共源池：把选中的书源发布到 `default` 命名空间 —— 所有用户可见可搜（仅管理员）。
+ * 源取自当前账号命名空间；同 URL 主键 upsert, 重复发布即更新。
+ * 用户仍可在自己空间隐藏/覆盖某条公共源, 互不影响。
  */
-export async function setAsDefault(
-  username: string,
-  secureKey?: string,
-  config?: ApiRequestConfig,
-): Promise<void> {
-  const key = secureKey ?? getSecureKey();
-  const params: ApiParams = { ...config?.params };
-  if (key !== null) {
-    params.secureKey = key;
-  }
-  await post<unknown>("/setAsDefaultBookSources", { username }, { ...config, params });
+export async function publishPublicSources(
+  urls: string[],
+): Promise<{ published: number; missing: string[] }> {
+  const data = await post<unknown>("/setAsDefaultBookSources", { bookSources: urls });
+  return z
+    .object({
+      published: z.number().default(0),
+      missing: z.array(z.string()).default([]),
+    })
+    .catch({ published: 0, missing: [] })
+    .parse(data);
+}
+
+/** 从公共源池下架（仅管理员）；返回移除条数 */
+export async function unpublishPublicSources(urls: string[]): Promise<number> {
+  const data = await post<unknown>("/setAsDefaultBookSources", {
+    bookSources: urls,
+    mode: "remove",
+  });
+  return z.object({ removed: z.number().default(0) }).catch({ removed: 0 }).parse(data).removed;
 }
 
 export async function getInvalidBookSources(

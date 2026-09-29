@@ -59,6 +59,7 @@ export function emptySourceTemplate(): BookSource {
     bookSourceType: 0,
     bookSourceComment: "",
     enabled: true,
+    published: false,
     enabledExplore: true,
     customOrder: 0,
     lastUpdateTime: 0,

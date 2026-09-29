@@ -2,6 +2,7 @@ import {
   CircleAlert,
   Database,
   Download,
+  Globe,
   RotateCw,
   Search,
   ShieldAlert,
@@ -39,7 +40,14 @@ import {
   useSourceStats,
   useToggleSourceEnabled,
 } from "@/components/sources/useSources";
-import { getBookSourceCookie, saveBookSources, type SourceStat } from "@/services/sources";
+import {
+  getBookSourceCookie,
+  publishPublicSources,
+  saveBookSources,
+  unpublishPublicSources,
+  type SourceStat,
+} from "@/services/sources";
+import { useAppMode } from "@/hooks/useAppMode";
 import { SOURCES_QUERY_KEY } from "@/components/sources/useSources";
 import { InvalidReasonDialog } from "@/components/sources/InvalidReasonDialog";
 import type { InvalidBookSource } from "@/services/sources";
@@ -275,6 +283,33 @@ export default function SourcesPage() {
     mutationFn: () => deleteSources.mutateAsync(selectedSources.map((s) => s.bookSourceUrl)),
     onSuccess: () => setSelected(new Set()),
   });
+  /** 公共源池(仅管理员)：发布选中源 / 从池中下架 */
+  const { isAdmin } = useAppMode();
+  const publishBulk = useMutation({
+    mutationFn: () => publishPublicSources(selectedSources.map((s) => s.bookSourceUrl)),
+    onSuccess: (result) => {
+      toast.success(
+        `已发布 ${result.published} 个源到公共源池` +
+          (result.missing.length > 0 ? `, ${result.missing.length} 个未找到` : ""),
+      );
+      setSelected(new Set());
+      void queryClient.invalidateQueries({ queryKey: SOURCES_QUERY_KEY });
+    },
+    onError: (error) => toast.error(sourceErrorMessage(error, "发布失败")),
+  });
+  const unpublishBulk = useMutation({
+    mutationFn: () =>
+      unpublishPublicSources(
+        selectedSources.filter((s) => s.published).map((s) => s.bookSourceUrl),
+      ),
+    onSuccess: (removed) => {
+      toast.success(`已从公共源池下架 ${removed} 个源`);
+      setSelected(new Set());
+      void queryClient.invalidateQueries({ queryKey: SOURCES_QUERY_KEY });
+    },
+    onError: (error) => toast.error(sourceErrorMessage(error, "下架失败")),
+  });
+
   /** 导出选中源为 legado 兼容 JSON, 便于分享他人 */
   const exportSelected = (): void => {
     const blob = new Blob([JSON.stringify(selectedSources, null, 2)], {
@@ -561,6 +596,29 @@ export default function SourcesPage() {
                     <Upload aria-hidden />
                     导出
                   </Button>
+                  {isAdmin ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={selected.size === 0}
+                        loading={publishBulk.isPending}
+                        onClick={() => publishBulk.mutate()}
+                      >
+                        <Globe aria-hidden />
+                        发布公共
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={!selectedSources.some((source) => source.published)}
+                        loading={unpublishBulk.isPending}
+                        onClick={() => unpublishBulk.mutate()}
+                      >
+                        下架公共
+                      </Button>
+                    </>
+                  ) : null}
                   <Button
                     size="sm"
                     variant="danger"

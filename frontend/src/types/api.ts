@@ -161,6 +161,8 @@ export const bookSourceSchema = z.object({
   bookSourceType: z.coerce.number().default(0),
   bookSourceComment: z.string().default(""),
   enabled: z.boolean().default(true),
+  /** 是否已发布到公共源池(default 命名空间, 所有用户可见) */
+  published: z.boolean().default(false),
   enabledExplore: z.boolean().default(true),
   customOrder: z.coerce.number().default(0),
   lastUpdateTime: z.coerce.number().default(0),

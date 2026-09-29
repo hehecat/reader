@@ -985,11 +985,21 @@ async fn get_book_sources(
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(0)
         > 0;
+    // 公共源池（default 命名空间）URL 集合：前端据此标「公共」徽标 + 提供下架入口
+    let published: std::collections::HashSet<String> = sqlx::query_scalar(
+        "SELECT book_source_url FROM book_sources WHERE user_namespace = 'default'",
+    )
+    .fetch_all(&state.storage.pool)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .collect();
     match state.storage.get_book_sources(&namespace).await {
         Ok(sources) => {
             let out: Vec<serde_json::Value> = sources
                 .into_iter()
                 .map(|s| {
+                    let is_public = published.contains(&s.book_source_url);
                     if simple {
                         // 轻量变体: 计数/命名消费方 (搜索进度、死源命名) 不需要规则大字段,
                         // 1.4MB → ~33KB; 不排除任何源 (计数语义必须与全量一致)
@@ -999,9 +1009,15 @@ async fn get_book_sources(
                             "bookSourceUrl": s.book_source_url,
                             "enabled": s.enabled,
                             "bookSourceType": s.book_source_type,
+                            "published": is_public,
                         })
                     } else {
-                        serde_json::to_value(s).unwrap_or(serde_json::Value::Null)
+                        let mut value = serde_json::to_value(s)
+                            .unwrap_or(serde_json::Value::Null);
+                        if let Some(obj) = value.as_object_mut() {
+                            obj.insert("published".to_string(), serde_json::json!(is_public));
+                        }
+                        value
                     }
                 })
                 .collect();
@@ -6221,7 +6237,13 @@ async fn migrate_loc_book(
     ))
 }
 
-/// POST /reader3/setAsDefaultBookSources：默认书源标记（body：{bookSources:[url...] 或 [对象...]}）
+/// POST /reader3/setAsDefaultBookSources：公共源池的发布 / 下架（仅管理员）。
+///
+/// - 发布（默认）：把 `bookSources` 列出的源写入 `default` 命名空间 —— 所有用户可见可搜，
+///   用户仍可在自己命名空间隐藏/覆盖某条，互不影响；同 URL 主键 upsert，重复发布即更新。
+/// - 下架：`mode=remove` 时从公共池删除这些 URL。
+/// - 源取自 `from`（缺省=当前账号命名空间；管理员在 default 层时可显式指定）。
+/// body：{bookSources:[url|{bookSourceUrl}...], mode?:"publish"|"remove", from?: ns}
 async fn set_as_default_book_sources(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
@@ -6232,16 +6254,15 @@ async fn set_as_default_book_sources(
         Ok(ns) => ns,
         Err(ret) => return Json(ret),
     };
-    let _ = params;
-    let Some(body) = body else {
-        return Json(ReturnData::err("参数错误"));
-    };
-    let json: serde_json::Value = match serde_json::from_slice(&body) {
-        Ok(v) => v,
-        Err(_) => return Json(ReturnData::err("参数错误")),
-    };
-    let urls: Vec<String> = json
-        .get("bookSources")
+    let body_json = body
+        .as_ref()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok());
+    if let Err(ret) = check_manager_auth(&state, &params, &headers, body_json.as_ref()).await {
+        return Json(ret);
+    }
+    let urls: Vec<String> = body_json
+        .as_ref()
+        .and_then(|v| v.get("bookSources"))
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
@@ -6258,17 +6279,52 @@ async fn set_as_default_book_sources(
     if urls.is_empty() {
         return Json(ReturnData::err("参数错误"));
     }
-    match state
-        .storage
-        .set_default_book_sources(&namespace, &urls)
-        .await
-    {
-        Ok(_) => Json(ReturnData::ok(json!({ "count": urls.len() }))),
-        Err(e) => {
-            tracing::error!("setAsDefaultBookSources 失败: {e}");
-            Json(ReturnData::err("保存失败"))
+    let mode = param_of(&params, body_json.as_ref(), "mode");
+    if mode == "remove" {
+        let mut removed = 0i64;
+        for url in &urls {
+            removed += state
+                .storage
+                .delete_book_source("default", url)
+                .await
+                .unwrap_or(0) as i64;
+        }
+        tracing::info!("公共源下架 {removed} 条（{namespace}）");
+        return Json(ReturnData::ok(json!({ "removed": removed })));
+    }
+    let from = {
+        let explicit = param_of(&params, body_json.as_ref(), "from");
+        if explicit.trim().is_empty() {
+            namespace.clone()
+        } else {
+            explicit
+        }
+    };
+    let all = state.storage.get_book_sources(&from).await.unwrap_or_default();
+    let mut published = 0i64;
+    let mut missing: Vec<String> = Vec::new();
+    for url in &urls {
+        match all.iter().find(|s| &s.book_source_url == url) {
+            Some(source) => {
+                let mut source = source.clone();
+                source.user_namespace = "default".to_string();
+                match state.storage.save_book_source("default", &source).await {
+                    Ok(_) => published += 1,
+                    Err(e) => {
+                        tracing::error!("发布公共源失败 [{url}]: {e}");
+                        missing.push(url.clone());
+                    }
+                }
+            }
+            None => missing.push(url.clone()),
         }
     }
+    // 兼容旧标记（历史字段, 无消费方）
+    let _ = state.storage.set_default_book_sources(&namespace, &urls).await;
+    tracing::info!("发布公共源 {published} 条（来源 {from}, 操作者 {namespace}）");
+    Json(ReturnData::ok(
+        json!({ "published": published, "missing": missing }),
+    ))
 }
 
 /// GET/POST /reader3/searchBookSourceSSE：流式换源结果（逐书源事件 + end）

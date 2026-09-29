@@ -92,6 +92,11 @@ export function SourceListItem({
             {name}
           </span>
           {/* 类型是中性元信息: secondary 实底 + 前景色, 不靠颜色区分文本/音频 */}
+          {source.published ? (
+            <Badge size="sm" variant="accent" className="shrink-0" title="已发布到公共源池, 所有用户可见">
+              公共
+            </Badge>
+          ) : null}
           <Badge size="sm" variant="muted" className="shrink-0 bg-secondary text-foreground">
             {TYPE_LABEL[source.bookSourceType] ?? `类型${source.bookSourceType}`}
           </Badge>
