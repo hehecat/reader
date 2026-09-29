@@ -356,6 +356,9 @@ export function TocDrawer({
             <Virtuoso
             data={ordered}
             initialTopMostItemIndex={initialTop}
+            // 章节项单行截断, 实测恒为 44px: 直接告知可免去逐项测量 —— 否则首次滚动时
+            // 位置会随测量逐步校正(表现为"滚动时闪动, 滚到底后再上下滚就正常了")
+            fixedItemHeight={44}
             style={{ height: "100%" }}
             itemContent={(_position, chapter) => {
               const active = chapter.index === currentIndex;
