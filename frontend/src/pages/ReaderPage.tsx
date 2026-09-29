@@ -89,6 +89,8 @@ export default function ReaderPage() {
 
   const {
     book,
+    shelfBook,
+    shelfQuery,
     chapters,
     bookmarks,
     bookSourceUrl,
@@ -108,14 +110,25 @@ export default function ReaderPage() {
 
   const progress = useReaderProgress({
     bookUrl,
-    durChapterIndex: book?.durChapterIndex,
-    durChapterPos: book?.durChapterPos,
+    // 进度只认书架记录: getBookInfo 不含 durChapter*, 沿用 book 会永远从第 1 章开读,
+    // 随后又把服务端进度覆盖成 0 —— 多端"进度不跟随"的根因
+    durChapterIndex: shelfBook?.durChapterIndex ?? book?.durChapterIndex,
+    durChapterPos: shelfBook?.durChapterPos ?? book?.durChapterPos,
     chapterCount: chapters.length,
     chapterTitles,
     searchParams,
     setSearchParams,
   });
   const { stepChapter, goToChapter } = progress;
+
+  // 进阅读器即取一次最新书架数据: 权威进度在书架记录里, 而它有 30s staleTime ——
+  // 不主动刷新会在多端场景下用旧进度开读(随后又把服务端的新进度覆盖回去)
+  const refetchShelf = shelfQuery.refetch;
+  React.useEffect(() => {
+    if (bookUrl !== "") {
+      void refetchShelf();
+    }
+  }, [bookUrl, refetchShelf]);
 
   /**
    * 多端进度提示: 回到前台/窗口获得焦点时重取服务端进度, 若明显更靠后则提示跳转
@@ -133,15 +146,17 @@ export default function ReaderPage() {
       if (document.visibilityState !== "visible" || bookUrl === "") {
         return;
       }
-      const result = await bookQuery.refetch();
-      const remoteIndex = result.data?.durChapterIndex;
+      // 进度只存在于书架记录(getBookInfo 不返回 durChapter*) → 重取书架再取该书
+      const result = await shelfQuery.refetch();
+      const remote = result.data?.find((item) => item.bookUrl === bookUrl);
+      const remoteIndex = remote?.durChapterIndex;
       if (remoteIndex === undefined) {
         return;
       }
       if (remoteIndex > progressIndexRef.current + 1 && dismissedRemote.current !== remoteIndex) {
         setRemoteHint({
           index: remoteIndex,
-          title: result.data?.durChapterTitle ?? "",
+          title: remote?.durChapterTitle ?? "",
         });
       }
     };
@@ -156,7 +171,7 @@ export default function ReaderPage() {
       window.removeEventListener("focus", onVisible);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [bookQuery, bookUrl]);
+  }, [shelfQuery, bookUrl]);
 
   // 换源: 面板见 SwitchSourceDialog(与书架详情共用); 未入架时需先入架才能查候选
   const queryClient = useQueryClient();

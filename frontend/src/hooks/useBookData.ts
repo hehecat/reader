@@ -26,6 +26,10 @@ export interface UseBookDataResult {
   /** 书是否在书架 (换源等书架专属操作的门槛) */
   inShelf: boolean;
   bookQuery: UseQueryResult<Book, Error>;
+  /** 书架记录: 阅读进度的权威来源(getBookInfo 不返回 durChapter*) */
+  shelfBook: Book | undefined;
+  /** 书架查询: 需要重取权威进度(如多端同步检查)时 refetch 它 */
+  shelfQuery: UseQueryResult<Book[], Error>;
   chaptersQuery: UseQueryResult<BookChapter[], Error>;
   bookmarksQuery: UseQueryResult<Bookmark[], Error>;
   /** 手动刷新目录: bypass warp 目录缓存 (refresh=1) 并写回查询缓存 */
@@ -107,6 +111,8 @@ export function useBookData(bookUrl: string, sourceHint?: string): UseBookDataRe
 
   return {
     book,
+    shelfBook,
+    shelfQuery,
     chapters: chaptersQuery.data ?? [],
     bookmarks,
     bookSourceUrl,
