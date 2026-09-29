@@ -1989,10 +1989,10 @@ async fn search_book_content(
         .unwrap_or(0)
         > 0;
     match &shelf {
-        Some(book) => {
-            if !crate::service::local_book::is_local_book(&book.book_url, &book.origin) {
-                return Json(ReturnData::err("仅支持本地书内容搜索"));
-            }
+        Some(_book) => {
+            // 书源书与本地书同表存正文(book_chapters): 书源书搜「已缓存」章节,
+            // 未缓存时下面 search 自然为空——由前端提示先用「缓存本书」。
+            // 文件型本地书(正文不入表)在下方单独走文件解析通道。
         }
         None if !has_chapters => return Json(ReturnData::err("书籍不存在")),
         None => {}
@@ -2013,7 +2013,7 @@ async fn search_book_content(
     }
     match state
         .storage
-        .search_book_content(&book_url, &key, 100)
+        .search_book_content(&namespace, &book_url, &key, 100)
         .await
     {
         Ok(hits) => {

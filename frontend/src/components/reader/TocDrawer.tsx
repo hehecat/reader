@@ -1,4 +1,4 @@
-import { ArrowLeftRight } from "lucide-react";
+import { ArrowLeftRight, Search } from "lucide-react";
 import * as React from "react";
 import { useSearchParams } from "react-router-dom";
 import { Virtuoso } from "react-virtuoso";
@@ -13,11 +13,13 @@ import {
   DrawerFooter,
   DrawerHeader,
   DrawerTitle,
+  Input,
   Switch,
   cn,
   toast,
 } from "@/components/ui";
 import { errorMessage } from "@/hooks/useBookshelf";
+import { searchBookContent, type BookContentHit } from "@/services/book";
 import { humanizeError } from "@/lib/errors";
 import {
   attachCacheBookStream,
@@ -28,6 +30,25 @@ import {
   type CacheStreamHandlers,
 } from "@/services/cache";
 import type { BookChapter } from "@/types/api";
+
+/** 命中片段高亮: 按关键字切分, 关键字部分包 <mark>(不用 innerHTML, 无注入面) */
+function highlight(text: string, query: string): React.ReactNode {
+  const q = query.trim();
+  if (q === "") {
+    return text;
+  }
+  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const parts = text.split(new RegExp(`(${escaped})`, "gi"));
+  return parts.map((part, index) =>
+    part.toLowerCase() === q.toLowerCase() ? (
+      <mark key={index} className="rounded bg-accent/20 px-0.5 text-accent">
+        {part}
+      </mark>
+    ) : (
+      <React.Fragment key={index}>{part}</React.Fragment>
+    ),
+  );
+}
 
 export interface TocDrawerProps {
   open: boolean;
@@ -83,6 +104,46 @@ export function TocDrawer({
   });
 
   /** 运行中的缓存任务进度; null = 空闲 (无任务或已终态) */
+  /** 书内搜索: 空串 = 章节列表; 非空 = 搜索结果视图(章节名 + 正文命中) */
+  const [query, setQuery] = React.useState("");
+  const [hits, setHits] = React.useState<BookContentHit[]>([]);
+  const [searching, setSearching] = React.useState(false);
+  const [searchError, setSearchError] = React.useState<string | null>(null);
+
+  /** 章节名命中(本地即时过滤) */
+  const titleHits = React.useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (q === "") {
+      return [];
+    }
+    return chapters.filter((c) => c.title.toLowerCase().includes(q)).slice(0, 200);
+  }, [chapters, query]);
+
+  /** 正文命中(后端 LIKE 已入库正文: 本地书全文 / 书源书已缓存章节), 防抖 400ms */
+  React.useEffect(() => {
+    const q = query.trim();
+    if (q === "" || bookUrl === "") {
+      setHits([]);
+      setSearchError(null);
+      setSearching(false);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setSearching(true);
+      void searchBookContent(bookUrl, q)
+        .then((found) => {
+          setHits(found);
+          setSearchError(null);
+        })
+        .catch((error) => {
+          setHits([]);
+          setSearchError(errorMessage(error, "搜索失败"));
+        })
+        .finally(() => setSearching(false));
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [query, bookUrl]);
+
   const [progress, setProgress] = React.useState<CacheProgress | null>(null);
   const [cancelling, setCancelling] = React.useState(false);
   const streamRef = React.useRef<(() => void) | null>(null);
@@ -208,9 +269,23 @@ export function TocDrawer({
               )}
             </div>
           )}
+          <div className="relative mt-3">
+            <Search
+              aria-hidden
+              className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              aria-label="书内搜索"
+              placeholder="搜索章节名 / 正文"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              className="pl-8"
+            />
+          </div>
         </DrawerHeader>
         <DrawerBody className="overflow-hidden p-2">
-          <Virtuoso
+          {query.trim() === "" ? (
+            <Virtuoso
             data={ordered}
             initialTopMostItemIndex={initialTop}
             style={{ height: "100%" }}
@@ -233,6 +308,60 @@ export function TocDrawer({
               );
             }}
           />
+          ) : (
+            <div className="h-full overflow-y-auto pb-2">
+              {searching ? (
+                <p className="px-2 py-2 text-xs text-muted-foreground">搜索正文中…</p>
+              ) : null}
+              {titleHits.length === 0 && hits.length === 0 && !searching ? (
+                <p className="px-2 py-6 text-center text-sm text-muted-foreground">
+                  {searchError ??
+                    (isLocal
+                      ? "没有找到匹配内容"
+                      : "未在已缓存章节中找到 · 书源书仅搜索已缓存正文, 可先用「缓存本书」")}
+                </p>
+              ) : null}
+              {titleHits.length > 0 ? (
+                <section className="mb-1">
+                  <h4 className="px-3 py-1.5 text-xs text-muted-foreground">
+                    章节名 · {titleHits.length}
+                  </h4>
+                  {titleHits.map((chapter) => (
+                    <button
+                      key={`title-${chapter.index}`}
+                      type="button"
+                      onClick={() => onSelect(chapter.index)}
+                      className="flex w-full cursor-pointer items-center rounded-lg px-3 py-2 text-left text-sm hover:bg-surface-muted"
+                    >
+                      <span className="min-w-0 flex-1 truncate">{highlight(chapter.title, query)}</span>
+                    </button>
+                  ))}
+                </section>
+              ) : null}
+              {hits.length > 0 ? (
+                <section>
+                  <h4 className="px-3 py-1.5 text-xs text-muted-foreground">
+                    正文 · {hits.length} 章命中
+                  </h4>
+                  {hits.map((hit) => (
+                    <button
+                      key={`content-${hit.chapterIndex}`}
+                      type="button"
+                      onClick={() => onSelect(hit.chapterIndex)}
+                      className="flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-3 py-2 text-left hover:bg-surface-muted"
+                    >
+                      <span className="text-xs text-muted-foreground">
+                        {hit.title || `第 ${hit.chapterIndex + 1} 章`}
+                      </span>
+                      <span className="line-clamp-2 text-sm text-foreground/80">
+                        {highlight(hit.snippet, query)}
+                      </span>
+                    </button>
+                  ))}
+                </section>
+              ) : null}
+            </div>
+          )}
         </DrawerBody>
         <DrawerFooter className="justify-between">
           {onSwitchSource !== undefined && !isLocal ? (

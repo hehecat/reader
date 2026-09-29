@@ -130,3 +130,31 @@ export async function saveBookProgress(
 export function getCoverUrl(path?: string | null): string {
   return proxiedAssetUrl(path ?? "");
 }
+
+/** 全书搜索命中(章节名与正文同表: 后端 /searchBookContent, 正文仅覆盖已缓存章节) */
+export const bookContentHitSchema = z.object({
+  chapterIndex: z.number(),
+  title: z.string().default(""),
+  snippet: z.string().default(""),
+});
+
+export type BookContentHit = z.infer<typeof bookContentHitSchema>;
+
+const bookContentHitListSchema = z.array(bookContentHitSchema);
+
+/**
+ * 书内搜索正文: 命中来自 `book_chapters`(本地书全文 + 书源书已缓存正文)。
+ * 书源书未缓存章节不会命中 —— 调用方应提示"先缓存本书"。
+ */
+export async function searchBookContent(
+  bookUrl: string,
+  key: string,
+  config?: ApiRequestConfig,
+): Promise<BookContentHit[]> {
+  const data = await post<unknown>(
+    "/searchBookContent",
+    { bookUrl, key },
+    { timeout: FETCH_TIMEOUT, ...config },
+  );
+  return parseWith(bookContentHitListSchema, data);
+}

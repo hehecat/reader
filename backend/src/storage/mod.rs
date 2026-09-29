@@ -1997,6 +1997,7 @@ impl Storage {
     /// 命中章节（chapterIndex/title/snippet——命中段落前后截取），最多 limit 条
     pub async fn search_book_content(
         &self,
+        ns: &str,
         book_url: &str,
         key: &str,
         limit: i64,
@@ -2007,9 +2008,10 @@ impl Storage {
             .replace('_', "\\_");
         let pattern = format!("%{escaped}%");
         let rows = sqlx::query_as::<_, (i64, String, String)>(
-            "SELECT chapter_index, title, content FROM book_chapters             WHERE book_url = ?1 AND content LIKE ?2 ESCAPE '\\'             ORDER BY chapter_index LIMIT ?3",
+            "SELECT chapter_index, title, content FROM book_chapters             WHERE book_url = ?1 AND user_namespace = ?2 AND content LIKE ?3 ESCAPE '\\'             ORDER BY chapter_index LIMIT ?4",
         )
         .bind(book_url)
+        .bind(ns)
         .bind(&pattern)
         .bind(limit)
         .fetch_all(&self.pool)
