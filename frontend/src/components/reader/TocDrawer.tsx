@@ -283,7 +283,7 @@ export function TocDrawer({
   return (
     <Drawer side="left" open={open} onOpenChange={onOpenChange}>
       <DrawerContent className="w-80 max-w-[85vw]">
-        <DrawerHeader className="p-5">
+        <DrawerHeader className="relative z-10 bg-surface p-5">
           <DrawerTitle className="font-display text-lg leading-tight font-semibold">
             {bookName}
           </DrawerTitle>
