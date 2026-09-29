@@ -33,28 +33,18 @@ fn str_param(params: &HashMap<String, String>, body: Option<&Value>, key: &str) 
     params.get(key).cloned().unwrap_or_default()
 }
 
-/// 管理密码校验（legacy checkManagerAuth，P0-8 收紧）：
-/// 管理权限判定（legacy BaseController.checkManagerAuth 对齐）：
-/// - 非 secure 模式 → 恒 true（用户自行部署无安全防护，单机场景全部放行）
-/// - secure + secure_key 已配置 → 常数时间比较请求 secureKey
-/// - secure 但 secure_key 未配置 → false（防匿名提权访问 __STORAGE__）
-fn manager_ok(config: &AppConfig, params: &HashMap<String, String>, body: Option<&Value>) -> bool {
+/// 管理权限判定：能否访问跨命名空间的管理路径（`__STORAGE__` 等）。
+/// - 非 secure 模式 → 恒 true（单用户部署, 无登录概念）
+/// - secure 模式 → 仅管理员（账户由部署配置 READER_APP_ADMIN_USERNAME 指定）
+fn manager_ok(config: &AppConfig, user: Option<&crate::model::user::User>) -> bool {
     if !config.secure {
         return true;
     }
-    if config.secure_key.is_empty() {
-        return false;
-    }
-    // P3-A：常量时间比较（防时序侧信道逐字节探测 secureKey）
-    crate::util::constant_time::ct_eq(&str_param(params, body, "secureKey"), &config.secure_key)
+    user.map(|u| u.is_admin).unwrap_or(false)
 }
 
 fn manager_required() -> ReturnData {
-    ReturnData {
-        is_success: false,
-        error_msg: "请输入管理密码".to_string(),
-        data: json!("NEED_SECURE_KEY"),
-    }
+    ReturnData::err("仅管理员可执行该操作")
 }
 
 fn login_required() -> ReturnData {
@@ -173,7 +163,7 @@ pub async fn list(
     let body_json = body.and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     let home = str_param(&params, body_json.as_ref(), "home");
     let user = state.storage.find_user(&ns).await.ok().flatten();
-    let manager = manager_ok(&state.storage.config, &params, body_json.as_ref());
+    let manager = manager_ok(&state.storage.config, user.as_ref());
     let base = match file_home(
         &state.storage.config,
         &ns,
@@ -245,7 +235,7 @@ pub async fn get(
     let body_json = body.and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     let home = str_param(&params, body_json.as_ref(), "home");
     let user = state.storage.find_user(&ns).await.ok().flatten();
-    let manager = manager_ok(&state.storage.config, &params, body_json.as_ref());
+    let manager = manager_ok(&state.storage.config, user.as_ref());
     let base = match file_home(
         &state.storage.config,
         &ns,
@@ -294,7 +284,7 @@ pub async fn save(
     let body_json = body.and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     let home = str_param(&params, body_json.as_ref(), "home");
     let user = state.storage.find_user(&ns).await.ok().flatten();
-    let manager = manager_ok(&state.storage.config, &params, body_json.as_ref());
+    let manager = manager_ok(&state.storage.config, user.as_ref());
     let base = match file_home(
         &state.storage.config,
         &ns,
@@ -341,7 +331,7 @@ pub async fn mkdir(
     let body_json = body.and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     let home = str_param(&params, body_json.as_ref(), "home");
     let user = state.storage.find_user(&ns).await.ok().flatten();
-    let manager = manager_ok(&state.storage.config, &params, body_json.as_ref());
+    let manager = manager_ok(&state.storage.config, user.as_ref());
     let base = match file_home(
         &state.storage.config,
         &ns,
@@ -391,7 +381,7 @@ pub async fn rename(
     let body_json = body.and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     let home = str_param(&params, body_json.as_ref(), "home");
     let user = state.storage.find_user(&ns).await.ok().flatten();
-    let manager = manager_ok(&state.storage.config, &params, body_json.as_ref());
+    let manager = manager_ok(&state.storage.config, user.as_ref());
     let base = match file_home(
         &state.storage.config,
         &ns,
@@ -533,7 +523,7 @@ pub async fn download(
     let body_json = body.and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     let home = str_param(&params, body_json.as_ref(), "home");
     let user = state.storage.find_user(&ns).await.ok().flatten();
-    let manager = manager_ok(&state.storage.config, &params, body_json.as_ref());
+    let manager = manager_ok(&state.storage.config, user.as_ref());
     let base = match file_home(
         &state.storage.config,
         &ns,
@@ -700,7 +690,7 @@ pub async fn upload(
         return Json(ReturnData::err("请上传文件"));
     }
     let user = state.storage.find_user(&ns).await.ok().flatten();
-    let manager = manager_ok(&state.storage.config, &params, None);
+    let manager = manager_ok(&state.storage.config, user.as_ref());
     let base = match file_home(
         &state.storage.config,
         &ns,
@@ -769,7 +759,7 @@ pub async fn delete(
     let body_json = body.and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     let home = str_param(&params, body_json.as_ref(), "home");
     let user = state.storage.find_user(&ns).await.ok().flatten();
-    let manager = manager_ok(&state.storage.config, &params, body_json.as_ref());
+    let manager = manager_ok(&state.storage.config, user.as_ref());
     let base = match file_home(
         &state.storage.config,
         &ns,
@@ -839,7 +829,7 @@ pub async fn parse(
         raw.trim().parse::<i64>().unwrap_or(0)
     };
     let user = state.storage.find_user(&ns).await.ok().flatten();
-    let manager = manager_ok(&state.storage.config, &params, body_json.as_ref());
+    let manager = manager_ok(&state.storage.config, user.as_ref());
     let base = match file_home(
         &state.storage.config,
         &ns,
@@ -964,7 +954,7 @@ pub async fn delete_multi(
     let body_json = body.and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     let home = str_param(&params, body_json.as_ref(), "home");
     let user = state.storage.find_user(&ns).await.ok().flatten();
-    let manager = manager_ok(&state.storage.config, &params, body_json.as_ref());
+    let manager = manager_ok(&state.storage.config, user.as_ref());
     let base = match file_home(
         &state.storage.config,
         &ns,
@@ -1417,54 +1407,40 @@ mod tests {
     }
 
     /// P0-8：manager_ok 收紧——仅 secure_key 已配置且请求携带正确 secureKey 才具备管理权限；
-    /// secure 模式未配置 secure_key（原无条件 true 漏洞）→ 非 manager；
-    /// query 与 body 两路 secureKey 均生效
+    /// 管理路径权限：非 secure 恒真（单用户无登录概念）；secure 仅管理员
+    /// （管理密码已废弃——是管理员即可直接改配置）
     #[test]
     fn test_manager_ok() {
         let mut config = AppConfig::from_env();
-        let params = |key: Option<&str>| {
-            let mut m = HashMap::new();
-            if let Some(k) = key {
-                m.insert("secureKey".to_string(), k.to_string());
-            }
-            m
+        let admin = crate::model::User {
+            username: "admin".into(),
+            is_admin: true,
+            ..Default::default()
+        };
+        let plain = crate::model::User {
+            username: "alice".into(),
+            ..Default::default()
         };
 
-        // secure 模式 + 未配置 secure_key → 非 manager（P0-8 核心：原实现无条件 true）
+        // 非 secure（单用户）：恒 manager
+        config.secure = false;
+        assert!(manager_ok(&config, None));
+        assert!(manager_ok(&config, Some(&plain)));
+
+        // secure：匿名/普通用户拒绝, 仅管理员放行（无论 secure_key 是否配置）
         config.secure = true;
         config.secure_key = "".into();
-        assert!(!manager_ok(&config, &params(None), None));
-        assert!(!manager_ok(&config, &params(Some("any")), None));
-
-        // secure 模式 + 已配置 secure_key：缺失/错误 → 非 manager；正确 → manager
+        assert!(!manager_ok(&config, None), "匿名不得访问管理路径");
+        assert!(!manager_ok(&config, Some(&plain)), "普通用户不得访问管理路径");
+        assert!(manager_ok(&config, Some(&admin)), "管理员可访问管理路径");
         config.secure_key = "sk-123".into();
-        assert!(!manager_ok(&config, &params(None), None));
-        assert!(!manager_ok(&config, &params(Some("wrong")), None));
-        assert!(manager_ok(&config, &params(Some("sk-123")), None));
-        // body JSON 携带正确 secureKey（body 优先于 query）
-        let body = serde_json::json!({ "secureKey": "sk-123" });
-        assert!(manager_ok(&config, &params(Some("wrong")), Some(&body)));
-        let body = serde_json::json!({ "secureKey": "wrong" });
-        assert!(!manager_ok(&config, &params(None), Some(&body)));
-
-        // 非 secure：恒 manager（legacy checkManagerAuth 非 secure 恒 true——
-        // 用户自行部署无安全防护，单机场景全部放行）
-        config.secure = false;
-        config.secure_key = "".into();
-        assert!(
-            manager_ok(&config, &params(None), None),
-            "非 secure 未配 key 应放行"
-        );
-        config.secure_key = "sk-123".into();
-        assert!(manager_ok(&config, &params(Some("sk-123")), None));
-        assert!(
-            manager_ok(&config, &params(None), None),
-            "非 secure 已配 key 无头也应放行"
-        );
+        assert!(!manager_ok(&config, None));
+        assert!(!manager_ok(&config, Some(&plain)));
+        assert!(manager_ok(&config, Some(&admin)));
     }
 
-    /// P0-8 全链路：secure 模式未配置 secure_key 时，已登录用户写 __STORAGE__ 也被拒
-    /// （NEED_SECURE_KEY，原实现无条件放行）；配置 secure_key 且携带正确 secureKey 后放行
+    /// 全链路：secure 模式下写 __STORAGE__（跨命名空间管理路径）仅管理员放行;
+    /// 匿名与普通用户一律拒绝
     #[tokio::test]
     async fn test_manager_gate_secure_storage_write() {
         let (mut state, dir) = test_state("mgrgate").await;
@@ -1483,7 +1459,7 @@ mod tests {
             .into_iter()
             .collect();
 
-        // 已登录但 secure_key 未配置：写 __STORAGE__ → 需管理密码（原实现：放行到 storage 根）
+        // 普通用户：写 __STORAGE__ 拒绝（哪怕带 secureKey 也不再放行）
         let body = Bytes::from(r#"{"path":"/pwn.txt","content":"x","home":"__STORAGE__"}"#);
         let ret = save(
             State(state.clone()),
@@ -1492,41 +1468,45 @@ mod tests {
             Some(body),
         )
         .await;
-        assert!(
-            !ret.0.is_success,
-            "未配置 secure_key 时 __STORAGE__ 写应拒绝"
-        );
-        assert_eq!(ret.0.data, json!("NEED_SECURE_KEY"));
+        assert!(!ret.0.is_success, "普通用户写 __STORAGE__ 应拒绝");
+        assert_eq!(ret.0.error_msg, "仅管理员可执行该操作");
         assert!(!state.storage.config.storage_dir().join("pwn.txt").exists());
 
-        // 配置 secure_key 后：缺/错 secureKey 仍拒绝；携带正确 secureKey（query）→ 放行
-        state.storage.config.secure_key = "sk-123".into();
+        // 匿名：同样拒绝
         let body = Bytes::from(r#"{"path":"/pwn.txt","content":"x","home":"__STORAGE__"}"#);
         let ret = save(
             State(state.clone()),
-            Query(auth.clone()),
+            Query(HashMap::new()),
             HeaderMap::new(),
             Some(body),
         )
         .await;
-        assert!(!ret.0.is_success);
-        assert_eq!(ret.0.data, json!("NEED_SECURE_KEY"));
+        assert!(!ret.0.is_success, "匿名写 __STORAGE__ 应拒绝");
 
-        let mut params = auth;
-        params.insert("secureKey".to_string(), "sk-123".to_string());
+        // 管理员：放行
+        state
+            .storage
+            .insert_user(&crate::model::User {
+                username: "root".into(),
+                token: "rtok".into(),
+                is_admin: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let admin_auth: HashMap<String, String> =
+            [("accessToken".into(), "root:rtok".into())]
+                .into_iter()
+                .collect();
         let body = Bytes::from(r#"{"path":"/pwn.txt","content":"x","home":"__STORAGE__"}"#);
         let ret = save(
             State(state.clone()),
-            Query(params),
+            Query(admin_auth),
             HeaderMap::new(),
             Some(body),
         )
         .await;
-        assert!(
-            ret.0.is_success,
-            "正确 secureKey 应放行: {}",
-            ret.0.error_msg
-        );
+        assert!(ret.0.is_success, "管理员应放行: {}", ret.0.error_msg);
         assert!(state.storage.config.storage_dir().join("pwn.txt").exists());
 
         cleanup(state, dir).await;

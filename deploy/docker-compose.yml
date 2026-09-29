@@ -1,6 +1,6 @@
 # reader 生产 compose: 镜像来自 GHCR (GitHub Actions 构建推送)
 # 快速起: cd deploy && docker compose up -d   (无需 .env, 默认单用户)
-# 多用户: 复制 .env.example 为 .env, 设 READER_APP_SECURE=true 与邀请码/管理密码
+# 多用户: 复制 .env.example 为 .env, 设 READER_APP_SECURE=true 与邀请码
 name: reader
 
 services:
@@ -24,9 +24,8 @@ services:
       READER_BROWSER_FIRST: "0"
       # 多用户开关: 默认单用户; .env 设 true 开启邀请码注册
       READER_APP_SECURE: "${READER_APP_SECURE:-false}"
-      # secure 模式必填(可经 .env 覆盖): 注册邀请码 / 管理密码
+      # secure 模式必填(可经 .env 覆盖): 注册邀请码
       READER_APP_INVITECODE: "${READER_APP_INVITECODE:-}"
-      READER_APP_SECUREKEY: "${READER_APP_SECUREKEY:-}"
       TZ: Asia/Shanghai
     restart: unless-stopped
 

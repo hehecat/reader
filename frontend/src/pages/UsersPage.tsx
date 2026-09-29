@@ -32,7 +32,6 @@ import {
 import { errorMessage } from "@/hooks/useBookshelf";
 import { useAppMode } from "@/hooks/useAppMode";
 import { humanizeError } from "@/lib/errors";
-import { getSecureKey, setSecureKey } from "@/lib/storage";
 import {
   addUser,
   clearInactiveUsers,
@@ -106,21 +105,14 @@ function draftFrom(user: AdminUser): UserDraft {
   };
 }
 
-/** 是否"缺管理密码"错误(后端 NEED_SECURE_KEY): 提示补充即可, 不是操作失败 */
-function isNeedSecureKey(error: unknown): boolean {
-  return errorMessage(error, "").includes("管理密码");
-}
-
 /**
  * 用户管理页(仅管理员): 列表 + 新建/编辑权限配额 + 启停用 + 改密 + 删除 + 清理不活跃.
  * 后端接口: getUsers/addUser/updateUser/deleteUser/resetUserPassword/clearInactiveUsers
- * (多用户模式要求已登录且 is_admin; 配置了 secureKey 时另需管理密码).
+ * (多用户模式要求已登录且 is_admin; 单用户模式无登录概念).
  */
 export default function UsersPage() {
   const queryClient = useQueryClient();
   const { isAdmin } = useAppMode();
-  const [secureKeyDraft, setSecureKeyDraft] = React.useState(getSecureKey() ?? "");
-  const [secureKeyReady, setSecureKeyReady] = React.useState(getSecureKey() !== null);
   const [editing, setEditing] = React.useState<{ mode: "create" | "edit"; draft: UserDraft } | null>(
     null,
   );
@@ -141,11 +133,6 @@ export default function UsersPage() {
 
   const onError = React.useCallback((fallback: string) => {
     return (error: unknown) => {
-      if (isNeedSecureKey(error)) {
-        toast.error("请输入管理密码(右上角管理密码框)后重试");
-        setSecureKeyReady(true);
-        return;
-      }
       toast.error(humanizeError(errorMessage(error, fallback)));
     };
   }, []);
@@ -225,17 +212,6 @@ export default function UsersPage() {
     onError: onError("清理失败"),
   });
 
-  const saveSecureKey = () => {
-    const key = secureKeyDraft.trim();
-    if (key === "") {
-      return;
-    }
-    setSecureKey(key);
-    setSecureKeyReady(true);
-    toast.success("管理密码已保存(仅本次会话有效)");
-    invalidate();
-  };
-
   // 页面容器与站内其它页一致: 居中限宽 + 左右留白
   const pageClass =
     "mx-auto flex min-h-full w-full max-w-5xl flex-col px-4 pb-10 pt-5 sm:px-6 md:px-10 md:pt-8";
@@ -284,30 +260,6 @@ export default function UsersPage() {
       />
 
       <div className="flex flex-col gap-5">
-        {/* 管理密码(第二因子): 后端配置了 READER_APP_SECUREKEY 时必填 */}
-        <SettingCard
-          title="管理密码"
-          desc="服务器配置了管理密码时, 管理操作需一并校验; 仅保存在本次会话(sessionStorage), 关掉标签即清除"
-        >
-          <div className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center">
-            <Input
-              type="password"
-              aria-label="管理密码"
-              placeholder="管理密码(未配置可留空)"
-              value={secureKeyDraft}
-              onChange={(event) => setSecureKeyDraft(event.target.value)}
-            />
-            <Button size="sm" variant="secondary" onClick={saveSecureKey}>
-              保存到本次会话
-            </Button>
-            {secureKeyReady ? (
-              <Badge variant="muted">已设置</Badge>
-            ) : (
-              <Badge variant="accent">未设置</Badge>
-            )}
-          </div>
-        </SettingCard>
-
         <SettingCard title="账号" desc={`共 ${list.length} 个用户`}>
           {users.isLoading ? (
             <p className="py-6 text-center text-sm text-muted-foreground">正在读取用户…</p>

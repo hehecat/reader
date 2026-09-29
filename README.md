@@ -43,7 +43,7 @@ docker compose up -d          # 默认单用户模式, 无需 .env
 ```
 
 打开 `http://<机器IP>:8080` 直接注册/登录。
-> 多用户: `cp .env.example .env` 设 `READER_APP_SECURE=true` 与邀请码/管理密码后 `docker compose up -d`。
+> 多用户: `cp .env.example .env` 设 `READER_APP_SECURE=true` 与邀请码后 `docker compose up -d`。
 > 端口占用: `.env` 设 `READER_PORT=<其他>` 或在环境变量里传。
 
 > 不用 compose 也行:
@@ -56,7 +56,7 @@ docker compose up -d          # 默认单用户模式, 无需 .env
 ### 2. 账号
 
 - **默认单用户模式**: 登录页直接注册/登录即建本地账号, 数据存 `default` 命名空间, 无邀请码
-- 多人共用一台: `.env` 设 `READER_APP_SECURE=true` + `READER_APP_INVITECODE=<邀请码>` + `READER_APP_SECUREKEY=<管理密码>`, 首个注册用户为管理员
+- 多人共用一台: `.env` 设 `READER_APP_SECURE=true` + `READER_APP_INVITECODE=<邀请码>` (首个注册用户为管理员, 管理操作只认管理员登录态)
 
 ### 3. 导入书源(**必做, 否则搜索无结果**)
 
@@ -109,7 +109,7 @@ docker compose up -d          # 默认单用户模式, 无需 .env
 ### 多用户与安全
 
 - 命名空间隔离(书架/书源/进度/缓存按用户)
-- secure 模式: 邀请码注册 + 管理密码; token 鉴权; SSRF 防护开关
+- secure 模式: 邀请码注册; token 鉴权; 管理操作仅限管理员; SSRF 防护开关
 - 验证码/登录墙: 容器内 camoufox(Firefox 内核)按需 spawn 求解(可外置)
 
 ### 前端
@@ -137,7 +137,6 @@ compose 默认挂 `deploy/storage/`(容器内 `/storage/storage`), 内含:
 | `READER_APP_WORKDIR` | 当前目录 | 数据根(其 `storage/` 子目录存库与资产) |
 | `READER_APP_SECURE` | false | 多用户 secure 模式开关 |
 | `READER_APP_INVITECODE` | - | secure 模式注册邀请码 |
-| `READER_APP_SECUREKEY` | - | secure 模式管理密码 |
 | `READER_SERVER_PORT` | 8080 | 容器监听端口(compose 用 `READER_PORT` 映射宿主端口) |
 | `READER_TOC_CACHE_TTL_MS` | 86400000 | 目录缓存 TTL(24h) |
 | `READER_DB_BACKUP` | 1 | 启动前 db 快照开关(0 关) |

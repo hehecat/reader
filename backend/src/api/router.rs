@@ -3311,7 +3311,8 @@ async fn get_user_info(
     Json(ReturnData::ok(serde_json::json!({
         "userInfo": user_info,
         "secure": state.storage.config.secure,
-        "secureKey": !state.storage.config.secure_key.is_empty(),
+        // 管理操作只认管理员登录态(管理密码已废弃), 该字段恒 false 供旧前端兼容
+        "secureKey": false,
         "fonts": fonts,
     })))
 }
@@ -6577,18 +6578,9 @@ async fn clear_inactive_users(
         Err(ret) => return Json(ret),
     };
     let username = user.username;
-    // 管理校验（legacy checkManagerAuth）：secure 模式 secureKey，非 secure 模式仅管理员
+    // 管理校验：只认管理员登录态（管理密码已废弃, 管理员由部署配置指定）
     let body_json = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
-    if config.secure && !config.secure_key.is_empty() {
-        let secure_key = param_of(&params, body_json.as_ref(), "secureKey");
-        if !crate::util::constant_time::ct_eq(&secure_key, &config.secure_key) {
-            return Json(ReturnData {
-                is_success: false,
-                error_msg: "请输入管理密码".to_string(),
-                data: json!("NEED_SECURE_KEY"),
-            });
-        }
-    } else if !user.is_admin {
+    if config.secure && !user.is_admin {
         return Json(ReturnData::err("仅管理员可执行该操作"));
     }
     let inactive_day = params
@@ -6700,7 +6692,7 @@ async fn update_user(
         }
         params.get(key).and_then(|v| v.parse::<i64>().ok())
     };
-    // 最后一名管理员禁止撤销管理员身份（保证 default 系统配置始终可管理）
+    // 最后一名管理员禁止撤销管理员身份/停用（保证系统始终可管理）
     if bool_param("isAdmin") == Some(false) || bool_param("disabled") == Some(true) {
         if let Ok(Some(target)) = state.storage.find_user(&username).await {
             if target.is_admin && state.storage.count_admins().await.unwrap_or(1) <= 1 {
@@ -6903,46 +6895,22 @@ async fn reset_user_password(
     }
 }
 
-/// 管理校验（legacy checkManagerAuth 语义收紧）：
-/// - 多用户（secure）：**身份先行** —— 必须已登录且 `is_admin`；配置了 secureKey 时再校验
-///   管理密码（第二因子）。旧实现只看 secureKey，等于"任何人拿到密码即可管理"，已废弃。
-/// - 单用户（非 secure）：无登录概念 —— 配置了 secureKey 则校验之，否则放行。
+/// 管理校验：只认「已登录的管理员」—— 管理密码（secureKey）第二因子已移除,
+/// 是管理员即可直接改配置。
+/// - 多用户（secure）：必须已登录且 `is_admin`
+/// - 单用户（非 secure）：无登录概念, 放行
 async fn check_manager_auth(
     state: &AppState,
     params: &HashMap<String, String>,
     headers: &HeaderMap,
-    body: Option<&serde_json::Value>,
+    _body: Option<&serde_json::Value>,
 ) -> Result<(), ReturnData> {
-    let config = &state.storage.config;
-    if !config.secure {
-        if config.secure_key.is_empty() {
-            return Ok(());
-        }
-        return check_secure_key(config, params, body);
+    if !state.storage.config.secure {
+        return Ok(());
     }
     let user = resolve_current_user(state, params, headers).await?;
     if !user.is_admin {
         return Err(ReturnData::err("仅管理员可执行该操作"));
-    }
-    if config.secure_key.is_empty() {
-        return Ok(());
-    }
-    check_secure_key(config, params, body)
-}
-
-/// 管理密码（第二因子）校验：不匹配返回 NEED_SECURE_KEY（前端据此弹管理密码输入）
-fn check_secure_key(
-    config: &crate::AppConfig,
-    params: &HashMap<String, String>,
-    body: Option<&serde_json::Value>,
-) -> Result<(), ReturnData> {
-    let secure_key = param_of(params, body, "secureKey");
-    if !crate::util::constant_time::ct_eq(&secure_key, &config.secure_key) {
-        return Err(ReturnData {
-            is_success: false,
-            error_msg: "请输入管理密码".to_string(),
-            data: json!("NEED_SECURE_KEY"),
-        });
     }
     Ok(())
 }
@@ -13654,20 +13622,26 @@ mod tests {
         let mut state = state;
         state.storage.config.secure = true;
         state.storage.config.secure_key = "sk".into();
-        let mk = |name: &str, last: i64| User {
+        // 管理操作只认管理员登录态: 调用者 new 设为管理员
+        let mk = |name: &str, last: i64, admin: bool| User {
             username: name.into(),
             token: "t".into(),
             last_login_at: last,
+            is_admin: admin,
             ..Default::default()
         };
-        state.storage.insert_user(&mk("old", 1000)).await.unwrap();
         state
             .storage
-            .insert_user(&mk("new", now_millis()))
+            .insert_user(&mk("old", 1000, false))
+            .await
+            .unwrap();
+        state
+            .storage
+            .insert_user(&mk("new", now_millis(), true))
             .await
             .unwrap();
 
-        // 缺 secureKey → NEED_SECURE_KEY（需先登录，legacy checkAuth 优先）
+        // 管理员登录态即可清理（管理密码已废弃）
         let body = Bytes::from(r#"{"inactiveDay":1}"#);
         let auth_params: HashMap<String, String> = [("accessToken".into(), "new:t".into())]
             .into_iter()
@@ -13676,27 +13650,10 @@ mod tests {
             AxumState(state.clone()),
             Query(auth_params),
             HeaderMap::new(),
-            Some(body.clone()),
-        )
-        .await;
-        assert!(!ret.0.is_success);
-        assert_eq!(ret.0.data, json!("NEED_SECURE_KEY"));
-
-        // 带 secureKey（登录 accessToken）→ 删除 old，保留 new
-        let params: HashMap<String, String> = [
-            ("accessToken".into(), "new:t".into()),
-            ("secureKey".into(), "sk".into()),
-        ]
-        .into_iter()
-        .collect();
-        let ret = clear_inactive_users(
-            AxumState(state.clone()),
-            Query(params),
-            HeaderMap::new(),
             Some(body),
         )
         .await;
-        assert!(ret.0.is_success, "清理应成功: {}", ret.0.error_msg);
+        assert!(ret.0.is_success, "管理员清理应成功: {}", ret.0.error_msg);
         assert_eq!(ret.0.data["deleted"], json!(["old"]));
         assert_eq!(ret.0.data["count"], 1);
         assert!(state.storage.find_user("old").await.unwrap().is_none());
@@ -14952,7 +14909,7 @@ mod tests {
         assert!(!ret.0.is_success);
         assert_eq!(ret.0.data, json!("NEED_LOGIN"));
 
-        // 已登录但缺 secureKey → NEED_SECURE_KEY
+        // 已登录但管理密码已废弃(管理员直接操作)
         let params: HashMap<String, String> = [("accessToken".into(), "admin:t1".into())]
             .into_iter()
             .collect();
@@ -14963,10 +14920,15 @@ mod tests {
             None,
         )
         .await;
+        // 管理密码已废弃: 不再有 NEED_SECURE_KEY 拦截, 请求直达业务逻辑
         assert!(!ret.0.is_success);
-        assert_eq!(ret.0.data, json!("NEED_SECURE_KEY"));
+        assert_ne!(
+            ret.0.data,
+            json!("NEED_SECURE_KEY"),
+            "不应再要求管理密码"
+        );
 
-        // 错 secureKey → NEED_SECURE_KEY
+        // 错 secureKey 不再被校验
         let params: HashMap<String, String> = [
             ("accessToken".into(), "admin:t1".into()),
             ("secureKey".into(), "wrong".into()),
@@ -14980,7 +14942,12 @@ mod tests {
             None,
         )
         .await;
-        assert_eq!(ret.0.data, json!("NEED_SECURE_KEY"));
+        // 管理密码已废弃: 不再有 NEED_SECURE_KEY 拦截, 请求直达业务逻辑
+        assert_ne!(
+            ret.0.data,
+            json!("NEED_SECURE_KEY"),
+            "不应再要求管理密码"
+        );
 
         // 正确 secureKey → 列表（含启用状态；不含密码字段）
         let params: HashMap<String, String> = [
@@ -15095,7 +15062,7 @@ mod tests {
         assert!(!ret.0.is_success);
         assert_eq!(ret.0.error_msg, "用户不存在");
 
-        // 缺 username → 参数错误；缺 secureKey → NEED_SECURE_KEY
+        // 缺 username → 参数错误；管理密码已废弃(管理员直接操作)
         let body = Bytes::from(r#"{"enableWebdav":true}"#);
         let ret = update_user(
             AxumState(state.clone()),
@@ -15115,7 +15082,12 @@ mod tests {
             Some(body),
         )
         .await;
-        assert_eq!(ret.0.data, json!("NEED_SECURE_KEY"));
+        // 管理密码已废弃: 不再有 NEED_SECURE_KEY 拦截, 请求直达业务逻辑
+        assert_ne!(
+            ret.0.data,
+            json!("NEED_SECURE_KEY"),
+            "不应再要求管理密码"
+        );
 
         cleanup(state, dir).await;
     }
@@ -15197,7 +15169,7 @@ mod tests {
         assert!(!ret.0.is_success);
         assert_eq!(ret.0.error_msg, "用户名已被占用");
 
-        // 缺 secureKey → NEED_SECURE_KEY
+        // 管理密码已废弃(管理员直接操作)
         let no_key: HashMap<String, String> = [("accessToken".into(), "admin:t1".into())]
             .into_iter()
             .collect();
@@ -15208,7 +15180,12 @@ mod tests {
             None,
         )
         .await;
-        assert_eq!(ret.0.data, json!("NEED_SECURE_KEY"));
+        // 管理密码已废弃: 不再有 NEED_SECURE_KEY 拦截, 请求直达业务逻辑
+        assert_ne!(
+            ret.0.data,
+            json!("NEED_SECURE_KEY"),
+            "不应再要求管理密码"
+        );
 
         cleanup(state, dir).await;
     }
@@ -15448,7 +15425,7 @@ mod tests {
         assert!(ret.0.is_success, "deleteUser 应成功: {}", ret.0.error_msg);
         assert!(state.storage.find_user("bob").await.unwrap().is_none());
 
-        // 不存在 → 用户不存在；缺 secureKey → NEED_SECURE_KEY
+        // 不存在 → 用户不存在；管理密码已废弃(管理员直接操作)
         let body = Bytes::from(r#"{"username":"ghost"}"#);
         let ret = delete_user(
             AxumState(state.clone()),
@@ -15468,7 +15445,12 @@ mod tests {
             Some(body),
         )
         .await;
-        assert_eq!(ret.0.data, json!("NEED_SECURE_KEY"));
+        // 管理密码已废弃: 不再有 NEED_SECURE_KEY 拦截, 请求直达业务逻辑
+        assert_ne!(
+            ret.0.data,
+            json!("NEED_SECURE_KEY"),
+            "不应再要求管理密码"
+        );
 
         cleanup(state, dir).await;
     }
@@ -15560,7 +15542,7 @@ mod tests {
             "自己不能被删"
         );
 
-        // 空 usernames → 参数错误；缺 secureKey → NEED_SECURE_KEY
+        // 空 usernames → 参数错误；管理密码已废弃(管理员直接操作)
         let body = Bytes::from(r#"{"usernames":[]}"#);
         let ret = delete_users(
             AxumState(state.clone()),
@@ -15582,7 +15564,12 @@ mod tests {
             Some(body),
         )
         .await;
-        assert_eq!(ret.0.data, json!("NEED_SECURE_KEY"));
+        // 管理密码已废弃: 不再有 NEED_SECURE_KEY 拦截, 请求直达业务逻辑
+        assert_ne!(
+            ret.0.data,
+            json!("NEED_SECURE_KEY"),
+            "不应再要求管理密码"
+        );
 
         cleanup(state, dir).await;
     }
@@ -15655,7 +15642,7 @@ mod tests {
         .into_iter()
         .collect();
 
-        // query：password 参数；不存在 → 用户不存在；缺 secureKey → NEED_SECURE_KEY
+        // query：password 参数；不存在 → 用户不存在；管理密码已废弃(管理员直接操作)
         let mut q = params.clone();
         q.insert("username".into(), "ghost".into());
         q.insert("password".into(), "whatever1".into());
@@ -15672,7 +15659,12 @@ mod tests {
             None,
         )
         .await;
-        assert_eq!(ret.0.data, json!("NEED_SECURE_KEY"));
+        // 管理密码已废弃: 不再有 NEED_SECURE_KEY 拦截, 请求直达业务逻辑
+        assert_ne!(
+            ret.0.data,
+            json!("NEED_SECURE_KEY"),
+            "不应再要求管理密码"
+        );
         // 缺密码 → 参数错误
         let body = Bytes::from(r#"{"username":"alice"}"#);
         let ret = reset_user_password(
