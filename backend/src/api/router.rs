@@ -11883,6 +11883,10 @@ async fn serve_data_file(
     let Some(rel) = uri_path.strip_prefix(prefix).and_then(safe_data_rel_path) else {
         return webdav_status_404();
     };
+    // 归属校验先行：未授权一律 401，不通过 401/404 的差异泄露"某路径是否存在"
+    if !data_file_access_allowed(state, headers, &rel).await {
+        return data_file_unauthorized();
+    }
     let root = state.storage.config.storage_dir().join("data");
     let file = root.join(&rel);
     // 防穿越兜底：规范化后必须仍位于 data 根内（符号链接/盘符等），且必须是普通文件
@@ -11891,10 +11895,6 @@ async fn serve_data_file(
     };
     if !file_abs.starts_with(&root_abs) || !file_abs.is_file() {
         return webdav_status_404();
-    }
-    // 归属校验: 多用户模式下只允许读自己命名空间下的数据文件
-    if !data_file_access_allowed(state, headers, &rel).await {
-        return data_file_unauthorized();
     }
     let bytes = match tokio::fs::read(&file_abs).await {
         Ok(b) => b,
