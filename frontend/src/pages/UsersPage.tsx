@@ -236,23 +236,27 @@ export default function UsersPage() {
     invalidate();
   };
 
+  // 页面容器与站内其它页一致: 居中限宽 + 左右留白
+  const pageClass =
+    "mx-auto flex min-h-full w-full max-w-5xl flex-col px-4 pb-10 pt-5 sm:px-6 md:px-10 md:pt-8";
+
   if (!isAdmin) {
     return (
-      <>
+      <div className={pageClass}>
         <PageIntro eyebrow="SERVER ADMIN" title="用户管理" desc="仅管理员可访问" />
         <EmptyState
           icon={<ShieldCheck aria-hidden />}
           title="需要管理员身份"
           description="当前账号不是管理员, 无法管理用户。请联系服务器管理员。"
         />
-      </>
+      </div>
     );
   }
 
   const list = users.data ?? [];
 
   return (
-    <>
+    <div className={pageClass}>
       <PageIntro
         eyebrow="SERVER ADMIN"
         title="用户管理"
@@ -589,6 +593,6 @@ export default function UsersPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </>
+    </div>
   );
 }
