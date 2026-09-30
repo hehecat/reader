@@ -12,6 +12,10 @@ export const adminUserSchema = z.object({
   enableLocalStore: z.boolean().default(false),
   enableBookSource: z.boolean().default(false),
   enableRssSource: z.boolean().default(false),
+  /** 当前该用户的书源数(后端 GROUP BY 统计; 旧后端不返回时缺失) */
+  bookSourceCount: z.number().optional(),
+  /** 当前该用户的书籍数 */
+  bookCount: z.number().optional(),
   bookSourceLimit: z.number().default(0),
   bookLimit: z.number().default(0),
   lastLoginAt: z.number().default(0),

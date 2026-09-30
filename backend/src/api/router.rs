@@ -6706,7 +6706,11 @@ async fn get_users(
     }
     match state.storage.list_users().await {
         Ok(users) => {
-            let arr: Vec<Value> = users.iter().map(user_admin_json).collect();
+            let (source_counts, book_counts) = namespace_counts(&state.storage).await;
+            let arr: Vec<Value> = users
+                .iter()
+                .map(|u| user_admin_json(u, &source_counts, &book_counts))
+                .collect();
             Json(ReturnData::ok(Value::Array(arr)))
         }
         Err(e) => {
@@ -6717,8 +6721,29 @@ async fn get_users(
 }
 
 /// 用户管理输出 JSON（不含密码/salt/token；camelCase 兼容 legacy）
-fn user_admin_json(user: &User) -> Value {
+/// 各命名空间的当前数量（书源/书籍）: 一次 GROUP BY 拿全, 供用户管理列表显示用量
+async fn namespace_counts(storage: &crate::storage::Storage) -> (HashMap<String, i64>, HashMap<String, i64>) {
+    let source_rows: Vec<(String, i64)> =
+        sqlx::query_as("SELECT user_namespace, COUNT(*) FROM book_sources GROUP BY user_namespace")
+            .fetch_all(&storage.pool)
+            .await
+            .unwrap_or_default();
+    let book_rows: Vec<(String, i64)> =
+        sqlx::query_as("SELECT user_namespace, COUNT(*) FROM books GROUP BY user_namespace")
+            .fetch_all(&storage.pool)
+            .await
+            .unwrap_or_default();
+    (source_rows.into_iter().collect(), book_rows.into_iter().collect())
+}
+
+fn user_admin_json(
+    user: &User,
+    source_counts: &HashMap<String, i64>,
+    book_counts: &HashMap<String, i64>,
+) -> Value {
     json!({
+        "bookSourceCount": source_counts.get(&user.username).copied().unwrap_or(0),
+        "bookCount": book_counts.get(&user.username).copied().unwrap_or(0),
         "username": user.username,
         "enableWebdav": user.enable_webdav,
         "enableLocalStore": user.enable_local_store,
@@ -6904,7 +6929,11 @@ async fn delete_users(
             tracing::info!("deleteUsers：删除 {n} 个用户");
             match state.storage.list_users().await {
                 Ok(users) => {
-                    let arr: Vec<Value> = users.iter().map(user_admin_json).collect();
+                    let (source_counts, book_counts) = namespace_counts(&state.storage).await;
+            let arr: Vec<Value> = users
+                .iter()
+                .map(|u| user_admin_json(u, &source_counts, &book_counts))
+                .collect();
                     Json(ReturnData::ok(Value::Array(arr)))
                 }
                 Err(e) => {

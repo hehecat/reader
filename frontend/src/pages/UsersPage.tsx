@@ -286,7 +286,12 @@ export default function UsersPage() {
                       {PERMISSIONS.filter((p) => user[p.key]).map((p) => p.label).join(" · ") ||
                         "无功能权限"}
                       {" · "}
-                      书源 {user.bookSourceLimit} / 书 {user.bookLimit}
+                      书源{" "}
+                      {user.bookSourceCount !== undefined ? `${String(user.bookSourceCount)}/` : ""}
+                      {user.bookSourceLimit > 0 ? user.bookSourceLimit : "不限"}
+                      {" · 书 "}
+                      {user.bookCount !== undefined ? `${String(user.bookCount)}/` : ""}
+                      {user.bookLimit > 0 ? user.bookLimit : "不限"}
                       {" · "}
                       注册 {formatTime(user.createdAt)} · 上次登录 {formatTime(user.lastLoginAt)}
                     </p>
