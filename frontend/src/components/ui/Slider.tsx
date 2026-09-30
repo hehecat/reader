@@ -21,17 +21,25 @@ export function Slider({
   value,
   defaultValue,
   onValueChange,
+  onValueCommit,
   disabled,
   ...props
 }: SliderProps) {
   const [draft, setDraft] = React.useState<number[] | undefined>(undefined);
-  const current = value ?? draft ?? defaultValue ?? [0];
+  // 顺序必须是 draft 优先: 本组件是受控用法(value 恒有值), 若 value 在前则拖动草稿永远被短路
+  const current = draft ?? value ?? defaultValue ?? [0];
   const format = formatValue ?? ((item: number) => String(item));
   const thumbLabel = typeof label === "string" ? label : undefined;
 
   const handleValueChange = (next: number[]) => {
     setDraft(next);
     onValueChange?.(next);
+  };
+
+  // 松手: 清掉草稿(让位给外部受控值), 并把结果交回调用方
+  const handleValueCommit = (next: number[]) => {
+    setDraft(undefined);
+    onValueCommit?.(next);
   };
 
   return (
@@ -47,9 +55,11 @@ export function Slider({
         </div>
       ) : null}
       <SliderPrimitive.Root
-        value={value}
+        // 受控值必须带上拖动草稿: 否则拖的时候拇指不动, 松手 commit 出来的还是旧值
+        value={current}
         defaultValue={defaultValue}
         onValueChange={handleValueChange}
+        onValueCommit={handleValueCommit}
         disabled={disabled}
         className={cn(
           "relative flex w-full touch-none select-none items-center",
