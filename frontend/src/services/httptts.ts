@@ -32,6 +32,32 @@ export const HTTP_TTS_VOICE_PRESETS = [
   { value: "zh-CN-YunyangNeural", label: "云扬 · 男 · 播报" },
 ] satisfies { value: string; label: string }[];
 
+/**
+ * 中文音色过滤(全站统一口径, 阅读器与设置面板共用):
+ * - edge 的音色 id 带 BCP-47 前缀(`zh-CN-…`), 非 zh 的一律不要;
+ * - kokoro 用 `zf_`/`zm_` 或中文名;
+ * - 火山/阿里/腾讯等引擎 id 多为中文或拼音(无 locale 前缀) → 原样保留,
+ *   避免"一刀切过滤"把它们全滤空(曾因此导致无声)。
+ */
+export function filterChineseVoices<T extends { id: string; name: string }>(
+  engine: string,
+  voices: readonly T[],
+): T[] {
+  if (engine === "edge") {
+    return voices.filter((v) => v.id.startsWith("zh-") || v.name.startsWith("zh-"));
+  }
+  if (engine === "kokoro") {
+    return voices.filter(
+      (v) => v.id.startsWith("zf_") || v.id.startsWith("zm_") || v.name.startsWith("中文"),
+    );
+  }
+  // 其他引擎: 仅剔除明确带非中文 locale 前缀的音色(如 af-ZA- / en-US-)
+  return voices.filter((v) => {
+    const locale = /^([a-z]{2})-/.exec(v.id)?.[1];
+    return locale === undefined || locale === "zh";
+  });
+}
+
 /** query 拼接: 已有 query 用 & 续, 没有就 ? 起头 (与 warp build_http_tts_url 同语义) */
 function appendQuery(url: string, pair: string): string {
   return url.includes("?") ? `${url}&${pair}` : `${url}?${pair}`;

@@ -9,12 +9,14 @@ import {
   TTS_GATEWAY_STATUS_QUERY_KEY,
   fetchGatewayTtsAudioUrl,
   fetchTtsAudioUrl,
+  filterChineseVoices,
   ttsGatewayVoicesQueryKey,
   useTtsGatewayStatus,
   useTtsGatewayVoices,
   type GatewayStatus,
   type GatewayVoice,
 } from "@/services/httptts";
+import { analyzeChapter, assignRoleTypes, mergeAdjacent, voiceForSegment } from "@/lib/ttsRoles";
 import { useSettingsStore, type TtsProvider } from "@/stores/settings-store";
 
 /** 朗读状态: idle = 没在朗读 (顶栏图标据此显示激活态, TtsBar 据此决定是否出现) */
@@ -29,10 +31,14 @@ const INTERRUPT_DELAY_MS = 80;
 /** 没有匹配语音时兜底的语言标签 */
 const FALLBACK_LANG = "zh-CN";
 
-/** 一条待朗读段落: key = ReaderParagraph.key, 与正文 DOM 的 data-para-index 同源 */
+/** 一条待朗读片段: key = ReaderParagraph.key, 与正文 DOM 的 data-para-index 同源 */
 interface SpeechItem {
   key: number;
   text: string;
+  /** 多角色模式: 说话人(空串 = 旁白); 单音色模式不填 */
+  speaker?: string;
+  /** 多角色模式: 该片段使用的音色(角色绑定); 缺省回落全局音色 */
+  voice?: string;
 }
 
 /** 神经音色 (网关/模板) 预取的下一段音频: 播到该段时命中即免等待; 作废时由 promise 结算后补 revoke */
@@ -89,6 +95,9 @@ export interface UseTtsResult {
   /** 读完本章自动接着读下一章 */
   autoNext: boolean;
   setAutoNext: (autoNext: boolean) => void;
+  /** 多角色朗读开关(仅网关/模板音源生效) */
+  multiRole: boolean;
+  setMultiRole: (multiRole: boolean) => void;
   /** 从当前视口首段起读 */
   start: () => void;
   /** 顶栏图标: 没在朗读就起读, 正在朗读就停 */
@@ -220,6 +229,8 @@ export function useTts(options: UseTtsOptions): UseTtsResult {
   const voiceURI = useSettingsStore((state) => state.ttsVoiceURI);
   const setVoiceURI = useSettingsStore((state) => state.setTtsVoiceURI);
   const httpVoice = useSettingsStore((state) => state.ttsHttpVoice);
+  const multiRole = useSettingsStore((state) => state.ttsMultiRole);
+  const setTtsMultiRole = useSettingsStore((state) => state.setTtsMultiRole);
   const setHttpVoice = useSettingsStore((state) => state.setTtsHttpVoice);
   // 模板/网关地址只作「改动即重念当前段」的触发器, 取值走 getState
   const httpUrl = useSettingsStore((state) => state.ttsHttpUrl);
@@ -242,23 +253,49 @@ export function useTts(options: UseTtsOptions): UseTtsResult {
   // 音色列表按引擎只留中文(其余语言用不上): edge 用 zh- 前缀, kokoro 用 zf_/zm_ 或「中文」名;
   // 其他引擎不过滤 (此前一刀切 zh- 把 kokoro 音色全滤空导致无声)
   const gatewayVoicesAll = useTtsGatewayVoices(gatewayUrl, resolvedEngine).data ?? EMPTY_GATEWAY_VOICES;
-  const gatewayVoices = useMemo(() => {
-    if (resolvedEngine === "edge") {
-      return gatewayVoicesAll.filter((v) => v.id.startsWith("zh-") || v.name.startsWith("zh-"));
-    }
-    if (resolvedEngine === "kokoro") {
-      return gatewayVoicesAll.filter(
-        (v) => v.id.startsWith("zf_") || v.id.startsWith("zm_") || v.name.startsWith("中文"),
-      );
-    }
-    return gatewayVoicesAll;
-  }, [gatewayVoicesAll, resolvedEngine]);
+  // 只保留中文音色(与设置面板共用同一过滤口径, 见 filterChineseVoices)
+  const gatewayVoices = useMemo(
+    () => filterChineseVoices(resolvedEngine, gatewayVoicesAll),
+    [gatewayVoicesAll, resolvedEngine],
+  );
   const resolvedEngineName = useMemo(() => {
     if (resolvedEngine === "") {
       return "";
     }
     return gatewayStatus?.engines.find((entry) => entry.id === resolvedEngine)?.name ?? resolvedEngine;
   }, [resolvedEngine, gatewayStatus]);
+
+  /**
+   * 队列构建: 多角色模式(且非系统音源)按说话人分段并绑定音色, 否则沿用段落级单音色队列。
+   * 系统音源由浏览器决定音色, 无法逐段指定 —— 多角色只对网关/模板音源生效。
+   * 新出现的角色自动从当前引擎音色清单分配, 用户已手改的绑定保留。
+   */
+  const buildRoleQueue = useCallback(
+    (source: ReaderParagraph[]): SpeechItem[] => {
+      if (!multiRole || provider === "system") {
+        return buildQueue(source);
+      }
+      const { segments, characters } = analyzeChapter(source);
+      const merged = mergeAdjacent(segments);
+      // 绑定必须经 getState 读、写也走 getState: 若把 roleVoices 放进本回调依赖,
+      // 下面的写入会让回调立刻重建、播放队列被替换 —— 表现就是"朗读永远停在第一句"。
+      const settings = useSettingsStore.getState();
+      const storedTypes = settings.ttsRoleTypes;
+      const roleTypes = assignRoleTypes(characters, storedTypes);
+      // 只在真有新角色时写回(写入走 getState, 不进入本回调依赖, 否则会重建队列打断播放)
+      if (Object.keys(roleTypes).length !== Object.keys(storedTypes).length) {
+        settings.setTtsRoleTypes(roleTypes);
+      }
+      const typeVoices = settings.ttsTypeVoices;
+      return merged.map((segment) => ({
+        key: segment.paragraphKey,
+        text: segment.text,
+        speaker: segment.speaker,
+        voice: voiceForSegment(segment, roleTypes, typeVoices, httpVoice),
+      }));
+    },
+    [multiRole, provider, gatewayVoices, httpVoice],
+  );
 
   const [status, setStatus] = useState<TtsStatus>("idle");
   const [activeKey, setActiveKey] = useState<number | null>(null);
@@ -376,11 +413,12 @@ export function useTts(options: UseTtsOptions): UseTtsResult {
   const fetchSegmentAudio = useCallback(
     (item: SpeechItem): Promise<string> => {
       const { ttsProvider, ttsHttpUrl, ttsHttpVoice, ttsGatewayUrl } = useSettingsStore.getState();
+      // 多角色: 片段自带音色(角色绑定)优先; 单音色模式回落到全局音色
       if (ttsProvider === "template") {
-        return fetchTtsAudioUrl(ttsHttpUrl, item.text, ttsHttpVoice);
+        return fetchTtsAudioUrl(ttsHttpUrl, item.text, item.voice ?? ttsHttpVoice);
       }
       const engine = resolveSynthEngine(ttsProvider);
-      const voice = resolveSynthVoice(engine, ttsHttpVoice);
+      const voice = item.voice ?? resolveSynthVoice(engine, ttsHttpVoice);
       return fetchGatewayTtsAudioUrl(ttsGatewayUrl, item.text, voice, engine);
     },
     [resolveSynthEngine, resolveSynthVoice],
@@ -592,7 +630,7 @@ export function useTts(options: UseTtsOptions): UseTtsResult {
       return;
     }
     const current = optionsRef.current;
-    const queue = buildQueue(current.items);
+    const queue = buildRoleQueue(current.items);
     if (queue.length === 0) {
       toast.info("本章没有可朗读的正文");
       return;
@@ -694,7 +732,7 @@ export function useTts(options: UseTtsOptions): UseTtsResult {
       return;
     }
     chapterRef.current = chapterIndex;
-    const queue = buildQueue(items);
+    const queue = buildRoleQueue(items);
     if (queue.length === 0) {
       stop();
       toast.info("本章没有可朗读的正文");
@@ -732,7 +770,8 @@ export function useTts(options: UseTtsOptions): UseTtsResult {
     }
     node.setAttribute("data-tts-active", "");
     node.classList.add(HIGHLIGHT_CLASS);
-    node.scrollIntoView({ block: "nearest", inline: "nearest" });
+    // smooth: 朗读推进时视口平滑跟随, 避免跨段时"闪现"到新位置
+    node.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
   }, [activeKey, items, containerRef]);
 
   // 稳定引用: 阅读页随滚动逐帧重渲染, 朗读条不该跟着重渲染
@@ -756,6 +795,8 @@ export function useTts(options: UseTtsOptions): UseTtsResult {
       setHttpVoice,
       autoNext,
       setAutoNext,
+      multiRole,
+      setMultiRole: setTtsMultiRole,
       start,
       toggle,
       pause,
@@ -782,6 +823,8 @@ export function useTts(options: UseTtsOptions): UseTtsResult {
       setHttpVoice,
       autoNext,
       setAutoNext,
+      multiRole,
+      setTtsMultiRole,
       start,
       toggle,
       pause,

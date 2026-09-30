@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { ReadingPreferencesCard } from "@/components/settings/ReadingPreferencesCard";
 import { TtsPreferencesCard } from "@/components/settings/TtsPreferencesCard";
+import { TtsRoleVoicesCard } from "@/components/settings/TtsRoleVoicesCard";
 import { WebdavPanel } from "@/components/settings/WebdavPanel";
 import { Button, PageIntro, SettingCard, SettingRow } from "@/components/ui";
 import { usePwaInstall } from "@/hooks/usePwaInstall";
@@ -112,6 +113,8 @@ export default function SettingsPage() {
             ) : null}
           </SettingCard>
           <InstallCard />
+          {/* 右列末卡: 朗读与音色的下钻配置 */}
+          <TtsRoleVoicesCard />
         </div>
       </div>
     </div>

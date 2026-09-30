@@ -220,6 +220,16 @@ export const TtsBar = React.memo(function TtsBar({ tts }: TtsBarProps) {
           </Tooltip>
         )}
 
+        {/* 多角色: 仅网关/模板音源生效(系统音源由浏览器决定音色) */}
+        <label className="flex flex-none cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+          <Switch
+            checked={tts.multiRole}
+            onCheckedChange={tts.setMultiRole}
+            aria-label="角色朗读"
+          />
+          角色朗读
+        </label>
+
         {isGateway ? (
           <div className="flex min-w-0 flex-none items-center gap-1.5">
             {/* 网关音色: 引擎默认 + /voices 清单 + 自定义… (回显清单外音色名) */}

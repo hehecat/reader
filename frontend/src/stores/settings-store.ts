@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { DEFAULT_TYPE_VOICES } from "@/lib/ttsRoles";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 export type ThemeMode = "light" | "dark" | "sepia" | "green" | "system";
@@ -84,6 +85,15 @@ export interface SettingsState {
   setTtsHttpUrl: (ttsHttpUrl: string) => void;
   setTtsHttpVoice: (ttsHttpVoice: string) => void;
   setTtsAutoNext: (ttsAutoNext: boolean) => void;
+  /** 多角色朗读(仅网关/模板音源生效): 按说话人自动切换音色 */
+  ttsMultiRole: boolean;
+  /** 角色 → 角色类型(youngMale 等); 新角色自动归类, 可手改 */
+  ttsRoleTypes: Record<string, string>;
+  /** 角色类型 → 音色 id; 用户配一次即可, 不必等识别出角色 */
+  ttsTypeVoices: Record<string, string>;
+  setTtsMultiRole: (ttsMultiRole: boolean) => void;
+  setTtsRoleTypes: (ttsRoleTypes: Record<string, string>) => void;
+  setTtsTypeVoices: (ttsTypeVoices: Record<string, string>) => void;
   setPreheatOnChapterEnd: (preheatOnChapterEnd: boolean) => void;
   setPreheatOnAdd: (preheatOnAdd: boolean) => void;
   setSearchTimeout: (searchTimeout: number) => void;
@@ -111,6 +121,9 @@ export const defaultSettings: SettingsData = {
   ttsHttpUrl: EDGE_TTS_LOCAL_TEMPLATE,
   ttsHttpVoice: "zh-CN-YunxiNeural",
   ttsAutoNext: true,
+  ttsMultiRole: false,
+  ttsRoleTypes: {},
+  ttsTypeVoices: { ...DEFAULT_TYPE_VOICES },
   preheatOnChapterEnd: false,
   preheatOnAdd: true,
   searchTimeout: 15,
@@ -202,6 +215,18 @@ export const useSettingsStore = create<SettingsState>()(
 
       setTtsAutoNext: (ttsAutoNext) => {
         set({ ttsAutoNext });
+      },
+
+      setTtsMultiRole: (ttsMultiRole) => {
+        set({ ttsMultiRole });
+      },
+
+      setTtsRoleTypes: (ttsRoleTypes) => {
+        set({ ttsRoleTypes });
+      },
+
+      setTtsTypeVoices: (ttsTypeVoices) => {
+        set({ ttsTypeVoices });
       },
 
       setPreheatOnChapterEnd: (preheatOnChapterEnd) => {
