@@ -80,6 +80,15 @@ pub fn dict_dir() -> PathBuf {
 /// 在线兜底缓存 TTL(30 天): 首次联网查询后离线也能命中
 const ONLINE_TTL_MS: i64 = 30 * 24 * 3600 * 1000;
 
+/// 在线解析器版本: 解析逻辑变更时 +1, 旧缓存自动失效(避免旧解析结果压住新字段)
+const ONLINE_VER: u32 = 2;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OnlineCache {
+    ver: u32,
+    entries: Vec<DictEntry>,
+}
+
 /// 在线兜底开关(默认开; READER_DICT_ONLINE=0 纯离线)
 fn online_enabled() -> bool {
     std::env::var("READER_DICT_ONLINE")
@@ -540,8 +549,10 @@ async fn lookup_online(pool: &SqlitePool, word: &str) -> Vec<DictEntry> {
             .flatten();
     if let Some((payload, updated)) = cached {
         if now - updated <= ONLINE_TTL_MS {
-            if let Ok(entries) = serde_json::from_str::<Vec<DictEntry>>(payload.as_str()) {
-                return entries;
+            if let Ok(blob) = serde_json::from_str::<OnlineCache>(payload.as_str()) {
+                if blob.ver == ONLINE_VER {
+                    return blob.entries;
+                }
             }
         }
     }
@@ -660,7 +671,8 @@ async fn lookup_online(pool: &SqlitePool, word: &str) -> Vec<DictEntry> {
         entries.push(e);
     }
     if !entries.is_empty() {
-        if let Ok(payload) = serde_json::to_string(&entries) {
+        let blob = OnlineCache { ver: ONLINE_VER, entries: entries.clone() };
+        if let Ok(payload) = serde_json::to_string(&blob) {
             let _ = sqlx::query(
                 "INSERT OR REPLACE INTO online(word, payload, updated_at) VALUES (?1, ?2, ?3)",
             )
