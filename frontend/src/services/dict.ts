@@ -21,7 +21,7 @@ export const dictResultSchema = z.object({
 export type DictEntry = z.infer<typeof dictEntrySchema>;
 export type DictResult = z.infer<typeof dictResultSchema>;
 
-/** 离线词典查询(英汉/汉语); 首次启动导入期返回 building, 由调用方轮询 */
+/** 词典查询(离线优先, 未命中在线兜底); 首次启动导入期返回 building, 由调用方轮询 */
 export async function dictLookup(
   word: string,
   config?: ApiRequestConfig,

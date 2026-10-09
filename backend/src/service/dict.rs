@@ -406,35 +406,41 @@ pub async fn lookup(storage_dir: &Path, word: &str) -> Result<LookupResult> {
                 source: "新华字典".to_string(),
             });
         }
-        // 前缀兜底: 中文选段(未整词命中)取最长命中前缀
-        if entries.is_empty() {
-            let chars: Vec<char> = query.chars().collect();
-            for len in (2..=chars.len().min(6)).rev() {
-                let prefix: String = chars[..len].iter().collect();
-                let rows: Vec<(String, String, Option<String>, String)> =
-                    sqlx::query_as("SELECT word, kind, pinyin, explanation FROM zh WHERE word = ?1")
-                        .bind(&prefix)
-                        .fetch_all(&pool)
-                        .await?;
-                if !rows.is_empty() {
-                    for (w, kind, pinyin, explanation) in rows {
-                        entries.push(DictEntry {
-                            kind: if kind == "idiom" { "idiom".to_string() } else { "word".to_string() },
-                            word: w,
-                            phonetic: None,
-                            pinyin: pinyin.filter(|p| !p.trim().is_empty()),
-                            body: Some(explanation),
-                            source: "新华字典".to_string(),
-                        });
-                    }
-                    break;
-                }
-            }
-        }
     }
     // 在线兜底: 本地未命中 → 有道(jsonapi 免密钥), 结果缓存 30 天
     if entries.is_empty() && online_enabled() {
         entries = lookup_online(&pool, query).await;
+    }
+    // 前缀兜底(最后手段): 中文长选段未命中时取最长命中前缀, 避免误当前缀词的释义压过在线结果
+    if entries.is_empty() && !is_english(query) {
+        let chars: Vec<char> = query.chars().collect();
+        for len in (2..=chars.len().min(6)).rev() {
+            let prefix: String = chars[..len].iter().collect();
+            let rows: Vec<(String, String, Option<String>, String)> =
+                sqlx::query_as("SELECT word, kind, pinyin, explanation FROM zh WHERE word = ?1")
+                    .bind(&prefix)
+                    .fetch_all(&pool)
+                    .await?;
+            if !rows.is_empty() {
+                for (w, kind, pinyin, explanation) in rows {
+                    entries.push(DictEntry {
+                        kind: if kind == "idiom" {
+                            "idiom".to_string()
+                        } else if w.chars().count() == 1 {
+                            "char".to_string()
+                        } else {
+                            "word".to_string()
+                        },
+                        word: w,
+                        phonetic: None,
+                        pinyin: pinyin.filter(|p| !p.trim().is_empty()),
+                        body: Some(explanation),
+                        source: "新华字典(前缀)".to_string(),
+                    });
+                }
+                break;
+            }
+        }
     }
     Ok(LookupResult { status: DictStatus::Ok, entries })
 }

@@ -562,7 +562,7 @@ export function SelectionToolbar({ containerRef, bookUrl, chapterIndex }: Select
         <DialogContent width="sm">
           <DialogHeader>
             <DialogTitle className="break-all">{dictState?.word ?? ""}</DialogTitle>
-            <DialogDescription>离线词典(英汉 ECDICT / 汉语新华字典)</DialogDescription>
+            <DialogDescription>离线词典优先(ECDICT / 新华字典), 未命中自动查在线</DialogDescription>
           </DialogHeader>
           <div className="max-h-80 overflow-y-auto px-4 pb-2 text-sm md:px-5">
             {dictState?.loading ? (
