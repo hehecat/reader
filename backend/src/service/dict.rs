@@ -496,23 +496,32 @@ fn node_text(v: &serde_json::Value) -> String {
     }
 }
 
-/// 提取 [{"tr":{"l":{"i":[...]}}}] 形态的释义行
+/// 提取 [{"tr":[{"l":{"i":[...]}}]}] 形态的释义行(兼容 tr 为对象的老形态)
 fn trs_lines(word_obj: &serde_json::Value) -> Vec<String> {
     let mut out = Vec::new();
     let Some(trs) = word_obj.get("trs").and_then(|v| v.as_array()) else {
         return out;
     };
-    for tr in trs {
-        let Some(items) = tr.get("tr").and_then(|t| t.get("l")).and_then(|l| l.get("i")) else {
+    for item in trs {
+        let Some(tr) = item.get("tr") else {
             continue;
         };
-        let line: String = items
-            .as_array()
-            .map(|arr| arr.iter().map(node_text).collect::<Vec<_>>().join(""))
-            .unwrap_or_default();
-        let line = line.trim().to_string();
-        if !line.is_empty() {
-            out.push(line);
+        let list: Vec<&serde_json::Value> = match tr {
+            serde_json::Value::Array(arr) => arr.iter().collect(),
+            other => vec![other],
+        };
+        for t in list {
+            let Some(items) = t.get("l").and_then(|l| l.get("i")) else {
+                continue;
+            };
+            let line: String = items
+                .as_array()
+                .map(|arr| arr.iter().map(node_text).collect::<Vec<_>>().join(""))
+                .unwrap_or_default();
+            let line = line.trim().to_string();
+            if !line.is_empty() {
+                out.push(line);
+            }
         }
     }
     out
@@ -574,12 +583,15 @@ async fn lookup_online(pool: &SqlitePool, word: &str) -> Vec<DictEntry> {
                 kind: "online".to_string(),
                 word: word.to_string(),
                 phonetic,
-                pinyin: None,
+                pinyin: simple_pinyin(&json),
                 body: Some(lines.join("
 ")),
                 source: "有道词典".to_string(),
             });
         }
+    }
+    if let Some(e) = newhh_entry(&json, word) {
+        entries.push(e);
     }
     // 百科摘要
     if let Some(summary) = json
@@ -641,6 +653,12 @@ async fn lookup_online(pool: &SqlitePool, word: &str) -> Vec<DictEntry> {
             });
         }
     }
+    if let Some(e) = wiki_entry(&json, word) {
+        entries.push(e);
+    }
+    if let Some(e) = sents_entry(&json, word) {
+        entries.push(e);
+    }
     if !entries.is_empty() {
         if let Ok(payload) = serde_json::to_string(&entries) {
             let _ = sqlx::query(
@@ -658,6 +676,137 @@ async fn lookup_online(pool: &SqlitePool, word: &str) -> Vec<DictEntry> {
 
 fn now_millis() -> i64 {
     chrono::Utc::now().timestamp_millis()
+}
+
+/// 拼音: simple.word[0].phone (中文) / usphone|ukphone (英文)
+fn simple_pinyin(json: &serde_json::Value) -> Option<String> {
+    json.get("simple")
+        .and_then(|v| v.get("word"))
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .and_then(|w| {
+            w.get("phone")
+                .or_else(|| w.get("usphone"))
+                .or_else(|| w.get("ukphone"))
+                .and_then(|v| v.as_str())
+        })
+        .map(str::to_string)
+        .filter(|s| !s.trim().is_empty())
+}
+
+/// 《现代汉语规范词典》释义(newhh): 专名/外来词的权威中文解释
+fn newhh_entry(json: &serde_json::Value, word: &str) -> Option<DictEntry> {
+    let list = json.get("newhh")?.get("dataList")?.as_array()?;
+    let mut lines = Vec::new();
+    let mut pinyin = None;
+    for item in list {
+        pinyin = pinyin.or_else(|| {
+            item.get("pinyin")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .filter(|s| !s.trim().is_empty())
+        });
+        let Some(senses) = item.get("sense").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for sense in senses {
+            let cat = sense.get("cat").and_then(|v| v.as_str()).unwrap_or("");
+            let defs: Vec<String> = sense
+                .get("def")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|d| d.as_str()).map(str::to_string).collect())
+                .unwrap_or_default();
+            for d in defs {
+                let d = d.trim();
+                if d.is_empty() {
+                    continue;
+                }
+                lines.push(if cat.is_empty() { d.to_string() } else { format!("【{cat}】{d}") });
+            }
+        }
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    let src = json
+        .get("newhh")
+        .and_then(|v| v.get("source"))
+        .and_then(|s| s.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("现代汉语规范词典");
+    let src = src.trim_matches(|c| c == '《' || c == '》').to_string();
+    Some(DictEntry {
+        kind: "newhh".to_string(),
+        word: word.to_string(),
+        phonetic: None,
+        pinyin,
+        body: Some(lines.join(
+            "
+",
+        )),
+        source: src,
+    })
+}
+
+/// 维基百科摘要(wikipedia_digest)
+fn wiki_entry(json: &serde_json::Value, word: &str) -> Option<DictEntry> {
+    let summary = json
+        .get("wikipedia_digest")?
+        .get("summarys")?
+        .as_array()?
+        .first()?
+        .get("summary")?
+        .as_str()?
+        .trim()
+        .to_string();
+    if summary.is_empty() {
+        return None;
+    }
+    Some(DictEntry {
+        kind: "wiki".to_string(),
+        word: word.to_string(),
+        phonetic: None,
+        pinyin: None,
+        body: Some(summary),
+        source: "维基百科".to_string(),
+    })
+}
+
+/// 双语例句(blng_sents_part, 取前 2 条)
+fn sents_entry(json: &serde_json::Value, word: &str) -> Option<DictEntry> {
+    let pairs = json.get("blng_sents_part")?.get("sentence-pair")?.as_array()?;
+    let mut lines = Vec::new();
+    for p in pairs.iter().take(2) {
+        let zh = p.get("sentence").and_then(|v| v.as_str()).unwrap_or("").trim();
+        if zh.is_empty() {
+            continue;
+        }
+        let en = p
+            .get("sentence-translation")
+            .or_else(|| p.get("sentence-eng"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        lines.push(if en.is_empty() {
+            zh.to_string()
+        } else {
+            format!("{zh}\n{en}")
+        });
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    Some(DictEntry {
+        kind: "sents".to_string(),
+        word: word.to_string(),
+        phonetic: None,
+        pinyin: None,
+        body: Some(lines.join(
+            "
+",
+        )),
+        source: "例句".to_string(),
+    })
 }
 
 /// 极简 URL 编码(仅词典查询词片, 避免引入额外依赖)
