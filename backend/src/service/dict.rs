@@ -98,8 +98,21 @@ fn raw_files(dir: &Path) -> Vec<&'static str> {
 pub fn spawn_build_if_needed(storage_dir: &Path) {
     let dir = dict_dir();
     if raw_files(&dir).is_empty() {
-        tracing::info!("词典数据未安装({} 无数据文件), 选中查词不可用", dir.display());
-        STATE.lock().unavailable = true;
+        if online_enabled() {
+            // 无本地数据但允许在线: 仍建空库(仅 online 缓存表), 查词走在线兜底
+            tracing::info!("未安装本地词典数据, 仅在线兜底(有道)可用");
+            let db_path = storage_dir.join("dict.sqlite");
+            if !db_path.is_file() {
+                let dir_owned = dict_dir();
+                let db_owned = db_path.clone();
+                std::thread::spawn(move || {
+                    let _ = build_dict(&dir_owned, &db_owned);
+                });
+            }
+        } else {
+            tracing::info!("词典数据未安装({} 无数据文件), 选中查词不可用", dir.display());
+            STATE.lock().unavailable = true;
+        }
         return;
     }
     let db_path = storage_dir.join("dict.sqlite");
