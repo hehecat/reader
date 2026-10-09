@@ -8,6 +8,9 @@
 //!
 //! 首次使用时把原始文件导入 {workdir}/storage/dict.sqlite(持久化), 之后按词精确查询;
 //! 导入在启动后台任务里做, 查询遇到未就绪返回 status="building" 由前端轮询。
+//!
+//! 本地未命中时的在线兜底(READER_DICT_ONLINE=0 关闭): 有道词典 jsonapi(免密钥),
+//! 结果写入 online 表缓存 30 天(离线/限流时可继续命中); 网络失败静默降级为「未找到」。
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -16,14 +19,14 @@ use std::sync::LazyLock;
 use parking_lot::Mutex;
 
 use anyhow::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DictEntry {
-    /// en | char | word | idiom
-    pub kind: &'static str,
+    /// en | char | word | idiom | online | baike | web
+    pub kind: String,
     pub word: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub phonetic: Option<String>,
@@ -31,10 +34,10 @@ pub struct DictEntry {
     pub pinyin: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
-    pub source: &'static str,
+    pub source: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DictStatus {
     /// 可用
@@ -74,6 +77,16 @@ pub fn dict_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/app/dict"))
 }
 
+/// 在线兜底缓存 TTL(30 天): 首次联网查询后离线也能命中
+const ONLINE_TTL_MS: i64 = 30 * 24 * 3600 * 1000;
+
+/// 在线兜底开关(默认开; READER_DICT_ONLINE=0 纯离线)
+fn online_enabled() -> bool {
+    std::env::var("READER_DICT_ONLINE")
+        .map(|v| v.trim() != "0" && !v.trim().eq_ignore_ascii_case("false"))
+        .unwrap_or(true)
+}
+
 fn raw_files(dir: &Path) -> Vec<&'static str> {
     ["ecdict.csv", "word.json", "ci.json", "idiom.json"]
         .into_iter()
@@ -103,6 +116,7 @@ pub fn spawn_build_if_needed(storage_dir: &Path) {
             let mut st = STATE.lock();
             st.building = false;
             st.unavailable = true;
+            // 失败: 后续查询走 unavailable 提示, 不再报 building
         }
     });
 }
@@ -124,6 +138,11 @@ fn build_dict(dir: &Path, db_path: &Path) -> Result<()> {
         .await?;
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS zh(word TEXT PRIMARY KEY, kind TEXT, pinyin TEXT, explanation TEXT)",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS online(word TEXT PRIMARY KEY, payload TEXT, updated_at INTEGER)",
         )
         .execute(&pool)
         .await?;
@@ -230,7 +249,8 @@ fn build_dict(dir: &Path, db_path: &Path) -> Result<()> {
         Ok::<(), anyhow::Error>(())
     })?;
     tracing::info!("词典库构建完成({}ms): {}", t0.elapsed().as_millis(), db_path.display());
-    let _ = std::fs::metadata(db_path);
+    // 复位 building: 之后查询走惰性开库路径(否则会一直返回 building)
+    STATE.lock().building = false;
     Ok(())
 }
 
@@ -318,13 +338,37 @@ pub async fn lookup(storage_dir: &Path, word: &str) -> Result<LookupResult> {
         for (w, phonetic, translation, definition) in rows {
             let body = translation.clone().filter(|t| !t.trim().is_empty()).or(definition);
             entries.push(DictEntry {
-                kind: "en",
+                kind: "en".to_string(),
                 word: w,
                 phonetic: phonetic.filter(|p| !p.trim().is_empty()),
                 pinyin: None,
                 body: body.filter(|b| !b.trim().is_empty()),
-                source: "ECDICT",
+                source: "ECDICT".to_string(),
             });
+        }
+    }
+    // 英文词形回退: running→run / boxes→box / played→play
+    if entries.is_empty() && is_english(query) {
+        for cand in lemma_candidates(&query.to_lowercase()) {
+            let rows: Vec<(String, Option<String>, Option<String>, Option<String>)> =
+                sqlx::query_as("SELECT word, phonetic, translation, definition FROM en WHERE word = ?1")
+                    .bind(&cand)
+                    .fetch_all(&pool)
+                    .await?;
+            if !rows.is_empty() {
+                for (w, phonetic, translation, definition) in rows {
+                    let body = translation.filter(|t| !t.trim().is_empty()).or(definition);
+                    entries.push(DictEntry {
+                        kind: "en".to_string(),
+                        word: w,
+                        phonetic: phonetic.filter(|p| !p.trim().is_empty()),
+                        pinyin: None,
+                        body: body.filter(|b| !b.trim().is_empty()),
+                        source: "ECDICT(词形回退)".to_string(),
+                    });
+                }
+                break;
+            }
         }
     }
     if entries.is_empty() {
@@ -335,12 +379,18 @@ pub async fn lookup(storage_dir: &Path, word: &str) -> Result<LookupResult> {
                 .await?;
         for (w, kind, pinyin, explanation) in rows {
             entries.push(DictEntry {
-                kind: if kind == "idiom" { "idiom" } else if w.chars().count() == 1 { "char" } else { "word" },
+                kind: if kind == "idiom" {
+                    "idiom".to_string()
+                } else if w.chars().count() == 1 {
+                    "char".to_string()
+                } else {
+                    "word".to_string()
+                },
                 word: w,
                 phonetic: None,
                 pinyin: pinyin.filter(|p| !p.trim().is_empty()),
                 body: Some(explanation),
-                source: "新华字典",
+                source: "新华字典".to_string(),
             });
         }
         // 前缀兜底: 中文选段(未整词命中)取最长命中前缀
@@ -356,12 +406,12 @@ pub async fn lookup(storage_dir: &Path, word: &str) -> Result<LookupResult> {
                 if !rows.is_empty() {
                     for (w, kind, pinyin, explanation) in rows {
                         entries.push(DictEntry {
-                            kind: if kind == "idiom" { "idiom" } else { "word" },
+                            kind: if kind == "idiom" { "idiom".to_string() } else { "word".to_string() },
                             word: w,
                             phonetic: None,
                             pinyin: pinyin.filter(|p| !p.trim().is_empty()),
                             body: Some(explanation),
-                            source: "新华字典",
+                            source: "新华字典".to_string(),
                         });
                     }
                     break;
@@ -369,5 +419,239 @@ pub async fn lookup(storage_dir: &Path, word: &str) -> Result<LookupResult> {
             }
         }
     }
+    // 在线兜底: 本地未命中 → 有道(jsonapi 免密钥), 结果缓存 30 天
+    if entries.is_empty() && online_enabled() {
+        entries = lookup_online(&pool, query).await;
+    }
     Ok(LookupResult { status: DictStatus::Ok, entries })
+}
+
+/// 英文词形剥离候选(粗粒度, 覆盖常见屈折)
+fn lemma_candidates(word: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let w = word.trim();
+    if w.len() < 4 {
+        return out;
+    }
+    if let Some(base) = w.strip_suffix("ies") {
+        out.push(format!("{base}y"));
+    }
+    if let Some(base) = w.strip_suffix("es") {
+        out.push(base.to_string());
+    }
+    if let Some(base) = w.strip_suffix('s') {
+        out.push(base.to_string());
+    }
+    if let Some(base) = w.strip_suffix("ing") {
+        out.push(base.to_string());
+        out.push(format!("{base}e"));
+        if base.len() > 2 {
+            let mut doubled = base.to_string();
+            let last = doubled.pop().unwrap();
+            if doubled.ends_with(last) {
+                out.push(doubled);
+            } else {
+                out.push(format!("{base}{last}"));
+            }
+        }
+    }
+    if let Some(base) = w.strip_suffix("ed") {
+        out.push(base.to_string());
+        out.push(format!("{base}e"));
+    }
+    out.retain(|c| c.len() >= 2 && c != w);
+    out.dedup();
+    out
+}
+
+/// 混合节点取文本: 字符串 或 {"#text": "..."} (有道 jsonapi 的 l.i 混排)
+fn node_text(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Object(o) => o
+            .get("#text")
+            .and_then(|t| t.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
+/// 提取 [{"tr":{"l":{"i":[...]}}}] 形态的释义行
+fn trs_lines(word_obj: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(trs) = word_obj.get("trs").and_then(|v| v.as_array()) else {
+        return out;
+    };
+    for tr in trs {
+        let Some(items) = tr.get("tr").and_then(|t| t.get("l")).and_then(|l| l.get("i")) else {
+            continue;
+        };
+        let line: String = items
+            .as_array()
+            .map(|arr| arr.iter().map(node_text).collect::<Vec<_>>().join(""))
+            .unwrap_or_default();
+        let line = line.trim().to_string();
+        if !line.is_empty() {
+            out.push(line);
+        }
+    }
+    out
+}
+
+/// 在线查询(有道 jsonapi): ec/ce 释义 + baike 百科 + web_trans 网络释义; 结果缓存 30 天
+async fn lookup_online(pool: &SqlitePool, word: &str) -> Vec<DictEntry> {
+    let now = now_millis();
+    // 缓存命中(30 天内)
+    let cached: Option<(String, i64)> =
+        sqlx::query_as("SELECT payload, updated_at FROM online WHERE word = ?1")
+            .bind(word)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+    if let Some((payload, updated)) = cached {
+        if now - updated <= ONLINE_TTL_MS {
+            if let Ok(entries) = serde_json::from_str::<Vec<DictEntry>>(payload.as_str()) {
+                return entries;
+            }
+        }
+    }
+    let url = format!("https://dict.youdao.com/jsonapi?q={}", urlencode(word));
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .user_agent("Mozilla/5.0 (ReaderDict)")
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let Ok(resp) = client.get(&url).send().await else {
+        return Vec::new();
+    };
+    let Ok(json) = resp.json::<serde_json::Value>().await else {
+        return Vec::new();
+    };
+    let mut entries = Vec::new();
+    // 英汉 / 中英 释义
+    for key in ["ec", "ce"] {
+        let Some(words) = json.get(key).and_then(|v| v.get("word")).and_then(|v| v.as_array()) else {
+            continue;
+        };
+        let mut lines = Vec::new();
+        let mut phonetic = None;
+        for w in words {
+            phonetic = phonetic.or_else(|| {
+                w.get("usphone")
+                    .or_else(|| w.get("ukphone"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+                    .filter(|s| !s.trim().is_empty())
+            });
+            lines.extend(trs_lines(w));
+        }
+        if !lines.is_empty() {
+            entries.push(DictEntry {
+                kind: "online".to_string(),
+                word: word.to_string(),
+                phonetic,
+                pinyin: None,
+                body: Some(lines.join("
+")),
+                source: "有道词典".to_string(),
+            });
+        }
+    }
+    // 百科摘要
+    if let Some(summary) = json
+        .get("baike")
+        .and_then(|v| v.get("summarys"))
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|s| s.get("summary"))
+        .and_then(|v| v.as_str())
+    {
+        let summary = summary.trim();
+        if !summary.is_empty() {
+            let src = json
+                .get("baike")
+                .and_then(|v| v.get("source"))
+                .and_then(|s| s.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("百科");
+            entries.push(DictEntry {
+                kind: "baike".to_string(),
+                word: word.to_string(),
+                phonetic: None,
+                pinyin: None,
+                body: Some(summary.to_string()),
+                source: if src.contains("百度") { "百度百科".to_string() } else { "百科".to_string() },
+            });
+        }
+    }
+    // 网络释义(取前 3 条)
+    if let Some(trans) = json
+        .get("web_trans")
+        .and_then(|v| v.get("web-translation"))
+        .and_then(|v| v.as_array())
+    {
+        let mut lines = Vec::new();
+        for item in trans.iter().take(3) {
+            let Some(vals) = item.get("trans").and_then(|v| v.as_array()) else {
+                continue;
+            };
+            let joined = vals
+                .iter()
+                .filter_map(|t| t.get("value").and_then(|v| v.as_str()))
+                .collect::<Vec<_>>()
+                .join("；");
+            let key = item.get("key").and_then(|v| v.as_str()).unwrap_or("");
+            if !joined.is_empty() {
+                lines.push(if key.is_empty() { joined } else { format!("{key}: {joined}") });
+            }
+        }
+        if !lines.is_empty() {
+            entries.push(DictEntry {
+                kind: "web".to_string(),
+                word: word.to_string(),
+                phonetic: None,
+                pinyin: None,
+                body: Some(lines.join("
+")),
+                source: "有道网络释义".to_string(),
+            });
+        }
+    }
+    if !entries.is_empty() {
+        if let Ok(payload) = serde_json::to_string(&entries) {
+            let _ = sqlx::query(
+                "INSERT OR REPLACE INTO online(word, payload, updated_at) VALUES (?1, ?2, ?3)",
+            )
+            .bind(word)
+            .bind(payload)
+            .bind(now)
+            .execute(pool)
+            .await;
+        }
+    }
+    entries
+}
+
+fn now_millis() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+/// 极简 URL 编码(仅词典查询词片, 避免引入额外依赖)
+fn urlencode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() * 3);
+    for byte in input.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char);
+            }
+            b' ' => out.push_str("%20"),
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }

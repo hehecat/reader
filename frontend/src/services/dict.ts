@@ -36,4 +36,7 @@ export const DICT_KIND_LABEL: Record<string, string> = {
   char: "汉字",
   word: "词语",
   idiom: "成语",
+  online: "在线",
+  baike: "百科",
+  web: "网络",
 };

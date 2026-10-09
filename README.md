@@ -144,6 +144,7 @@ compose 默认挂 `deploy/storage/`(容器内 `/storage/storage`), 内含:
 | `READER_AUTO_BACKUP_HOUR` | 3 | 每日 WebDAV zip 备份时刻(0-23) |
 | `READER_HTTP_RETRIES` | 2 | 搜索/抓取单源重试次数(compose 默认 1, 死源排空更快) |
 | `SSRF_ALLOW_PRIVATE` | false | 允许抓内网地址(本地书同步/内网 TTS 需要) |
+| `READER_DICT_ONLINE` | 1 | 词典在线兜底开关(本地未命中时有道查询, 缓存 30 天) |
 | `READER_DICT_DIR` | /app/dict | 离线词典原始数据目录(ecdict.csv / word.json / ci.json / idiom.json) |
 | `READER_CAMOUFOX_URL` | - | 外置 camoufox 服务地址; 缺省容器内自 spawn |
 | `READER_BROWSER_FIRST` | 1 | 抓取优先经浏览器反检测; 0 恢复直连优先 |
@@ -189,9 +190,11 @@ python3 tts-gateway.py        # 默认 :9912, 配置 ~/.local/share/tts-gateway-
 - 前端「设置 → 阅读偏好 → TTS」网关地址填 `http://<运行网关的机器IP>:9912`(无反代时直连); 若配了反代也可留空走同源 `/tts-gateway`
 - 不装网关: 朗读自动降级为浏览器系统语音
 
-### 离线词典(选中查词)
+### 词典(选中查词)
 
-镜像默认内置(构建期下载 ECDICT 英汉 + 新华字典字词/成语, MIT):
+镜像默认内置离线词典(构建期下载 ECDICT 英汉 + 新华字典字词/成语, MIT),
+本地未命中时自动走**在线兜底**(有道 jsonapi 免密钥: 释义/百科/网络释义), 结果缓存 30 天;
+`READER_DICT_ONLINE=0` 可关成纯离线:
 
 - 数据目录: 镜像内 `/app/dict`(可用 `READER_DICT_DIR` 覆盖挂载自己的数据)
 - 首次启动后台导入为 `{数据目录}/dict.sqlite`(索引库, 之后查询毫秒级); 导入期间查词返回「查询中」自动轮询
