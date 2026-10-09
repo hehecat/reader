@@ -39,8 +39,8 @@ const COLOR_LABEL: Record<AnnotationColor, string> = {
   blue: "蓝色",
 };
 
-/** 工具条半宽估值: 用来把弹层夹在视口内 */
-const TOOLBAR_HALF_WIDTH = 130;
+/** 工具条半宽估值: 用来把弹层夹在视口内(8 按钮 ≈150px) */
+const TOOLBAR_HALF_WIDTH = 152;
 /** 选区顶部离视口不足该值时, 工具条改放选区下方 */
 const FLIP_BELOW_TOP = 110;
 
