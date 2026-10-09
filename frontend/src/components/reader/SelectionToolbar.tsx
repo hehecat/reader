@@ -1,9 +1,10 @@
-import { Sparkles, StickyNote, Trash2, Underline, X } from "lucide-react";
+import { BookA, Sparkles, StickyNote, Trash2, Underline, X } from "lucide-react";
 import * as React from "react";
 
 import { AddPurifyDialog } from "@/components/reader/AddPurifyDialog";
 import { ANNOTATION_COLOR_HEX, paragraphOffsetOf } from "@/components/reader/annotation-marks";
 import {
+  Badge,
   Button,
   Dialog,
   DialogClose,
@@ -12,9 +13,11 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  Spinner,
   Textarea,
   cn,
 } from "@/components/ui";
+import { DICT_KIND_LABEL, dictLookup, type DictResult } from "@/services/dict";
 import { buildPurifyDraft, type PurifyDraft } from "@/services/purify";
 import {
   useAnnotationsStore,
@@ -123,6 +126,33 @@ export function SelectionToolbar({ containerRef, bookUrl, chapterIndex }: Select
   const [popover, setPopover] = React.useState<PopoverState>(null);
   const [noteDraft, setNoteDraft] = React.useState<NoteDraft>(null);
   const [purifyDraft, setPurifyDraft] = React.useState<PurifyDraft | null>(null);
+  const [dictState, setDictState] = React.useState<{
+    word: string;
+    result: DictResult | null;
+    loading: boolean;
+  } | null>(null);
+
+  /** 选中查词: 取选区前 32 字, 导入期(building)轮询最长 60s */
+  const lookupSelection = React.useCallback(async (raw: string) => {
+    const word = raw.trim().slice(0, 32);
+    if (word === "") {
+      return;
+    }
+    setDictState({ word, result: null, loading: true });
+    const started = Date.now();
+    try {
+      for (;;) {
+        const result = await dictLookup(word);
+        if (result.status !== "building" || Date.now() - started > 60_000) {
+          setDictState({ word, result, loading: false });
+          return;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 2000));
+      }
+    } catch {
+      setDictState({ word, result: null, loading: false });
+    }
+  }, []);
   /** 任一弹窗开着: 期间不重估选区、不因滚动收起工具条, ←/→ 也交给弹窗自己 */
   const dialogOpen = noteDraft !== null || purifyDraft !== null;
   const popoverRef = React.useRef<HTMLDivElement>(null);
@@ -433,6 +463,15 @@ export function SelectionToolbar({ containerRef, bookUrl, chapterIndex }: Select
               <StickyNote className="size-4" />
             </ToolbarButton>
             <ToolbarButton
+              label="词典"
+              onClick={() => {
+                void lookupSelection(popover.target.quote);
+                dismiss();
+              }}
+            >
+              <BookA className="size-4" />
+            </ToolbarButton>
+            <ToolbarButton
               label="添加净化"
               onClick={() =>
                 setPurifyDraft(
@@ -510,6 +549,60 @@ export function SelectionToolbar({ containerRef, bookUrl, chapterIndex }: Select
               保存笔记
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={dictState !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDictState(null);
+          }
+        }}
+      >
+        <DialogContent width="sm">
+          <DialogHeader>
+            <DialogTitle className="break-all">{dictState?.word ?? ""}</DialogTitle>
+            <DialogDescription>离线词典(英汉 ECDICT / 汉语新华字典)</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-80 overflow-y-auto px-4 pb-2 text-sm md:px-5">
+            {dictState?.loading ? (
+              <p className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+                <Spinner size="sm" label="查询中" />
+                查询中…
+              </p>
+            ) : dictState?.result?.status === "unavailable" ? (
+              <p className="py-6 text-sm text-muted-foreground">
+                未安装词典数据(镜像构建时 WITH_DICT=0, 或 READER_DICT_DIR 无数据文件)
+              </p>
+            ) : (dictState?.result?.entries.length ?? 0) === 0 ? (
+              <p className="py-6 text-sm text-muted-foreground">未找到释义</p>
+            ) : (
+              <ul className="flex flex-col divide-y divide-border/60">
+                {dictState?.result?.entries.map((entry, index) => (
+                  <li key={`${entry.word}-${index}`} className="flex flex-col gap-1.5 py-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge size="sm" variant="muted">
+                        {DICT_KIND_LABEL[entry.kind] ?? entry.kind}
+                      </Badge>
+                      <span className="font-display text-base font-semibold">{entry.word}</span>
+                      {entry.pinyin ? (
+                        <span className="text-xs text-accent">{entry.pinyin}</span>
+                      ) : null}
+                      {entry.phonetic ? (
+                        <span className="text-xs text-muted-foreground">/{entry.phonetic}/</span>
+                      ) : null}
+                    </div>
+                    {entry.body ? (
+                      <p className="whitespace-pre-line text-sm leading-6 text-foreground/85">
+                        {entry.body}
+                      </p>
+                    ) : null}
+                    <span className="text-xs text-muted-foreground/70">来源: {entry.source}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
       <AddPurifyDialog

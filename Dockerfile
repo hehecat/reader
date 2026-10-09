@@ -56,6 +56,7 @@ FROM python:3.13-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        curl \
         tzdata \
         fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
@@ -84,6 +85,18 @@ ENV READER_APP_WEB_ROOT=/app/web-ui/dist
 # 后端不再惰性 spawn(那条路径日志被丢弃且首次质询要等 20s 健康轮询)
 ENV READER_CAMOUFOX_SCRIPT=/usr/local/bin/camoufox_solver.py
 ENV READER_CAMOUFOX_URL=http://127.0.0.1:8196
+
+# 离线词典数据(构建期下载, 不进仓库; WITH_DICT=0 可跳过)
+# ECDICT 英汉(MIT) + 新华字典字词/词语/成语(pwxcoo/chinese-xinhua, MIT)
+ARG WITH_DICT=1
+RUN mkdir -p /app/dict && if [ "$WITH_DICT" = "1" ]; then \
+      curl -fsSL --retry 3 -o /app/dict/ecdict.csv https://raw.githubusercontent.com/skywind3000/ECDICT/master/ecdict.csv && \
+      curl -fsSL --retry 3 -o /app/dict/word.json https://raw.githubusercontent.com/pwxcoo/chinese-xinhua/master/data/word.json && \
+      curl -fsSL --retry 3 -o /app/dict/ci.json https://raw.githubusercontent.com/pwxcoo/chinese-xinhua/master/data/ci.json && \
+      curl -fsSL --retry 3 -o /app/dict/idiom.json https://raw.githubusercontent.com/pwxcoo/chinese-xinhua/master/data/idiom.json && \
+      ls -la /app/dict ; \
+    else echo "WITH_DICT=0: 跳过词典数据" ; fi
+ENV READER_DICT_DIR=/app/dict
 
 COPY --from=builder /app/target/release/reader-dev /usr/local/bin/reader-dev
 # 唯一高频变化层（二进制 + dist）放末尾, 稳定层前置

@@ -16,6 +16,7 @@ reader.example.com:443 {
 	}
 
 	handle {
+		# 哈希资源(/static/*, /assets/*, /fonts/*)可另加长缓存头, 容器自身已带基础头
 		reverse_proxy 127.0.0.1:8080 {
 			flush_interval -1
 		}

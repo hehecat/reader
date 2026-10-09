@@ -38,6 +38,9 @@ fn main() -> Result<()> {
         }
     });
 
+    // 离线词典: 数据存在则后台导入 dict.sqlite(不阻塞启动)
+    reader_dev::service::dict::spawn_build_if_needed(&config.storage_dir());
+
     // GUI 分派：feature=gui 且未显式 --headless 时进窗口模式
     // 事件循环必须在主线程（Windows/macOS）
     #[cfg(feature = "gui")]

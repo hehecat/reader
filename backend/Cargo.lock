@@ -4944,6 +4944,7 @@ dependencies = [
  "mongodb",
  "notify",
  "once_cell",
+ "parking_lot",
  "quick-xml 0.41.0",
  "rand 0.8.7",
  "regex",

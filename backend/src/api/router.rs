@@ -304,6 +304,7 @@ pub fn router(config: crate::AppConfig, storage: Storage) -> axum::Router {
             "/reader3/getSourceStats",
             get(get_source_stats_handler).post(get_source_stats_handler),
         )
+        .route("/reader3/dictLookup", get(dict_lookup).post(dict_lookup))
         .route(
             "/reader3/getBookSource",
             get(get_book_source).post(get_book_source),
@@ -9105,6 +9106,39 @@ async fn search_book_multi_sse(
         .header("Cache-Control", "no-cache")
         .body(Body::from_stream(stream))
         .unwrap()
+}
+
+/// GET/POST /reader3/dictLookup：离线词典查询(英汉 ECDICT / 汉语新华字典)
+///
+/// 参数 word(选中词/字/短语); 返回 {status: ok|building|unavailable, entries:[...]};
+/// 数据未安装或首次导入中返回 building/unavailable, 由前端轮询/提示.
+async fn dict_lookup(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Option<axum::body::Bytes>,
+) -> Json<ReturnData> {
+    if let Err(ret) = resolve_namespace(&state, &params, &headers).await {
+        return Json(ret);
+    }
+    let body_json = body
+        .as_ref()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok());
+    let word = param_of(&params, body_json.as_ref(), "word");
+    if word.trim().is_empty() {
+        return Json(ReturnData::err("请输入查询词"));
+    }
+    let storage_dir = state.storage.config.storage_dir();
+    match crate::service::dict::lookup(&storage_dir, &word).await {
+        Ok(result) => Json(ReturnData::ok(serde_json::json!({
+            "status": result.status,
+            "entries": result.entries,
+        }))),
+        Err(e) => {
+            tracing::warn!("词典查询失败: {e}");
+            Json(ReturnData::err("词典查询失败"))
+        }
+    }
 }
 
 /// 搜索单源超时(秒): 前端设置项运行时下发, clamp 3..60, 缺省 15

@@ -6,6 +6,7 @@ pub mod cache_job;
 pub mod camoufox;
 pub mod crawler;
 pub mod debug;
+pub mod dict;
 pub mod epub;
 pub mod explore;
 pub mod export_book;

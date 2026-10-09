@@ -26,6 +26,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # 序列化/配置
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+parking_lot = "0.12"   # 锁(免 unwrap 中毒路径)
 dotenvy = "0.15"
 
 # 解析（legado 多规则引擎）
