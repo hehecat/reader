@@ -81,7 +81,7 @@ pub fn dict_dir() -> PathBuf {
 const ONLINE_TTL_MS: i64 = 30 * 24 * 3600 * 1000;
 
 /// 在线解析器版本: 解析逻辑变更时 +1, 旧缓存自动失效(避免旧解析结果压住新字段)
-const ONLINE_VER: u32 = 2;
+const ONLINE_VER: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct OnlineCache {
@@ -111,11 +111,11 @@ pub fn spawn_build_if_needed(storage_dir: &Path) {
             // 无本地数据但允许在线: 仍建空库(仅 online 缓存表), 查词走在线兜底
             tracing::info!("未安装本地词典数据, 仅在线兜底(有道)可用");
             let db_path = storage_dir.join("dict.sqlite");
-            if !db_path.is_file() {
+            if !db_path.is_file() || !lib_ready(&db_path, &dict_dir()) {
                 let dir_owned = dict_dir();
                 let db_owned = db_path.clone();
                 std::thread::spawn(move || {
-                    let _ = build_dict(&dir_owned, &db_owned);
+                    let _ = build_dict_atomic(&dir_owned, &db_owned);
                 });
             }
         } else {
@@ -125,15 +125,15 @@ pub fn spawn_build_if_needed(storage_dir: &Path) {
         return;
     }
     let db_path = storage_dir.join("dict.sqlite");
-    let ready = std::fs::metadata(&db_path).map(|m| m.len() > 1024 * 1024).unwrap_or(false);
-    if ready {
+    if lib_ready(&db_path, &dir) {
         tracing::info!("词典库就绪: {}", db_path.display());
         return;
     }
+    tracing::info!("词典库缺失或未完成, 开始导入: {}", db_path.display());
     STATE.lock().building = true;
     let dir = dir.clone();
     std::thread::spawn(move || {
-        if let Err(e) = build_dict(&dir, &db_path) {
+        if let Err(e) = build_dict_atomic(&dir, &db_path) {
             tracing::warn!("词典库导入失败: {e}");
             let mut st = STATE.lock();
             st.building = false;
@@ -141,6 +141,47 @@ pub fn spawn_build_if_needed(storage_dir: &Path) {
             // 失败: 后续查询走 unavailable 提示, 不再报 building
         }
     });
+}
+
+/// 就绪标记路径: 导入完全成功后才写, 用于识别半成品库
+fn ready_marker(db_path: &Path) -> std::path::PathBuf {
+    db_path.with_extension("sqlite.ready")
+}
+
+/// 库是否可用: 存在 + 够大 + 有就绪标记 + 标记不旧于原始数据文件
+fn lib_ready(db_path: &Path, dir: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(db_path) else {
+        return false;
+    };
+    if meta.len() < 1024 * 1024 {
+        return false;
+    }
+    let Ok(marker) = std::fs::metadata(ready_marker(db_path)) else {
+        return false;
+    };
+    let Ok(marker_time) = marker.modified() else {
+        return false;
+    };
+    // 原始数据比标记新 → 需要重建
+    for f in raw_files(dir) {
+        if let Ok(m) = std::fs::metadata(&f) {
+            if m.modified().map(|t| t > marker_time).unwrap_or(false) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// 构建到临时文件后原子替换, 成功才写就绪标记(避免半成品被复用)
+fn build_dict_atomic(dir: &Path, db_path: &Path) -> Result<()> {
+    let tmp = db_path.with_extension("sqlite.tmp");
+    let _ = std::fs::remove_file(&tmp);
+    build_dict(dir, &tmp)?;
+    std::fs::rename(&tmp, db_path)?;
+    let _ = std::fs::remove_file(ready_marker(db_path));
+    std::fs::write(ready_marker(db_path), b"ok")?;
+    Ok(())
 }
 
 /// 导入原始文件 → dict.sqlite (幂等: 已存在表则跳过)
@@ -565,112 +606,157 @@ async fn lookup_online(pool: &SqlitePool, word: &str) -> Vec<DictEntry> {
         Ok(c) => c,
         Err(_) => return Vec::new(),
     };
-    let Ok(resp) = client.get(&url).send().await else {
-        return Vec::new();
-    };
-    let Ok(json) = resp.json::<serde_json::Value>().await else {
-        return Vec::new();
+    // net_ok=false(有道或百科源请求失败)时本次不写缓存, 避免把"暂无介绍"固化 30 天
+    let mut net_ok = true;
+    let json = match client.get(&url).send().await {
+        Ok(resp) => match resp.json::<serde_json::Value>().await {
+            Ok(v) => Some(v),
+            Err(_) => {
+                net_ok = false;
+                None
+            }
+        },
+        Err(_) => {
+            net_ok = false;
+            None
+        }
     };
     let mut entries = Vec::new();
-    // 英汉 / 中英 释义
-    for key in ["ec", "ce"] {
-        let Some(words) = json.get(key).and_then(|v| v.get("word")).and_then(|v| v.as_array()) else {
-            continue;
-        };
-        let mut lines = Vec::new();
-        let mut phonetic = None;
-        for w in words {
-            phonetic = phonetic.or_else(|| {
-                w.get("usphone")
-                    .or_else(|| w.get("ukphone"))
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string)
-                    .filter(|s| !s.trim().is_empty())
-            });
-            lines.extend(trs_lines(w));
-        }
-        if !lines.is_empty() {
-            entries.push(DictEntry {
-                kind: "online".to_string(),
-                word: word.to_string(),
-                phonetic,
-                pinyin: simple_pinyin(&json),
-                body: Some(lines.join("
-")),
-                source: "有道词典".to_string(),
-            });
-        }
-    }
-    if let Some(e) = newhh_entry(&json, word) {
-        entries.push(e);
-    }
-    // 百科摘要
-    if let Some(summary) = json
-        .get("baike")
-        .and_then(|v| v.get("summarys"))
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|s| s.get("summary"))
-        .and_then(|v| v.as_str())
-    {
-        let summary = summary.trim();
-        if !summary.is_empty() {
-            let src = json
-                .get("baike")
-                .and_then(|v| v.get("source"))
-                .and_then(|s| s.get("name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("百科");
-            entries.push(DictEntry {
-                kind: "baike".to_string(),
-                word: word.to_string(),
-                phonetic: None,
-                pinyin: None,
-                body: Some(summary.to_string()),
-                source: if src.contains("百度") { "百度百科".to_string() } else { "百科".to_string() },
-            });
-        }
-    }
-    // 网络释义(取前 3 条)
-    if let Some(trans) = json
-        .get("web_trans")
-        .and_then(|v| v.get("web-translation"))
-        .and_then(|v| v.as_array())
-    {
-        let mut lines = Vec::new();
-        for item in trans.iter().take(3) {
-            let Some(vals) = item.get("trans").and_then(|v| v.as_array()) else {
+    let mut yd_baike: Option<DictEntry> = None;
+    let mut yd_wiki: Option<DictEntry> = None;
+    if let Some(json) = json {
+        // 英汉 / 中英 释义
+        for key in ["ec", "ce"] {
+            let Some(words) = json.get(key).and_then(|v| v.get("word")).and_then(|v| v.as_array()) else {
                 continue;
             };
-            let joined = vals
-                .iter()
-                .filter_map(|t| t.get("value").and_then(|v| v.as_str()))
-                .collect::<Vec<_>>()
-                .join("；");
-            let key = item.get("key").and_then(|v| v.as_str()).unwrap_or("");
-            if !joined.is_empty() {
-                lines.push(if key.is_empty() { joined } else { format!("{key}: {joined}") });
+            let mut lines = Vec::new();
+            let mut phonetic = None;
+            for w in words {
+                phonetic = phonetic.or_else(|| {
+                    w.get("usphone")
+                        .or_else(|| w.get("ukphone"))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                        .filter(|s| !s.trim().is_empty())
+                });
+                lines.extend(trs_lines(w));
+            }
+            if !lines.is_empty() {
+                entries.push(DictEntry {
+                    kind: "online".to_string(),
+                    word: word.to_string(),
+                    phonetic,
+                    pinyin: simple_pinyin(&json),
+                    body: Some(lines.join("
+")),
+                    source: "有道词典".to_string(),
+                });
             }
         }
-        if !lines.is_empty() {
-            entries.push(DictEntry {
-                kind: "web".to_string(),
-                word: word.to_string(),
-                phonetic: None,
-                pinyin: None,
-                body: Some(lines.join("
+        if let Some(e) = newhh_entry(&json, word) {
+            entries.push(e);
+        }
+        // 百科摘要(有道; 中文查询时仅作兜底, 优先百度百科)
+        if let Some(summary) = json
+            .get("baike")
+            .and_then(|v| v.get("summarys"))
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|s| s.get("summary"))
+            .and_then(|v| v.as_str())
+        {
+            let summary = summary.trim();
+            if !summary.is_empty() {
+                let src = json
+                    .get("baike")
+                    .and_then(|v| v.get("source"))
+                    .and_then(|s| s.get("name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("百科");
+                yd_baike = Some(DictEntry {
+                    kind: "baike".to_string(),
+                    word: word.to_string(),
+                    phonetic: None,
+                    pinyin: None,
+                    body: Some(summary.to_string()),
+                    source: if src.contains("百度") { "百度百科".to_string() } else { "百科".to_string() },
+                });
+            }
+        }
+        // 网络释义(取前 3 条)
+        if let Some(trans) = json
+            .get("web_trans")
+            .and_then(|v| v.get("web-translation"))
+            .and_then(|v| v.as_array())
+        {
+            let mut lines = Vec::new();
+            for item in trans.iter().take(3) {
+                let Some(vals) = item.get("trans").and_then(|v| v.as_array()) else {
+                    continue;
+                };
+                let joined = vals
+                    .iter()
+                    .filter_map(|t| t.get("value").and_then(|v| v.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("；");
+                let key = item.get("key").and_then(|v| v.as_str()).unwrap_or("");
+                if !joined.is_empty() {
+                    lines.push(if key.is_empty() { joined } else { format!("{key}: {joined}") });
+                }
+            }
+            if !lines.is_empty() {
+                entries.push(DictEntry {
+                    kind: "web".to_string(),
+                    word: word.to_string(),
+                    phonetic: None,
+                    pinyin: None,
+                    body: Some(lines.join("
 ")),
-                source: "有道网络释义".to_string(),
-            });
+                    source: "有道网络释义".to_string(),
+                });
+            }
+        }
+        yd_wiki = wiki_entry(&json, word);
+        if let Some(e) = sents_entry(&json, word) {
+            entries.push(e);
         }
     }
-    if let Some(e) = wiki_entry(&json, word) {
-        entries.push(e);
+    // 百科介绍: 中文查询优先百度百科(有道摘要常为多义词提示), 次选有道维基摘要/中文维基
+    if has_cjk(word) {
+        let mut chosen = match baike_baidu(&client, word).await {
+            Ok(v) => v,
+            Err(_) => {
+                net_ok = false;
+                None
+            }
+        };
+        if chosen.is_none() {
+            chosen = yd_wiki.take();
+        }
+        if chosen.is_none() {
+            chosen = match wiki_zh(&client, word).await {
+                Ok(v) => v,
+                Err(_) => {
+                    net_ok = false;
+                    None
+                }
+            };
+        }
+        if let Some(e) = chosen {
+            // 短释义在前, 百科长文紧随(便于人物/专名先看到介绍)
+            let pos = if entries.is_empty() { 0 } else { 1 };
+            entries.insert(pos, e);
+        }
+    } else {
+        if let Some(e) = yd_baike {
+            entries.push(e);
+        }
+        if let Some(e) = yd_wiki {
+            entries.push(e);
+        }
     }
-    if let Some(e) = sents_entry(&json, word) {
-        entries.push(e);
-    }
-    if !entries.is_empty() {
+    if !entries.is_empty() && net_ok {
         let blob = OnlineCache { ver: ONLINE_VER, entries: entries.clone() };
         if let Ok(payload) = serde_json::to_string(&blob) {
             let _ = sqlx::query(
@@ -819,6 +905,90 @@ fn sents_entry(json: &serde_json::Value, word: &str) -> Option<DictEntry> {
         )),
         source: "例句".to_string(),
     })
+}
+
+/// 是否含中日韩汉字(用于决定是否查中文百科)
+fn has_cjk(s: &str) -> bool {
+    s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
+}
+
+/// 按字符截断(超长加省略号)
+fn clamp_chars(s: &str, max: usize) -> String {
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i >= max {
+            out.push('…');
+            break;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// 百度百科词条摘要(openapi 免密钥): 人物/作品/专名介绍最全
+async fn baike_baidu(client: &reqwest::Client, word: &str) -> Result<Option<DictEntry>> {
+    let url = format!(
+        "https://baike.baidu.com/api/openapi/BaikeLemmaCardApi?scope=103&format=json&appid=379020&bk_length=800&bk_key={}",
+        urlencode(word)
+    );
+    let json: serde_json::Value = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await?
+        .json()
+        .await?;
+    let text = json
+        .get("abstract")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            json.get("desc")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        });
+    Ok(text.map(|t| DictEntry {
+        kind: "baike".to_string(),
+        word: word.to_string(),
+        phonetic: None,
+        pinyin: None,
+        body: Some(clamp_chars(t, 800)),
+        source: "百度百科".to_string(),
+    }))
+}
+
+/// 中文维基百科摘要(extract, 简体): 百度百科无词条时的次选
+async fn wiki_zh(client: &reqwest::Client, word: &str) -> Result<Option<DictEntry>> {
+    let url = format!(
+        "https://zh.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1&explaintext=1&redirects=1&variant=zh-cn&format=json&titles={}",
+        urlencode(word)
+    );
+    let json: serde_json::Value = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await?
+        .json()
+        .await?;
+    let extract = json
+        .get("query")
+        .and_then(|q| q.get("pages"))
+        .and_then(|p| p.as_object())
+        .and_then(|o| o.values().next())
+        .and_then(|pg| pg.get("extract"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    Ok(extract.map(|t| DictEntry {
+        kind: "wiki".to_string(),
+        word: word.to_string(),
+        phonetic: None,
+        pinyin: None,
+        body: Some(clamp_chars(t, 800)),
+        source: "维基百科".to_string(),
+    }))
 }
 
 /// 极简 URL 编码(仅词典查询词片, 避免引入额外依赖)
