@@ -128,6 +128,8 @@ pub fn router(config: crate::AppConfig, storage: Storage) -> axum::Router {
         )
         .route("/reader3/aiStatus", get(ai_status))
         .route("/reader3/aiChat", post(ai_chat))
+        .route("/reader3/aiSettings", get(ai_settings_get).post(ai_settings_save))
+        .route("/reader3/aiTest", post(ai_test))
         .route("/reader3/saveOpdsSettings", post(save_opds_settings))
         .route(
             "/reader3/uploadLocalBook",
@@ -9163,6 +9165,166 @@ fn search_timeout_param(params: &HashMap<String, String>, body_json: Option<&ser
 }
 
 /// SSE 错误事件（兼容 legacy：event: error + data: ReturnData）
+/// AI 配置类接口的权限：单用户模式放行；多用户模式仅管理员
+async fn require_ai_admin(
+    state: &AppState,
+    params: &HashMap<String, String>,
+    headers: &HeaderMap,
+) -> std::result::Result<(), ReturnData> {
+    if !state.storage.config.secure {
+        return Ok(());
+    }
+    match resolve_current_user(state, params, headers).await {
+        Ok(user) if user.is_admin => Ok(()),
+        Ok(_) => Err(ReturnData::err("需要管理员权限")),
+        Err(ret) => Err(ret),
+    }
+}
+
+/// GET /reader3/aiSettings：当前 AI 端点配置（密钥只回是否已设置，不回明文）
+async fn ai_settings_get(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Json<ReturnData> {
+    if let Err(ret) = require_ai_admin(&state, &params, &headers).await {
+        return Json(ret);
+    }
+    crate::service::ai::ensure_loaded(&state.storage).await;
+    let cfg = crate::service::ai::config();
+    Json(ReturnData::ok(json!({
+        "enabled": cfg.is_some(),
+        "source": crate::service::ai::source(),
+        "baseUrl": cfg.as_ref().map(|c| c.base_url.clone()).unwrap_or_default(),
+        "model": cfg.as_ref().map(|c| c.model.clone()).unwrap_or_default(),
+        "maxTokens": cfg.as_ref().map(|c| c.max_tokens).unwrap_or(1500),
+        "keySet": cfg.is_some(),
+    })))
+}
+
+/// POST /reader3/aiSettings：保存端点/密钥/模型（保存即生效，无需重启）
+/// - baseUrl 传空串 = 清除保存的配置（回退环境变量）
+/// - apiKey 传空串 = 保留原密钥
+async fn ai_settings_save(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Option<axum::body::Bytes>,
+) -> Json<ReturnData> {
+    if let Err(ret) = require_ai_admin(&state, &params, &headers).await {
+        return Json(ret);
+    }
+    crate::service::ai::ensure_loaded(&state.storage).await;
+    let body_json = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    let base_url = param_of(&params, body_json.as_ref(), "baseUrl")
+        .trim()
+        .trim_end_matches('/')
+        .to_string();
+    let api_key_in = param_of(&params, body_json.as_ref(), "apiKey").trim().to_string();
+    let model = param_of(&params, body_json.as_ref(), "model").trim().to_string();
+    let max_tokens = param_of(&params, body_json.as_ref(), "maxTokens")
+        .trim()
+        .parse::<u64>()
+        .unwrap_or(1500)
+        .clamp(200, 8000);
+
+    if base_url.is_empty() {
+        if let Err(e) = crate::service::ai::clear(&state.storage).await {
+            return Json(ReturnData::err(format!("清除配置失败: {e}")));
+        }
+        return Json(ReturnData::ok(json!({ "cleared": true })));
+    }
+    if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
+        return Json(ReturnData::err("端点需以 http:// 或 https:// 开头"));
+    }
+    let existing = crate::service::ai::config();
+    let api_key = if api_key_in.is_empty() {
+        match existing {
+            Some(cfg) => cfg.api_key,
+            None => return Json(ReturnData::err("请填写 API Key")),
+        }
+    } else {
+        api_key_in
+    };
+    let model = if model.is_empty() {
+        "deepseek-v4.1-flash".to_string()
+    } else {
+        model
+    };
+    let cfg = crate::service::ai::AiConfig { base_url, api_key, model, max_tokens };
+    match crate::service::ai::save(&state.storage, cfg).await {
+        Ok(()) => Json(ReturnData::ok(json!({ "saved": true }))),
+        Err(e) => Json(ReturnData::err(format!("保存失败: {e}"))),
+    }
+}
+
+/// POST /reader3/aiTest：用传入值（或已保存配置）探测端点连通性
+async fn ai_test(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Option<axum::body::Bytes>,
+) -> Json<ReturnData> {
+    if let Err(ret) = require_ai_admin(&state, &params, &headers).await {
+        return Json(ret);
+    }
+    crate::service::ai::ensure_loaded(&state.storage).await;
+    let body_json = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    let base_in = param_of(&params, body_json.as_ref(), "baseUrl")
+        .trim()
+        .trim_end_matches('/')
+        .to_string();
+    let key_in = param_of(&params, body_json.as_ref(), "apiKey").trim().to_string();
+    let saved = crate::service::ai::config();
+    let base_url = if base_in.is_empty() {
+        match saved.as_ref() {
+            Some(cfg) => cfg.base_url.clone(),
+            None => return Json(ReturnData::err("请填写端点地址")),
+        }
+    } else {
+        base_in
+    };
+    let api_key = if key_in.is_empty() {
+        match saved.as_ref() {
+            Some(cfg) => cfg.api_key.clone(),
+            None => return Json(ReturnData::err("请填写 API Key")),
+        }
+    } else {
+        key_in
+    };
+    let url = format!("{base_url}/models");
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return Json(ReturnData::err(format!("初始化客户端失败: {e}"))),
+    };
+    let started = std::time::Instant::now();
+    match client.get(&url).bearer_auth(&api_key).send().await {
+        Ok(resp) => {
+            let latency_ms = started.elapsed().as_millis();
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            if !status.is_success() {
+                let snippet: String = text.chars().take(200).collect();
+                return Json(ReturnData::err(format!("端点返回 {status}: {snippet}")));
+            }
+            let models = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|v| v.get("data").and_then(|d| d.as_array()).map(|a| a.len()))
+                .unwrap_or(0);
+            Json(ReturnData::ok(json!({
+                "ok": true,
+                "status": status.as_u16(),
+                "latencyMs": latency_ms,
+                "models": models,
+            })))
+        }
+        Err(e) => Json(ReturnData::err(format!("连接失败: {e}"))),
+    }
+}
+
 /// GET /reader3/aiStatus：AI 阅读助手是否可用（未配置端点时前端不显示入口）
 async fn ai_status(
     State(state): State<AppState>,

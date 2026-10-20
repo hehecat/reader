@@ -549,10 +549,6 @@ export function SettingsPanel() {
           />
         </Field>
 
-        <Field label="TTS 引擎">
-          <TtsEngineControls />
-        </Field>
-
         <button
           type="button"
           onClick={handleReset}

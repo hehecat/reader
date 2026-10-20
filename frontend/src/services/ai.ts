@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { API_BASE_URL, get } from "@/lib/api-client";
+import { API_BASE_URL, get, post } from "@/lib/api-client";
 import { getAccessToken } from "@/lib/storage";
 
 /** AI 助手可用性：未配置端点时 enabled=false（前端隐藏入口） */
@@ -140,4 +140,47 @@ export function streamAiChat(req: AiChatRequest, handlers: AiChatHandlers): () =
   });
 
   return () => controller.abort();
+}
+
+/** 设置页: AI 端点配置（密钥只回是否已设置） */
+export const aiSettingsSchema = z.object({
+  enabled: z.boolean(),
+  /** saved = 设置页保存; env = 环境变量; none = 未配置 */
+  source: z.string(),
+  baseUrl: z.string(),
+  model: z.string(),
+  maxTokens: z.number(),
+  keySet: z.boolean(),
+});
+export type AiSettings = z.infer<typeof aiSettingsSchema>;
+
+export async function getAiSettings(): Promise<AiSettings> {
+  const data = await get<unknown>("/aiSettings");
+  return aiSettingsSchema.parse(data);
+}
+
+export interface AiSettingsInput {
+  baseUrl: string;
+  /** 空串 = 保留已保存的密钥 */
+  apiKey: string;
+  model: string;
+  maxTokens: number;
+}
+
+/** 保存端点/密钥/模型：服务端立即生效，无需重启 */
+export async function saveAiSettings(input: AiSettingsInput): Promise<void> {
+  await post<unknown>("/aiSettings", input);
+}
+
+export interface AiTestResult {
+  ok: boolean;
+  status?: number;
+  latencyMs?: number;
+  models?: number;
+}
+
+/** 探测端点连通性（GET /models），可用未保存的输入 */
+export async function testAiEndpoint(input: AiSettingsInput): Promise<AiTestResult> {
+  const data = await post<unknown>("/aiTest", input);
+  return data as AiTestResult;
 }

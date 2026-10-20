@@ -23,6 +23,7 @@ const CONTEXT_BUDGET: usize = 6000;
 /// 每次最多引用几章
 const MAX_SNIPPETS: usize = 6;
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct AiConfig {
     pub base_url: String,
     pub api_key: String,
@@ -30,8 +31,84 @@ pub struct AiConfig {
     pub max_tokens: u64,
 }
 
-/// 读取环境变量配置；缺少 base/key 时返回 None（AI 面板整体不可用）
+/// 设置页保存的配置（存 system_settings 键 `ai_settings`），进程内缓存，保存即生效
+static RUNTIME: std::sync::OnceLock<std::sync::RwLock<Option<AiConfig>>> =
+    std::sync::OnceLock::new();
+static LOADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn runtime() -> &'static std::sync::RwLock<Option<AiConfig>> {
+    RUNTIME.get_or_init(|| std::sync::RwLock::new(None))
+}
+
+fn write_runtime(cfg: Option<AiConfig>) {
+    if let Ok(mut guard) = runtime().write() {
+        *guard = cfg;
+    }
+}
+
+/// 配置来源：saved（设置页保存）/ env（环境变量）/ none
+pub fn source() -> &'static str {
+    if runtime()
+        .read()
+        .ok()
+        .and_then(|g| g.as_ref().map(|_| ()))
+        .is_some()
+    {
+        "saved"
+    } else if env_config().is_some() {
+        "env"
+    } else {
+        "none"
+    }
+}
+
+/// 当前生效配置：设置页保存的优先，其次环境变量
 pub fn config() -> Option<AiConfig> {
+    if let Ok(guard) = runtime().read() {
+        if let Some(cfg) = guard.as_ref() {
+            return Some(cfg.clone());
+        }
+    }
+    env_config()
+}
+
+/// 首次使用时从数据库载入设置页保存的配置（幂等）
+pub async fn ensure_loaded(storage: &Storage) {
+    if LOADED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    match storage.get_system_setting("ai_settings").await {
+        Ok(Some(raw)) => match serde_json::from_str::<AiConfig>(&raw) {
+            Ok(cfg) => {
+                tracing::info!("AI 阅读助手: 已载入设置页保存的端点配置");
+                write_runtime(Some(cfg));
+            }
+            Err(e) => tracing::warn!("AI 设置解析失败: {e}"),
+        },
+        Ok(None) => {}
+        Err(e) => tracing::warn!("读取 AI 设置失败: {e}"),
+    }
+}
+
+/// 保存配置到数据库并立即生效（无需重启）
+pub async fn save(storage: &Storage, cfg: AiConfig) -> anyhow::Result<()> {
+    let raw = serde_json::to_string(&cfg)?;
+    storage.set_system_setting("ai_settings", &raw).await?;
+    write_runtime(Some(cfg));
+    LOADED.store(true, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
+}
+
+/// 清空设置页保存的配置（回退到环境变量；都没有则 AI 面板不可用）
+pub async fn clear(storage: &Storage) -> anyhow::Result<()> {
+    storage.delete_system_setting("ai_settings").await?;
+    write_runtime(None);
+    LOADED.store(true, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
+}
+
+/// 读取环境变量配置；缺少 base/key 时返回 None（AI 面板整体不可用）
+fn env_config() -> Option<AiConfig> {
     let base_url = std::env::var("READER_AI_BASE_URL").ok()?.trim().trim_end_matches('/').to_string();
     let api_key = std::env::var("READER_AI_API_KEY").ok()?.trim().to_string();
     if base_url.is_empty() || api_key.is_empty() {
