@@ -221,7 +221,23 @@ export default function ReaderPage() {
   /** 点 AI 回答里的章节引用: 按标题反查章节并跳转 */
   const jumpToTitle = React.useCallback(
     (title: string) => {
-      const idx = chapters.findIndex((c) => c.title === title);
+      const needle = title.trim();
+      if (needle === "") {
+        return;
+      }
+      // 引用可能来自模型(标题可能被简写): 精确 → 章号前缀 → 包含匹配
+      let idx = chapters.findIndex((c) => c.title === needle);
+      if (idx < 0) {
+        const head = /^第[0-9零一二三四五六七八九十百千两]+章/.exec(needle);
+        if (head !== null) {
+          idx = chapters.findIndex((c) => c.title.startsWith(head[0]));
+        }
+      }
+      if (idx < 0) {
+        idx = chapters.findIndex(
+          (c) => c.title.includes(needle) || needle.includes(c.title),
+        );
+      }
       if (idx >= 0) {
         goToChapter(idx);
         setAiOpen(false);

@@ -130,6 +130,7 @@ pub fn router(config: crate::AppConfig, storage: Storage) -> axum::Router {
         .route("/reader3/aiChat", post(ai_chat))
         .route("/reader3/aiSettings", get(ai_settings_get).post(ai_settings_save))
         .route("/reader3/aiTest", post(ai_test))
+        .route("/reader3/aiGraph", post(ai_graph))
         .route("/reader3/saveOpdsSettings", post(save_opds_settings))
         .route(
             "/reader3/uploadLocalBook",
@@ -9178,6 +9179,82 @@ async fn require_ai_admin(
         Ok(user) if user.is_admin => Ok(()),
         Ok(_) => Err(ReturnData::err("需要管理员权限")),
         Err(ret) => Err(ret),
+    }
+}
+
+/// POST /reader3/aiGraph：从已缓存章节抽取人物/关系（结构化 JSON，供前端画关系图）
+async fn ai_graph(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Option<axum::body::Bytes>,
+) -> Json<ReturnData> {
+    let namespace = match resolve_namespace(&state, &params, &headers).await {
+        Ok(ns) => ns,
+        Err(ret) => return Json(ret),
+    };
+    crate::service::ai::ensure_loaded(&state.storage).await;
+    let body_json = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    let url = param_of(&params, body_json.as_ref(), "url");
+    let book_name = param_of(&params, body_json.as_ref(), "bookName");
+    let question = param_of(&params, body_json.as_ref(), "question");
+    let current_title = param_of(&params, body_json.as_ref(), "currentTitle");
+    let titles: Vec<String> = body_json
+        .as_ref()
+        .and_then(|v| v.get("titles"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| t.as_str())
+                .take(3000)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    if url.trim().is_empty() {
+        return Json(ReturnData::err("缺少书籍地址"));
+    }
+    let Some(cfg) = crate::service::ai::config() else {
+        return Json(ReturnData::err(
+            "未配置 AI 端点（设置 → AI 阅读助手）",
+        ));
+    };
+    // 检索线索: 优先"人物/关系"关键词; 无命中时按开头+当前章兜底
+    let probe_question = if question.trim().is_empty() {
+        "人物 关系 身份 出场".to_string()
+    } else {
+        question.clone()
+    };
+    let retrieval = crate::service::ai::retrieve(
+        &state.storage,
+        &namespace,
+        &url,
+        &probe_question,
+        &titles,
+        &current_title,
+    )
+    .await;
+    if retrieval.cached_chapters == 0 {
+        return Json(ReturnData::err("本书还没有已缓存章节, 先读几章再生成关系图"));
+    }
+    let messages = crate::service::ai::build_graph_messages(
+        &book_name,
+        &retrieval.snippets,
+        &question,
+    );
+    match crate::service::ai::chat_once(&cfg, messages).await {
+        Ok(raw) => match crate::service::ai::extract_json_object(&raw) {
+            Some(graph) => Json(ReturnData::ok(json!({
+                "graph": graph,
+                "snippets": retrieval.snippets.iter().map(|s| json!({ "index": s.index, "title": s.title })).collect::<Vec<_>>(),
+                "cachedChapters": retrieval.cached_chapters,
+            }))),
+            None => Json(ReturnData::err(format!(
+                "模型未返回合法 JSON: {}",
+                raw.chars().take(200).collect::<String>()
+            ))),
+        },
+        Err(e) => Json(ReturnData::err(format!("生成失败: {e}"))),
     }
 }
 

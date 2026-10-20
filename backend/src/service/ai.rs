@@ -481,3 +481,74 @@ pub async fn stream_chat(
         send(json!({ "type": "done" }));
     }
 }
+
+/// 非流式对话（用于结构化输出：人物关系图 JSON）
+pub async fn chat_once(cfg: &AiConfig, messages: Vec<Value>) -> anyhow::Result<String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()?;
+    let body = json!({
+        "model": cfg.model,
+        "messages": messages,
+        "stream": false,
+        "max_tokens": cfg.max_tokens,
+    });
+    let resp = client
+        .post(format!("{}/chat/completions", cfg.base_url))
+        .bearer_auth(&cfg.api_key)
+        .json(&body)
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("模型返回 {status}: {}", text.chars().take(200).collect::<String>());
+    }
+    let v: Value = resp.json().await?;
+    let content = v["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    if content.trim().is_empty() {
+        anyhow::bail!("模型没有返回内容（可能思考用尽 max_tokens）");
+    }
+    Ok(content)
+}
+
+/// 拼人物关系图的系统提示
+pub fn build_graph_messages(
+    book_name: &str,
+    snippets: &[Snippet],
+    question: &str,
+) -> Vec<Value> {
+    let mut ctx = String::new();
+    for s in snippets {
+        ctx.push_str(&format!("\n【{}】\n{}\n", s.title, s.text));
+    }
+    let system = format!(
+        "你是小说人物关系抽取器。只依据给定章节片段抽取人物与关系，不得编造。\n\
+         只输出 JSON（不要解释、不要 markdown 代码块），结构：\n\
+         {{\"characters\":[{{\"name\":\"人物名\",\"alias\":\"别名/称号(可空)\",\"firstChapter\":\"片段中出现的章节标题\",\"role\":\"身份或一句话定位\"}}],\n\
+         \"relations\":[{{\"from\":\"人物A\",\"to\":\"人物B\",\"label\":\"关系(≤8字)\",\"chapter\":\"依据章节标题\"}}]}}\n\
+         约束：characters 取 5-15 个最重要的人物；relations 5-15 条，from/to 必须是 characters 里的 name；\n\
+         firstChapter/chapter 必须逐字取自片段里的【标题】；片段没有的信息留空串，不要猜。\n\n\
+         书籍：《{book_name}》\n\n【章节片段】{ctx}"
+    );
+    let user = if question.trim().is_empty() {
+        "请抽取主要人物及其关系。".to_string()
+    } else {
+        format!("重点关注：{question}")
+    };
+    vec![json!({ "role": "system", "content": system }), json!({ "role": "user", "content": user })]
+}
+
+/// 从模型输出中提取 JSON 对象（容忍 ```json 包裹 / 前后解释文字）
+pub fn extract_json_object(raw: &str) -> Option<Value> {
+    let text = raw.trim();
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    serde_json::from_str::<Value>(&text[start..=end]).ok()
+}

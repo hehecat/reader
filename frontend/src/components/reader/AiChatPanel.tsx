@@ -2,7 +2,9 @@ import { Bot, Send, Square, Trash2, X } from "lucide-react";
 import * as React from "react";
 
 import { Badge, Button, IconButton, Spinner, Textarea, cn } from "@/components/ui";
-import { streamAiChat, type AiSnippet } from "@/services/ai";
+import { MarkdownLite } from "@/components/reader/ai-markdown";
+import { CharacterGraph, type GraphData } from "@/components/reader/CharacterGraph";
+import { generateAiGraph, streamAiChat, type AiSnippet } from "@/services/ai";
 
 interface ChatMessage {
   id: number;
@@ -57,9 +59,14 @@ export function AiChatPanel({
   model,
   onJump,
 }: AiChatPanelProps) {
+  const [tab, setTab] = React.useState<"chat" | "graph">("chat");
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [input, setInput] = React.useState("");
   const [streaming, setStreaming] = React.useState(false);
+  // 关系图: 生成结果 / 加载态 / 错误
+  const [graph, setGraph] = React.useState<GraphData | null>(null);
+  const [graphLoading, setGraphLoading] = React.useState(false);
+  const [graphError, setGraphError] = React.useState<string | null>(null);
   const cancelRef = React.useRef<(() => void) | null>(null);
   const scrollRef = React.useRef<HTMLDivElement>(null);
 
@@ -159,6 +166,27 @@ export function AiChatPanel({
     );
   }, []);
 
+  const loadGraph = React.useCallback(() => {
+    if (!configured || graphLoading) {
+      return;
+    }
+    setGraphLoading(true);
+    setGraphError(null);
+    void generateAiGraph({ url: bookUrl, bookName, titles, currentTitle })
+      .then((data) => {
+        setGraph(data);
+        if (data.characters.length === 0) {
+          setGraphError("片段里没抽出人物, 先读几章再试, 或换个章节位置生成。");
+        }
+      })
+      .catch((error: unknown) => {
+        setGraphError((error as Error).message || "生成失败");
+      })
+      .finally(() => {
+        setGraphLoading(false);
+      });
+  }, [bookName, bookUrl, configured, currentTitle, graphLoading, titles]);
+
   const clear = React.useCallback(() => {
     cancelRef.current?.();
     cancelRef.current = null;
@@ -192,6 +220,25 @@ export function AiChatPanel({
         </IconButton>
       </header>
 
+      {configured ? (
+        <div className="flex shrink-0 items-center gap-1 border-b border-border/70 px-2 py-1.5">
+          <Button
+            size="sm"
+            variant={tab === "chat" ? "secondary" : "ghost"}
+            onClick={() => setTab("chat")}
+          >
+            对话
+          </Button>
+          <Button
+            size="sm"
+            variant={tab === "graph" ? "secondary" : "ghost"}
+            onClick={() => setTab("graph")}
+          >
+            人物关系
+          </Button>
+        </div>
+      ) : null}
+
       {!configured ? (
         <div className="px-4 py-6 text-sm text-muted-foreground">
           未配置 AI 模型。在部署目录的 <code className="font-mono text-xs">.env</code> 里设置{" "}
@@ -199,6 +246,26 @@ export function AiChatPanel({
           <code className="font-mono text-xs">READER_AI_API_KEY</code> 后重启容器即可。
         </div>
       ) : (
+        {tab === "graph" ? (
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" loading={graphLoading} onClick={loadGraph}>
+                {graph === null ? "生成关系图" : "重新生成"}
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                基于已缓存章节 · 点人物看关系
+              </span>
+            </div>
+            {graphError !== null ? <p className="text-xs text-danger">{graphError}</p> : null}
+            {graph === null ? (
+              <p className="text-sm text-muted-foreground">
+                从已缓存章节里抽取主要人物与关系, 生成一张可点击的图; 点人物看身份、首次出场章节与关系清单。
+              </p>
+            ) : (
+              <CharacterGraph data={graph} onJump={onJump} />
+            )}
+          </div>
+        ) : (
         <>
           <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
             {messages.length === 0 ? (
@@ -239,7 +306,11 @@ export function AiChatPanel({
                     )}
                   >
                     {m.text !== "" ? (
-                      m.text
+                      m.kind === "error" ? (
+                        m.text
+                      ) : (
+                        <MarkdownLite text={m.text} onCite={onJump} />
+                      )
                     ) : m.pending ? (
                       <span className="flex items-center gap-2 text-muted-foreground">
                         <Spinner size="sm" label="思考中" />
@@ -308,6 +379,7 @@ export function AiChatPanel({
             </div>
           </div>
         </>
+        )}
       )}
     </aside>
   );
