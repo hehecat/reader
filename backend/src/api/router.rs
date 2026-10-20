@@ -9242,7 +9242,8 @@ async fn ai_graph(
         &retrieval.snippets,
         &question,
     );
-    match crate::service::ai::chat_once(&cfg, messages).await {
+    // 关系图是一次性结构化输出: 推理模型的思考很吃预算, 这里独立放宽到 8000(不受问答设置限制)
+    match crate::service::ai::chat_once(&cfg, messages, 8000).await {
         Ok(raw) => match crate::service::ai::extract_json_object(&raw) {
             Some(graph) => Json(ReturnData::ok(json!({
                 "graph": graph,

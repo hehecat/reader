@@ -483,7 +483,11 @@ pub async fn stream_chat(
 }
 
 /// 非流式对话（用于结构化输出：人物关系图 JSON）
-pub async fn chat_once(cfg: &AiConfig, messages: Vec<Value>) -> anyhow::Result<String> {
+pub async fn chat_once(
+    cfg: &AiConfig,
+    messages: Vec<Value>,
+    max_tokens: u64,
+) -> anyhow::Result<String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .build()?;
@@ -491,7 +495,7 @@ pub async fn chat_once(cfg: &AiConfig, messages: Vec<Value>) -> anyhow::Result<S
         "model": cfg.model,
         "messages": messages,
         "stream": false,
-        "max_tokens": cfg.max_tokens,
+        "max_tokens": max_tokens,
     });
     let resp = client
         .post(format!("{}/chat/completions", cfg.base_url))
@@ -510,7 +514,7 @@ pub async fn chat_once(cfg: &AiConfig, messages: Vec<Value>) -> anyhow::Result<S
         .unwrap_or_default()
         .to_string();
     if content.trim().is_empty() {
-        anyhow::bail!("模型没有返回内容（可能思考用尽 max_tokens）");
+        anyhow::bail!("模型没有返回内容（推理模型可能在思考阶段用尽了 token 预算）");
     }
     Ok(content)
 }
