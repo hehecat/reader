@@ -9300,11 +9300,12 @@ async fn ai_settings_save(
         .to_string();
     let api_key_in = param_of(&params, body_json.as_ref(), "apiKey").trim().to_string();
     let model = param_of(&params, body_json.as_ref(), "model").trim().to_string();
-    let max_tokens = param_of(&params, body_json.as_ref(), "maxTokens")
+    // 0 = 不限制(省略 max_tokens); 其余夹在 200-16000
+    let raw_tokens = param_of(&params, body_json.as_ref(), "maxTokens")
         .trim()
         .parse::<u64>()
-        .unwrap_or(3500)
-        .clamp(200, 8000);
+        .unwrap_or(3500);
+    let max_tokens = if raw_tokens == 0 { 0 } else { raw_tokens.clamp(200, 16000) };
 
     if base_url.is_empty() {
         if let Err(e) = crate::service::ai::clear(&state.storage).await {

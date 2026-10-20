@@ -117,11 +117,14 @@ export function AiSettingsCard() {
           onChange={(event) => setModel(event.target.value)}
         />
       </SettingRow>
-      <SettingRow label="最大输出 tokens" value="200-8000; 推理模型建议 4000+">
+      <SettingRow
+        label="最大输出 tokens"
+        value="200-16000; 0 = 不限制(交给模型); 命中上限会自动续写 2 次"
+      >
         <input
           type="number"
-          min={200}
-          max={8000}
+          min={0}
+          max={16000}
           step={100}
           value={maxTokens}
           onChange={(event) => setMaxTokens(Number(event.target.value))}

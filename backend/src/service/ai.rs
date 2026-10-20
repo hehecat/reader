@@ -6,7 +6,8 @@
 //! - **知识边界**：没读过的章节不可能回答——片段缺失时明确让用户先读/缓存更多章节。
 //! - **引用可信**：回答要求按 `[第N章]` 标注，前端用 `title` 反查章节并跳转。
 //! - 配置（缺一即视为未启用）：`READER_AI_BASE_URL` / `READER_AI_API_KEY` /
-//!   `READER_AI_MODEL`（默认 deepseek-v4.1-flash）/ `READER_AI_MAX_TOKENS`。
+//!   `READER_AI_MODEL`（默认 deepseek-v4.1-flash）/ `READER_AI_MAX_TOKENS`
+//!   （0 = 不限制，省略该字段交给模型/网关；达到上限时自动续写最多 2 轮）。
 
 use std::convert::Infallible;
 use std::time::Duration;
@@ -122,8 +123,7 @@ fn env_config() -> Option<AiConfig> {
     let max_tokens = std::env::var("READER_AI_MAX_TOKENS")
         .ok()
         .and_then(|s| s.trim().parse::<u64>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(3500);
+        .unwrap_or(3500); // 0 = 不限制(请求里省略 max_tokens)
     Some(AiConfig { base_url, api_key, model, max_tokens })
 }
 
@@ -370,7 +370,81 @@ pub fn build_messages(
     msgs
 }
 
-/// 调上游 OpenAI 兼容端点并把增量转发成 SSE 事件（meta 由调用方先发）
+/// 单轮流式请求：返回 (累积正文, finish_reason)；正文增量已通过 `send` 转发
+async fn stream_round<F>(
+    client: &reqwest::Client,
+    cfg: &AiConfig,
+    messages: &[Value],
+    send: &F,
+) -> anyhow::Result<(String, String)>
+where
+    F: Fn(Value) + Sync,
+{
+    let mut body = json!({
+        "model": cfg.model,
+        "messages": messages,
+        "stream": true,
+    });
+    if cfg.max_tokens > 0 {
+        body["max_tokens"] = json!(cfg.max_tokens);
+    }
+    let resp = client
+        .post(format!("{}/chat/completions", cfg.base_url))
+        .bearer_auth(&cfg.api_key)
+        .json(&body)
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("模型返回 {status}: {}", text.chars().take(300).collect::<String>());
+    }
+    let mut stream = resp.bytes_stream();
+    let mut buf = String::new();
+    let mut text = String::new();
+    let mut thinking_chars = 0usize;
+    let mut thinking_sent = 0usize;
+    let mut finish_reason = String::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        buf.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(pos) = buf.find('\n') {
+            let line: String = buf.drain(..=pos).collect();
+            let line = line.trim();
+            let Some(data) = line.strip_prefix("data:") else {
+                continue;
+            };
+            let data = data.trim();
+            if data == "[DONE]" {
+                return Ok((text, if finish_reason.is_empty() { "stop".into() } else { finish_reason }));
+            }
+            let Ok(v) = serde_json::from_str::<Value>(data) else {
+                continue;
+            };
+            let delta = &v["choices"][0]["delta"];
+            if let Some(r) = delta.get("reasoning_content").and_then(|x| x.as_str()) {
+                thinking_chars += r.chars().count();
+                if thinking_chars - thinking_sent >= 200 {
+                    thinking_sent = thinking_chars;
+                    send(json!({ "type": "thinking", "chars": thinking_chars }));
+                }
+            }
+            if let Some(fr) = v["choices"][0]["finish_reason"].as_str() {
+                finish_reason = fr.to_string();
+            }
+            if let Some(c) = delta.get("content").and_then(|x| x.as_str()) {
+                if !c.is_empty() {
+                    text.push_str(c);
+                    send(json!({ "type": "delta", "text": c }));
+                }
+            }
+        }
+    }
+    Ok((text, if finish_reason.is_empty() { "stop".into() } else { finish_reason }))
+}
+
+/// 调上游并把增量转发成 SSE 事件（meta 由调用方先发）。
+/// 达到 max_tokens 被截断时自动续写（最多 2 轮，拼接到同一条回答）。
 pub async fn stream_chat(
     cfg: AiConfig,
     messages: Vec<Value>,
@@ -389,96 +463,52 @@ pub async fn stream_chat(
             return;
         }
     };
-    let max_tokens = cfg.max_tokens;
-    let body = json!({
-        "model": cfg.model,
-        "messages": messages,
-        "stream": true,
-        "max_tokens": max_tokens,
-    });
-    let resp = match client
-        .post(format!("{}/chat/completions", cfg.base_url))
-        .bearer_auth(&cfg.api_key)
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            send(json!({ "type": "error", "message": format!("模型连接失败: {e}") }));
-            return;
-        }
-    };
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        send(json!({
-            "type": "error",
-            "message": format!("模型返回 {status}: {}", text.chars().take(300).collect::<String>()),
-        }));
-        return;
-    }
 
-    let mut stream = resp.bytes_stream();
-    let mut buf = String::new();
-    let mut thinking_chars = 0usize;
-    let mut thinking_sent = 0usize;
-    let mut saw_content = false;
-    let mut finish_reason = String::new();
-    while let Some(chunk) = stream.next().await {
-        let chunk = match chunk {
-            Ok(c) => c,
-            Err(e) => {
-                send(json!({ "type": "error", "message": format!("读取模型响应失败: {e}") }));
-                return;
-            }
-        };
-        buf.push_str(&String::from_utf8_lossy(&chunk));
-        while let Some(pos) = buf.find('\n') {
-            let line: String = buf.drain(..=pos).collect();
-            let line = line.trim();
-            let Some(data) = line.strip_prefix("data:") else {
-                continue;
-            };
-            let data = data.trim();
-            if data == "[DONE]" {
+    let mut convo: Vec<Value> = messages;
+    let mut continued = 0usize;
+    let mut finish = "stop".to_string();
+    let mut saw_any = false;
+    loop {
+        match stream_round(&client, &cfg, &convo, &send).await {
+            Ok((text, round_finish)) => {
+                if !text.is_empty() {
+                    saw_any = true;
+                }
+                finish = round_finish;
+                if finish == "length" && cfg.max_tokens > 0 && continued < 2 {
+                    continued += 1;
+                    send(json!({
+                        "type": "notice",
+                        "message": format!("输出达到上限, 自动续写中({continued}/2)…"),
+                    }));
+                    convo.push(json!({ "role": "assistant", "content": text }));
+                    convo.push(json!({
+                        "role": "user",
+                        "content": "继续从断点接着写, 不要重复已经写过的内容, 不要重新开头。",
+                    }));
+                    continue;
+                }
                 break;
             }
-            let Ok(v) = serde_json::from_str::<Value>(data) else {
-                continue;
-            };
-            let delta = &v["choices"][0]["delta"];
-            // 推理模型先吐 reasoning_content：只回报进度，不当作答案
-            if let Some(r) = delta.get("reasoning_content").and_then(|x| x.as_str()) {
-                thinking_chars += r.chars().count();
-                if thinking_chars - thinking_sent >= 200 {
-                    thinking_sent = thinking_chars;
-                    send(json!({ "type": "thinking", "chars": thinking_chars }));
-                }
-            }
-            if let Some(fr) = v["choices"][0]["finish_reason"].as_str() {
-                finish_reason = fr.to_string();
-            }
-            if let Some(c) = delta.get("content").and_then(|x| x.as_str()) {
-                if !c.is_empty() {
-                    saw_content = true;
-                    send(json!({ "type": "delta", "text": c }));
-                }
+            Err(e) => {
+                send(json!({ "type": "error", "message": format!("{e}") }));
+                return;
             }
         }
     }
-    // 推理模型把输出预算花在思考上时 content 为空: 给出可行动提示, 而不是让面板显示"(无内容)"
-    if !saw_content {
-        let message = if finish_reason == "length" {
+
+    if !saw_any {
+        let message = if finish == "length" {
             format!(
-                "模型在思考阶段用尽了输出预算(当前 max_tokens={max_tokens})。\n请到「设置 → AI 阅读助手」把最大输出 tokens 调大(建议 4000+), 或换一个非推理模型。"
+                "模型在思考阶段用尽了输出预算(当前 max_tokens={})。\n请到「设置 → AI 阅读助手」调大最大输出 tokens(建议 4000+), 或设为 0 表示不限制。",
+                cfg.max_tokens
             )
         } else {
             "模型没有返回内容, 请重试, 或在设置里更换模型。".to_string()
         };
         send(json!({ "type": "error", "message": message }));
     } else {
-        send(json!({ "type": "done" }));
+        send(json!({ "type": "done", "finish": finish }));
     }
 }
 

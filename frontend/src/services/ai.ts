@@ -36,7 +36,10 @@ export interface AiChatHandlers {
   /** 推理模型思考进度（字符数），用于"思考中"提示 */
   onThinking?: (chars: number) => void;
   onDelta?: (text: string) => void;
-  onDone?: () => void;
+  /** 过程提示（如"输出达到上限, 自动续写中"） */
+  onNotice?: (message: string) => void;
+  /** finish = "length" 表示达到 max_tokens 被截断 */
+  onDone?: (finish?: string) => void;
   onError?: (message: string) => void;
 }
 
@@ -47,6 +50,7 @@ interface AiEvent {
   chars?: number;
   text?: string;
   message?: string;
+  finish?: string;
 }
 
 /**
@@ -86,12 +90,15 @@ export function streamAiChat(req: AiChatRequest, handlers: AiChatHandlers): () =
         case "thinking":
           handlers.onThinking?.(Number(event.chars) || 0);
           break;
+        case "notice":
+          handlers.onNotice?.(String(event.message ?? ""));
+          break;
         case "delta":
           handlers.onDelta?.(String(event.text ?? ""));
           break;
         case "done":
           finished = true;
-          handlers.onDone?.();
+          handlers.onDone?.(typeof event.finish === "string" ? event.finish : undefined);
           break;
         case "error":
           finished = true;

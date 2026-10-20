@@ -17,6 +17,10 @@ interface ChatMessage {
   pending?: boolean;
   /** 推理模型的思考进度（字符数） */
   thinking?: number;
+  /** 过程提示（自动续写等） */
+  notice?: string;
+  /** 回答达到 max_tokens 被截断（可继续生成） */
+  truncated?: boolean;
 }
 
 export interface AiChatPanelProps {
@@ -97,8 +101,9 @@ export function AiChatPanel({
     setMessages((prev) => prev.map((m) => (m.id === id ? updater(m) : m)));
   }, []);
 
-  const send = React.useCallback(() => {
-    const question = input.trim();
+  const send = React.useCallback(
+    (override?: string) => {
+    const question = (override ?? input).trim();
     if (question === "" || streaming || !configured) {
       return;
     }
@@ -122,7 +127,9 @@ export function AiChatPanel({
       pending: true,
     };
     setMessages((prev) => [...prev, userMsg, botMsg]);
-    setInput("");
+    if (override === undefined) {
+      setInput("");
+    }
     setStreaming(true);
 
     cancelRef.current = streamAiChat(
@@ -131,16 +138,24 @@ export function AiChatPanel({
         onMeta: ({ snippets }) => {
           patch(botMsg.id, (m) => ({ ...m, snippets }));
         },
+        onNotice: (message) => {
+          patch(botMsg.id, (m) => ({ ...m, notice: message }));
+        },
         onThinking: (chars) => {
           patch(botMsg.id, (m) => ({ ...m, thinking: chars }));
         },
         onDelta: (text) => {
           patch(botMsg.id, (m) => ({ ...m, text: m.text + text, thinking: 0 }));
         },
-        onDone: () => {
+        onDone: (finish) => {
           setStreaming(false);
           cancelRef.current = null;
-          patch(botMsg.id, (m) => ({ ...m, pending: false, thinking: 0 }));
+          patch(botMsg.id, (m) => ({
+            ...m,
+            pending: false,
+            thinking: 0,
+            truncated: finish === "length",
+          }));
         },
         onError: (message) => {
           setStreaming(false);
@@ -155,7 +170,9 @@ export function AiChatPanel({
         },
       },
     );
-  }, [bookName, bookUrl, configured, currentTitle, input, messages, patch, streaming, titles]);
+    },
+    [bookName, bookUrl, configured, currentTitle, input, messages, patch, streaming, titles],
+  );
 
   const stop = React.useCallback(() => {
     cancelRef.current?.();
@@ -304,6 +321,11 @@ export function AiChatPanel({
                       m.kind === "error" && "bg-danger/10 text-danger",
                     )}
                   >
+                    {m.notice !== undefined && m.pending ? (
+                      <span className="mb-1 block text-xs text-muted-foreground">
+                        {m.notice}
+                      </span>
+                    ) : null}
                     {m.text !== "" ? (
                       m.kind === "error" ? (
                         m.text
@@ -341,6 +363,19 @@ export function AiChatPanel({
                       ))}
                     </div>
                   ) : null}
+                  {m.truncated === true ? (
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      <span>回答达到输出上限被截断</span>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        loading={streaming}
+                        onClick={() => send("请从断点继续写, 不要重复已写过的内容。")}
+                      >
+                        继续生成
+                      </Button>
+                    </div>
+                  ) : null}
                 </div>
               ))
             )}
@@ -370,7 +405,7 @@ export function AiChatPanel({
                   停止
                 </Button>
               ) : (
-                <Button size="sm" disabled={input.trim() === ""} onClick={send}>
+                <Button size="sm" disabled={input.trim() === ""} onClick={() => send()}>
                   发送
                   <Send aria-hidden />
                 </Button>
