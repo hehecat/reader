@@ -29,7 +29,7 @@ export function AiSettingsCard() {
   const [baseUrl, setBaseUrl] = React.useState("");
   const [apiKey, setApiKey] = React.useState("");
   const [model, setModel] = React.useState("deepseek-v4.1-flash");
-  const [maxTokens, setMaxTokens] = React.useState(1500);
+  const [maxTokens, setMaxTokens] = React.useState(3500);
   const [testResult, setTestResult] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -38,7 +38,7 @@ export function AiSettingsCard() {
     }
     setBaseUrl(data.baseUrl);
     setModel(data.model || "deepseek-v4.1-flash");
-    setMaxTokens(data.maxTokens || 1500);
+    setMaxTokens(data.maxTokens || 3500);
     setApiKey("");
   }, [data]);
 
@@ -117,7 +117,7 @@ export function AiSettingsCard() {
           onChange={(event) => setModel(event.target.value)}
         />
       </SettingRow>
-      <SettingRow label="最大输出 tokens" value="200-8000, 越大回答越长">
+      <SettingRow label="最大输出 tokens" value="200-8000; 推理模型建议 4000+">
         <input
           type="number"
           min={200}

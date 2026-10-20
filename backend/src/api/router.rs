@@ -9197,7 +9197,7 @@ async fn ai_settings_get(
         "source": crate::service::ai::source(),
         "baseUrl": cfg.as_ref().map(|c| c.base_url.clone()).unwrap_or_default(),
         "model": cfg.as_ref().map(|c| c.model.clone()).unwrap_or_default(),
-        "maxTokens": cfg.as_ref().map(|c| c.max_tokens).unwrap_or(1500),
+        "maxTokens": cfg.as_ref().map(|c| c.max_tokens).unwrap_or(3500),
         "keySet": cfg.is_some(),
     })))
 }
@@ -9225,7 +9225,7 @@ async fn ai_settings_save(
     let max_tokens = param_of(&params, body_json.as_ref(), "maxTokens")
         .trim()
         .parse::<u64>()
-        .unwrap_or(1500)
+        .unwrap_or(3500)
         .clamp(200, 8000);
 
     if base_url.is_empty() {

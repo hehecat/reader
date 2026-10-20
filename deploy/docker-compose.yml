@@ -32,7 +32,7 @@ services:
       READER_AI_BASE_URL: "${READER_AI_BASE_URL:-}"
       READER_AI_API_KEY: "${READER_AI_API_KEY:-}"
       READER_AI_MODEL: "${READER_AI_MODEL:-deepseek-v4.1-flash}"
-      READER_AI_MAX_TOKENS: "${READER_AI_MAX_TOKENS:-1500}"
+      READER_AI_MAX_TOKENS: "${READER_AI_MAX_TOKENS:-3500}"
     networks:
       - default
       # octopus 网关所在网络: 容器内用 http://octopus:8080/v1 访问, 不出公网

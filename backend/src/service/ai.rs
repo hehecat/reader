@@ -123,7 +123,7 @@ fn env_config() -> Option<AiConfig> {
         .ok()
         .and_then(|s| s.trim().parse::<u64>().ok())
         .filter(|n| *n > 0)
-        .unwrap_or(1500);
+        .unwrap_or(3500);
     Some(AiConfig { base_url, api_key, model, max_tokens })
 }
 
@@ -389,11 +389,12 @@ pub async fn stream_chat(
             return;
         }
     };
+    let max_tokens = cfg.max_tokens;
     let body = json!({
         "model": cfg.model,
         "messages": messages,
         "stream": true,
-        "max_tokens": cfg.max_tokens,
+        "max_tokens": max_tokens,
     });
     let resp = match client
         .post(format!("{}/chat/completions", cfg.base_url))
@@ -422,6 +423,8 @@ pub async fn stream_chat(
     let mut buf = String::new();
     let mut thinking_chars = 0usize;
     let mut thinking_sent = 0usize;
+    let mut saw_content = false;
+    let mut finish_reason = String::new();
     while let Some(chunk) = stream.next().await {
         let chunk = match chunk {
             Ok(c) => c,
@@ -439,8 +442,7 @@ pub async fn stream_chat(
             };
             let data = data.trim();
             if data == "[DONE]" {
-                send(json!({ "type": "done" }));
-                return;
+                break;
             }
             let Ok(v) = serde_json::from_str::<Value>(data) else {
                 continue;
@@ -454,12 +456,28 @@ pub async fn stream_chat(
                     send(json!({ "type": "thinking", "chars": thinking_chars }));
                 }
             }
+            if let Some(fr) = v["choices"][0]["finish_reason"].as_str() {
+                finish_reason = fr.to_string();
+            }
             if let Some(c) = delta.get("content").and_then(|x| x.as_str()) {
                 if !c.is_empty() {
+                    saw_content = true;
                     send(json!({ "type": "delta", "text": c }));
                 }
             }
         }
     }
-    send(json!({ "type": "done" }));
+    // 推理模型把输出预算花在思考上时 content 为空: 给出可行动提示, 而不是让面板显示"(无内容)"
+    if !saw_content {
+        let message = if finish_reason == "length" {
+            format!(
+                "模型在思考阶段用尽了输出预算(当前 max_tokens={max_tokens})。\n请到「设置 → AI 阅读助手」把最大输出 tokens 调大(建议 4000+), 或换一个非推理模型。"
+            )
+        } else {
+            "模型没有返回内容, 请重试, 或在设置里更换模型。".to_string()
+        };
+        send(json!({ "type": "error", "message": message }));
+    } else {
+        send(json!({ "type": "done" }));
+    }
 }
