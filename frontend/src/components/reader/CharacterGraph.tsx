@@ -26,18 +26,27 @@ interface Point {
   y: number;
 }
 
-const W = 440;
-const H = 340;
+const W = 380;
+const H = 300;
 const CX = W / 2;
 const CY = H / 2;
-const RADIUS = 118;
-const NODE_R = 25;
+const RADIUS = 104;
+const NODE_R = 23;
 
 function layout(count: number): Point[] {
   return Array.from({ length: count }, (_, i) => {
     const angle = (i / Math.max(1, count)) * Math.PI * 2 - Math.PI / 2;
     return { x: CX + Math.cos(angle) * RADIUS, y: CY + Math.sin(angle) * RADIUS };
   });
+}
+
+/** 章节引用清洗: 去掉模型偶尔加的【】「」包裹 */
+function cleanCite(text: string): string {
+  return text
+    .trim()
+    .replace(/^[【\[「『]+/, "")
+    .replace(/[】\]」』]+$/, "")
+    .trim();
 }
 
 function truncate(text: string, max = 4): string {
@@ -98,11 +107,14 @@ export function CharacterGraph({
           // 控制点向圆心收 18%，曲线从人物旁绕过
           const cx = mx + (CX - mx) * 0.18;
           const cy = my + (CY - my) * 0.18;
-          const lx = 0.25 * a.x + 0.5 * cx + 0.25 * b.x;
-          const ly = 0.25 * a.y + 0.5 * cy + 0.25 * b.y;
           const highlighted =
             selected !== null && (rel.from === selected || rel.to === selected);
           const dimmed = selected !== null && !highlighted;
+          // 标签只在选中人物时显示(否则 15 条边的关系文字会挤在圆心), 且贴近对端节点
+          const showLabel = highlighted && (rel.label ?? "") !== "";
+          const lt = 0.62;
+          const lx = (1 - lt) ** 2 * a.x + 2 * (1 - lt) * lt * cx + lt ** 2 * b.x;
+          const ly = (1 - lt) ** 2 * a.y + 2 * (1 - lt) * lt * cy + lt ** 2 * b.y;
           return (
             <g key={`r-${i}`} className={dimmed ? "opacity-25" : undefined}>
               <path
@@ -111,13 +123,13 @@ export function CharacterGraph({
                 strokeWidth={highlighted ? 2 : 1.2}
                 className={highlighted ? "stroke-accent" : "stroke-border"}
               />
-              {rel.label !== undefined && rel.label !== "" ? (
+              {showLabel ? (
                 <text
                   x={lx}
                   y={ly}
                   textAnchor="middle"
                   dominantBaseline="middle"
-                  className="fill-muted-foreground text-[9px]"
+                  className="fill-muted-foreground text-[10px]"
                   strokeWidth={3}
                   paintOrder="stroke"
                   stroke="currentColor"
@@ -169,7 +181,7 @@ export function CharacterGraph({
               <text
                 textAnchor="middle"
                 dominantBaseline="central"
-                className="pointer-events-none fill-foreground text-[11px] font-medium"
+                className="pointer-events-none fill-foreground text-[12px] font-medium"
               >
                 {truncate(c.name)}
               </text>
@@ -193,11 +205,11 @@ export function CharacterGraph({
               <button
                 type="button"
                 className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                onClick={() => onJump(active.firstChapter ?? "")}
+                onClick={() => onJump(cleanCite(active.firstChapter ?? ""))}
                 title="跳到首次出场章节"
               >
                 <Badge size="sm" variant="muted">
-                  首次出场: {active.firstChapter}
+                  首次出场: {cleanCite(active.firstChapter)}
                 </Badge>
               </button>
             ) : null}
@@ -223,10 +235,10 @@ export function CharacterGraph({
                     {r.chapter !== undefined && r.chapter !== "" ? (
                       <button
                         type="button"
-                        onClick={() => onJump(r.chapter ?? "")}
+                        onClick={() => onJump(cleanCite(r.chapter ?? ""))}
                         className="text-accent underline-offset-2 hover:underline"
                       >
-                        {r.chapter}
+                        {cleanCite(r.chapter ?? "")}
                       </button>
                     ) : null}
                   </li>

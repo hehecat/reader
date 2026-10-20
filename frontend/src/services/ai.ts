@@ -217,6 +217,7 @@ export interface AiGraphInput {
 }
 
 export async function generateAiGraph(input: AiGraphInput): Promise<AiGraphData> {
-  const data = await post<unknown>("/aiGraph", input);
+  // 推理模型生成结构化图较慢(实测 20-30s, 偶发更久): 单独放宽到 180s, 避免默认超时误杀
+  const data = await post<unknown>("/aiGraph", input, { timeout: 180_000 });
   return aiGraphSchema.parse(data).graph;
 }

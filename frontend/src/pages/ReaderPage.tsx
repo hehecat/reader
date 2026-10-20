@@ -221,7 +221,12 @@ export default function ReaderPage() {
   /** 点 AI 回答里的章节引用: 按标题反查章节并跳转 */
   const jumpToTitle = React.useCallback(
     (title: string) => {
-      const needle = title.trim();
+      // 模型有时把引用写成【第N章 …】/「第N章 …」: 去掉包裹符号再匹配
+      const needle = title
+        .trim()
+        .replace(/^[【\[「『]+/, "")
+        .replace(/[】\]」』]+$/, "")
+        .trim();
       if (needle === "") {
         return;
       }
