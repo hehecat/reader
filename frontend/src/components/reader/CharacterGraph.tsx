@@ -91,8 +91,8 @@ export function CharacterGraph({
         className="w-full select-none"
       >
         {relations.map((rel, i) => {
-          const a = positions[indexOf[rel.from]];
-          const b = positions[indexOf[rel.to]];
+          const a = positions[indexOf[rel.from] ?? 0] ?? { x: CX, y: CY };
+          const b = positions[indexOf[rel.to] ?? 0] ?? { x: CX, y: CY };
           const mx = (a.x + b.x) / 2;
           const my = (a.y + b.y) / 2;
           // 控制点向圆心收 18%，曲线从人物旁绕过
@@ -131,7 +131,7 @@ export function CharacterGraph({
         })}
 
         {characters.map((c, i) => {
-          const p = positions[i];
+          const p = positions[i] ?? { x: CX, y: CY };
           const isSelected = selected === c.name;
           const isNeighbor =
             selected !== null &&

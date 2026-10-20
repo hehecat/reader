@@ -108,7 +108,7 @@ export function MarkdownLite({
         flush();
         out.push(
           <p key={`h-${out.length}`} className="mt-1 font-semibold text-foreground">
-            {renderInline(heading[2], onCite, `h-${out.length}`)}
+            {renderInline(heading[2] ?? "", onCite, `h-${out.length}`)}
           </p>,
         );
         continue;
@@ -119,7 +119,7 @@ export function MarkdownLite({
           flush();
           list = { ordered: false, items: [] };
         }
-        list.items.push(ul[1]);
+        list.items.push(ul[1] ?? "");
         continue;
       }
       const ol = /^\s*(\d+)[.)]\s+(.*)$/.exec(line);
@@ -128,7 +128,7 @@ export function MarkdownLite({
           flush();
           list = { ordered: true, items: [] };
         }
-        list.items.push(ol[2]);
+        list.items.push(ol[2] ?? "");
         continue;
       }
       const quote = /^>\s?(.*)$/.exec(line);
@@ -139,7 +139,7 @@ export function MarkdownLite({
             key={`q-${out.length}`}
             className="border-l-2 border-border pl-2 text-muted-foreground"
           >
-            {renderInline(quote[1], onCite, `q-${out.length}`)}
+            {renderInline(quote[1] ?? "", onCite, `q-${out.length}`)}
           </blockquote>,
         );
         continue;

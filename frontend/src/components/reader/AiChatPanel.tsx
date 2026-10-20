@@ -245,8 +245,7 @@ export function AiChatPanel({
           <code className="font-mono text-xs">READER_AI_BASE_URL</code> 与{" "}
           <code className="font-mono text-xs">READER_AI_API_KEY</code> 后重启容器即可。
         </div>
-      ) : (
-        {tab === "graph" ? (
+      ) : tab === "graph" ? (
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3">
             <div className="flex flex-wrap items-center gap-2">
               <Button size="sm" loading={graphLoading} onClick={loadGraph}>
@@ -379,7 +378,6 @@ export function AiChatPanel({
             </div>
           </div>
         </>
-        )}
       )}
     </aside>
   );
