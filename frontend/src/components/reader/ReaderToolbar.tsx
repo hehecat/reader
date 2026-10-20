@@ -1,5 +1,6 @@
 import {
   ArrowLeft,
+  Bot,
   AudioLines,
   Bookmark,
   BookmarkCheck,
@@ -69,6 +70,10 @@ export interface ReaderTopBarProps {
   onToggleImmersive: () => void;
   onOpenToc: () => void;
   onOpenSettings: () => void;
+  /** AI 阅读助手入口: 仅在设置开启时由页面传入, 未传则不渲染按钮 */
+  onOpenAi?: () => void;
+  /** AI 面板当前展开(按钮高亮) */
+  aiOpen?: boolean;
   /** 点击正文隐藏工具条时: 顶栏向上收起 (内容随 flex 自适应扩展) */
   chromeHidden?: boolean;
 }
@@ -99,6 +104,8 @@ export function ReaderTopBar({
   onToggleImmersive,
   onOpenToc,
   onOpenSettings,
+  onOpenAi,
+  aiOpen = false,
   chromeHidden = false,
 }: ReaderTopBarProps) {
   return (
@@ -192,6 +199,19 @@ export function ReaderTopBar({
         >
           {immersive ? <Minimize2 /> : <Maximize2 />}
         </IconButton>
+        {onOpenAi === undefined ? null : (
+          <IconButton
+            variant="ghost"
+            size="sm"
+            tooltip="AI 阅读助手"
+            tooltipSide="bottom"
+            aria-pressed={aiOpen}
+            className={cn(aiOpen && "text-accent")}
+            onClick={onOpenAi}
+          >
+            <Bot />
+          </IconButton>
+        )}
         <IconButton
           variant="ghost"
           size="sm"

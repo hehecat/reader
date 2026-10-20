@@ -126,6 +126,8 @@ pub fn router(config: crate::AppConfig, storage: Storage) -> axum::Router {
             "/reader3/getOpdsSettings",
             get(get_opds_settings).post(get_opds_settings),
         )
+        .route("/reader3/aiStatus", get(ai_status))
+        .route("/reader3/aiChat", post(ai_chat))
         .route("/reader3/saveOpdsSettings", post(save_opds_settings))
         .route(
             "/reader3/uploadLocalBook",
@@ -9161,6 +9163,124 @@ fn search_timeout_param(params: &HashMap<String, String>, body_json: Option<&ser
 }
 
 /// SSE 错误事件（兼容 legacy：event: error + data: ReturnData）
+/// GET /reader3/aiStatus：AI 阅读助手是否可用（未配置端点时前端不显示入口）
+async fn ai_status(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Json<ReturnData> {
+    let _ns = match resolve_namespace(&state, &params, &headers).await {
+        Ok(ns) => ns,
+        Err(ret) => return Json(ret),
+    };
+    match crate::service::ai::config() {
+        Some(cfg) => Json(ReturnData::ok(json!({ "enabled": true, "model": cfg.model }))),
+        None => Json(ReturnData::ok(json!({ "enabled": false, "model": Value::Null }))),
+    }
+}
+
+/// POST /reader3/aiChat：基于已缓存章节的问答（SSE：meta → thinking/delta → done）
+async fn ai_chat(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Option<axum::body::Bytes>,
+) -> Response {
+    let namespace = match resolve_namespace(&state, &params, &headers).await {
+        Ok(ns) => ns,
+        Err(ret) => return sse_error(ret),
+    };
+    let body_json = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    let url = param_of(&params, body_json.as_ref(), "url");
+    let question = param_of(&params, body_json.as_ref(), "question");
+    let book_name = param_of(&params, body_json.as_ref(), "bookName");
+    if question.trim().is_empty() {
+        return sse_error(ReturnData::err("请输入问题"));
+    }
+    if url.trim().is_empty() {
+        return sse_error(ReturnData::err("缺少书籍地址"));
+    }
+    let Some(cfg) = crate::service::ai::config() else {
+        return sse_error(ReturnData::err(
+            "未配置 AI 端点（READER_AI_BASE_URL / READER_AI_API_KEY）",
+        ));
+    };
+    // 章节顺序线索（前端传本书标题序 + 当前章），用于无关键词命中时的兜底取样
+    let titles: Vec<String> = body_json
+        .as_ref()
+        .and_then(|v| v.get("titles"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| t.as_str())
+                .take(3000)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let current_title = param_of(&params, body_json.as_ref(), "currentTitle");
+    // 检索已缓存章节：毫秒级（单本几 MB 关键词扫描），不阻塞其他读写
+    let retrieval = crate::service::ai::retrieve(
+        &state.storage,
+        &namespace,
+        &url,
+        &question,
+        &titles,
+        &current_title,
+    )
+    .await;
+    let snippets = retrieval.snippets;
+    let history: Vec<(String, String)> = body_json
+        .as_ref()
+        .and_then(|v| v.get("history"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| {
+                    let role = m.get("role")?.as_str()?;
+                    let content = m.get("content")?.as_str()?;
+                    if role == "user" || role == "assistant" {
+                        Some((role.to_string(), content.chars().take(2000).collect::<String>()))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let messages = crate::service::ai::build_messages(
+        &book_name,
+        &question,
+        &snippets,
+        retrieval.cached_chapters,
+        &history,
+    );
+
+    let (tx, rx) =
+        tokio::sync::mpsc::unbounded_channel::<Result<Bytes, std::convert::Infallible>>();
+    let meta = json!({
+        "type": "meta",
+        "model": cfg.model,
+        "snippets": snippets
+            .iter()
+            .map(|s| json!({ "index": s.index, "title": s.title }))
+            .collect::<Vec<_>>(),
+    });
+    let _ = tx.send(Ok(Bytes::from(format!("data: {meta}\n\n"))));
+    tokio::spawn(async move {
+        crate::service::ai::stream_chat(cfg, messages, tx).await;
+    });
+    let stream = futures::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|item| (item, rx))
+    });
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/event-stream; charset=utf-8")
+        .header("Cache-Control", "no-cache")
+        .body(Body::from_stream(stream))
+        .unwrap()
+}
+
 fn sse_error(ret: ReturnData) -> Response {
     let payload = serde_json::to_string(&ret).unwrap_or_default();
     let body = format!("event: error\ndata: {payload}\n\n");

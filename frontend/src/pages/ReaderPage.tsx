@@ -2,6 +2,7 @@ import { CircleAlert, LibraryBig, Link2Off } from "lucide-react";
 import * as React from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
+import { AiChatPanel } from "@/components/reader/AiChatPanel";
 import { AnnotationsDrawer } from "@/components/reader/AnnotationsDrawer";
 import {
   AddBookmarkDialog,
@@ -19,7 +20,7 @@ import { SettingsPanel } from "@/components/reader/SettingsPanel";
 import { TocDrawer } from "@/components/reader/TocDrawer";
 import { TtsBar } from "@/components/reader/TtsBar";
 import { useShelfToggle } from "@/components/reader/useShelfToggle";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, cn, toast } from "@/components/ui";
 import { useBookData } from "@/hooks/useBookData";
 import { useChapterContent } from "@/hooks/useChapterContent";
@@ -29,6 +30,7 @@ import { useToc } from "@/hooks/useToc";
 import { useTts } from "@/hooks/useTts";
 import { humanizeError } from "@/lib/errors";
 import { BOOKS_QUERY_KEY, errorMessage } from "@/hooks/useBookshelf";
+import { getAiStatus } from "@/services/ai";
 import { saveBook } from "@/services/bookshelf";
 import { SwitchSourceDialog } from "@/components/book/SwitchSourceDialog";
 import { createBookmark, type Bookmark } from "@/services/bookmarks";
@@ -206,6 +208,27 @@ export default function ReaderPage() {
   const toc = useToc({ book, onNavigate: goToChapter });
 
   const readMode = useSettingsStore((state) => state.readMode);
+
+  // AI 阅读助手: 设置开关决定入口是否出现; 后端是否配置模型决定面板可用态
+  const aiAssistant = useSettingsStore((state) => state.aiAssistant);
+  const [aiOpen, setAiOpen] = React.useState(false);
+  const aiStatusQuery = useQuery({
+    queryKey: ["aiStatus"],
+    queryFn: getAiStatus,
+    enabled: aiAssistant,
+    staleTime: 5 * 60 * 1000,
+  });
+  /** 点 AI 回答里的章节引用: 按标题反查章节并跳转 */
+  const jumpToTitle = React.useCallback(
+    (title: string) => {
+      const idx = chapters.findIndex((c) => c.title === title);
+      if (idx >= 0) {
+        goToChapter(idx);
+        setAiOpen(false);
+      }
+    },
+    [chapters, goToChapter],
+  );
   const setTocOpen = useReaderUIStore((state) => state.setTocOpen);
   const setSettingsOpen = useReaderUIStore((state) => state.setSettingsOpen);
 
@@ -571,7 +594,8 @@ export default function ReaderPage() {
           </div>
         </div>
       ) : null}
-      <div className="flex h-full flex-col">
+      <div className="flex h-full">
+        <div className="relative flex min-w-0 flex-1 flex-col">
         <ReaderTopBar
           bookName={book.name}
           chapterTitle={chapter?.title ?? ""}
@@ -593,6 +617,8 @@ export default function ReaderPage() {
           onToggleImmersive={handleToggleImmersive}
           onOpenToc={handleOpenToc}
           onOpenSettings={handleOpenSettings}
+          onOpenAi={aiAssistant ? () => setAiOpen(true) : undefined}
+          aiOpen={aiAssistant && aiOpen}
           chromeHidden={chromeHidden}
         />
 
@@ -636,6 +662,19 @@ export default function ReaderPage() {
           onGoToChapter={goToChapter}
           onOpenBookmarks={handleOpenBookmarks}
           chromeHidden={chromeHidden}
+        />
+        </div>
+
+        <AiChatPanel
+          open={aiAssistant && aiOpen}
+          onClose={() => setAiOpen(false)}
+          bookUrl={bookUrl}
+          bookName={book.name}
+          titles={chapters.map((c) => c.title)}
+          currentTitle={chapters[progress.index]?.title ?? ""}
+          configured={aiStatusQuery.data?.enabled === true}
+          model={aiStatusQuery.data?.model ?? null}
+          onJump={jumpToTitle}
         />
       </div>
 

@@ -28,7 +28,20 @@ services:
       # secure 模式必填(可经 .env 覆盖): 注册邀请码
       READER_APP_INVITECODE: "${READER_APP_INVITECODE:-}"
       TZ: Asia/Shanghai
+      # AI 阅读助手(OpenAI 兼容端点; 默认关闭 = 不填 BASE_URL/KEY 则面板不可用)
+      READER_AI_BASE_URL: "${READER_AI_BASE_URL:-}"
+      READER_AI_API_KEY: "${READER_AI_API_KEY:-}"
+      READER_AI_MODEL: "${READER_AI_MODEL:-deepseek-v4.1-flash}"
+      READER_AI_MAX_TOKENS: "${READER_AI_MAX_TOKENS:-1500}"
+    networks:
+      - default
+      # octopus 网关所在网络: 容器内用 http://octopus:8080/v1 访问, 不出公网
+      - yatori_yatori-net
     restart: unless-stopped
+
+networks:
+  yatori_yatori-net:
+    external: true
 
 volumes:
   data:

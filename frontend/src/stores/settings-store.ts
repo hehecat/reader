@@ -41,6 +41,8 @@ export interface SettingsState {
   readMode: ReadMode;
   /** 首行缩进 */
   indentParagraph: boolean;
+  /** AI 阅读助手入口开关(开启后阅读器顶栏出现 AI 按钮; 需部署端配置模型端点) */
+  aiAssistant: boolean;
   /** 正文最大宽度 em */
   contentWidth: number;
   /** 自定义 font-family 串 (fontFamily=custom 时生效, 空串回退衬线) */
@@ -75,6 +77,7 @@ export interface SettingsState {
   setFontFamily: (fontFamily: FontFamilyMode) => void;
   setReadMode: (readMode: ReadMode) => void;
   setIndentParagraph: (indentParagraph: boolean) => void;
+  setAiAssistant: (aiAssistant: boolean) => void;
   setContentWidth: (contentWidth: number) => void;
   setCustomFontFamily: (customFontFamily: string) => void;
   setAutoScrollSpeed: (autoScrollSpeed: number) => void;
@@ -111,6 +114,7 @@ export const defaultSettings: SettingsData = {
   fontFamily: "sans",
   readMode: "scroll",
   indentParagraph: true,
+  aiAssistant: false,
   contentWidth: 42,
   customFontFamily: "",
   autoScrollSpeed: 40,
@@ -163,6 +167,10 @@ export const useSettingsStore = create<SettingsState>()(
 
       setReadMode: (readMode) => {
         set({ readMode });
+      },
+
+      setAiAssistant: (aiAssistant) => {
+        set({ aiAssistant });
       },
 
       setIndentParagraph: (indentParagraph) => {

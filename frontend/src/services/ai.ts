@@ -1,0 +1,143 @@
+import { z } from "zod";
+
+import { API_BASE_URL, get } from "@/lib/api-client";
+import { getAccessToken } from "@/lib/storage";
+
+/** AI 助手可用性：未配置端点时 enabled=false（前端隐藏入口） */
+export const aiStatusSchema = z.object({
+  enabled: z.boolean(),
+  model: z.string().nullable().optional(),
+});
+export type AiStatus = z.infer<typeof aiStatusSchema>;
+
+export async function getAiStatus(): Promise<AiStatus> {
+  const data = await get<unknown>("/aiStatus");
+  return aiStatusSchema.parse(data);
+}
+
+export interface AiSnippet {
+  /** 章节缓存键（书源书为 URL 哈希，前端只用 title 反查） */
+  index: number;
+  title: string;
+}
+
+export interface AiChatRequest {
+  url: string;
+  question: string;
+  bookName?: string;
+  /** 章节标题序（后端按它排序，无命中时取"开头两章 + 当前章附近"） */
+  titles?: string[];
+  currentTitle?: string;
+  history?: { role: "user" | "assistant"; content: string }[];
+}
+
+export interface AiChatHandlers {
+  onMeta?: (meta: { model?: string; snippets: AiSnippet[] }) => void;
+  /** 推理模型思考进度（字符数），用于"思考中"提示 */
+  onThinking?: (chars: number) => void;
+  onDelta?: (text: string) => void;
+  onDone?: () => void;
+  onError?: (message: string) => void;
+}
+
+interface AiEvent {
+  type?: string;
+  model?: string;
+  snippets?: AiSnippet[];
+  chars?: number;
+  text?: string;
+  message?: string;
+}
+
+/**
+ * 基于已缓存章节的问答（POST + fetch 流式）。
+ * EventSource 只支持 GET，而历史对话要放在 body 里，所以这里手写 SSE 解析。
+ * @returns 取消函数：中止流并触发 onDone
+ */
+export function streamAiChat(req: AiChatRequest, handlers: AiChatHandlers): () => void {
+  const controller = new AbortController();
+
+  void (async () => {
+    const token = getAccessToken();
+    const query = token === null ? "" : `?accessToken=${encodeURIComponent(token)}`;
+    const resp = await fetch(`${API_BASE_URL}/aiChat${query}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token === null ? {} : { accessToken: token }),
+      },
+      body: JSON.stringify(req),
+      signal: controller.signal,
+    });
+    if (!resp.ok || resp.body === null) {
+      handlers.onError?.(`请求失败 (HTTP ${resp.status})`);
+      return;
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let finished = false;
+
+    const handle = (event: AiEvent): void => {
+      switch (event.type) {
+        case "meta":
+          handlers.onMeta?.({ model: event.model, snippets: event.snippets ?? [] });
+          break;
+        case "thinking":
+          handlers.onThinking?.(Number(event.chars) || 0);
+          break;
+        case "delta":
+          handlers.onDelta?.(String(event.text ?? ""));
+          break;
+        case "done":
+          finished = true;
+          handlers.onDone?.();
+          break;
+        case "error":
+          finished = true;
+          handlers.onError?.(String(event.message ?? "未知错误"));
+          break;
+        default:
+          break;
+      }
+    };
+
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      buf += decoder.decode(value, { stream: true });
+      let split = buf.indexOf("\n\n");
+      while (split >= 0) {
+        const chunk = buf.slice(0, split);
+        buf = buf.slice(split + 2);
+        const data = chunk
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trim())
+          .join("");
+        if (data !== "") {
+          try {
+            handle(JSON.parse(data) as AiEvent);
+          } catch {
+            // 非 JSON 心跳/空行：忽略
+          }
+        }
+        split = buf.indexOf("\n\n");
+      }
+    }
+    if (!finished) {
+      handlers.onDone?.();
+    }
+  })().catch((error: unknown) => {
+    const name = (error as Error | null)?.name;
+    if (name === "AbortError") {
+      handlers.onDone?.();
+    } else {
+      handlers.onError?.((error as Error).message || "连接中断");
+    }
+  });
+
+  return () => controller.abort();
+}

@@ -392,6 +392,8 @@ export function SettingsPanel() {
   const readMode = useSettingsStore((state) => state.readMode);
   const setReadMode = useSettingsStore((state) => state.setReadMode);
   const indentParagraph = useSettingsStore((state) => state.indentParagraph);
+  const aiAssistant = useSettingsStore((state) => state.aiAssistant);
+  const setAiAssistant = useSettingsStore((state) => state.setAiAssistant);
   const setIndentParagraph = useSettingsStore((state) => state.setIndentParagraph);
   const contentWidth = useSettingsStore((state) => state.contentWidth);
   const setContentWidth = useSettingsStore((state) => state.setContentWidth);
@@ -518,6 +520,19 @@ export function SettingsPanel() {
             checked={indentParagraph}
             onCheckedChange={setIndentParagraph}
             aria-label="首行缩进"
+          />
+        </div>
+
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-muted-foreground">AI 阅读助手</p>
+            <p className="text-xs text-muted-foreground/70">基于已缓存章节问答, 需部署端配置模型</p>
+          </div>
+          <Switch
+            size="sm"
+            checked={aiAssistant}
+            onCheckedChange={setAiAssistant}
+            aria-label="AI 阅读助手"
           />
         </div>
 

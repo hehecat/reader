@@ -95,6 +95,16 @@ docker compose up -d          # 默认单用户模式, 无需 .env
 - 阅读进度多端同步; 书架卡片显示阅读进度与未读
 - 正文/目录/书籍信息多级缓存, 未命中自动抓取并回写
 
+### AI 阅读助手(可选)
+
+阅读器右侧的问答面板(移动端为全屏面板), 用来回忆"人物何时出场/物品哪章得到/人物关系":
+
+- **开关**: 阅读设置 → `AI 阅读助手`; 开启后阅读器顶栏出现 AI 按钮
+- **知识来源**: 只检索**本机已缓存**的章节正文(读过的章节 / 整书缓存), 不联网抓原文
+- **可信回答**: 答案逐条标注 `[章节标题]`, 点引用直接跳到该章; 片段没提到的内容会明说"没有提到", 不编造
+- **边界**: 没读过的章节答不了; 读得越多覆盖越全。泛问("主角是谁")会自动取"开头两章 + 当前章附近"作样本
+- **配置**: 需要一个 OpenAI 兼容端点(见下方 `READER_AI_*` 环境变量), 未配置时开关可开但面板只显示配置提示
+
 ### 书架与缓存
 
 - 书架分组、网格/列表布局、自定义封面长缓存
@@ -145,6 +155,10 @@ compose 默认挂 `deploy/storage/`(容器内 `/storage/storage`), 内含:
 | `READER_HTTP_RETRIES` | 2 | 搜索/抓取单源重试次数(compose 默认 1, 死源排空更快) |
 | `SSRF_ALLOW_PRIVATE` | false | 图片代理/TTS/登录检测允许私网地址(内网 TTS 等自建场景) |
 | `READER_ALLOW_PRIVATE_SOURCE` | false | 书源抓取允许私网/回环地址(局域网书源、本地测试源才开; 默认拦截防 SSRF) |
+| `READER_AI_BASE_URL` | 空 | OpenAI 兼容端点(如 `http://octopus:8080/v1`); 与 KEY 同时非空才启用 AI 面板 |
+| `READER_AI_API_KEY` | 空 | 上述端点密钥 |
+| `READER_AI_MODEL` | deepseek-v4.1-flash | 模型名(支持推理模型, 思考过程不显示) |
+| `READER_AI_MAX_TOKENS` | 1500 | 单次回答上限 |
 | `READER_DICT_ONLINE` | 1 | 词典在线兜底开关(本地未命中时有道查询, 缓存 30 天) |
 | `READER_DICT_DIR` | /app/dict | 离线词典原始数据目录(ecdict.csv / word.json / ci.json / idiom.json) |
 | `READER_CAMOUFOX_URL` | - | 外置 camoufox 服务地址; 缺省容器内自 spawn |
