@@ -37,6 +37,10 @@ services:
       - default
       # octopus 网关所在网络: 容器内用 http://octopus:8080/v1 访问, 不出公网
       - yatori_yatori-net
+    extra_hosts:
+      # 自建番茄源(FQ): 容器内直接解析到内网地址, 避免绕公网 IP 回环(hairpin)偶发超时;
+      # 源 URL 保持公网域名不变, 手机在外网仍可用
+      - "fq.hehecat.win:192.168.50.3"
     restart: unless-stopped
 
 networks:
