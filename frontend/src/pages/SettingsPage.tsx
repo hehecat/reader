@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { AiSettingsCard } from "@/components/settings/AiSettingsCard";
+import { CacheCard } from "@/components/settings/CacheCard";
 import { ReadingPreferencesCard } from "@/components/settings/ReadingPreferencesCard";
 import { TtsPreferencesCard } from "@/components/settings/TtsPreferencesCard";
 import { TtsRoleVoicesCard } from "@/components/settings/TtsRoleVoicesCard";
@@ -97,6 +98,7 @@ export default function SettingsPage() {
         </div>
         <div className="flex flex-col gap-5">
           <WebdavPanel />
+          <CacheCard />
           <SettingCard title="关于" desc="砚台 · 安静地陪你读完每一本">
             <SettingRow label="前端" value={`砚台 React 阅读器 · v${appVersion}`} />
             <SettingRow

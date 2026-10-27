@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { parseWith, post, stripNullsDeep, type ApiRequestConfig } from "@/lib/api-client";
+import { get, parseWith, post, stripNullsDeep, type ApiRequestConfig } from "@/lib/api-client";
 import { connectSSE, type SSEParams } from "@/lib/sse";
 import { bookSchema } from "@/types/api";
 import { toast } from "@/components/ui";
@@ -85,6 +85,33 @@ export async function getBookCacheInfo(
 export async function cancelCacheBook(url: string, config?: ApiRequestConfig): Promise<boolean> {
   const data = await post<unknown>("/cancelCacheBook", { url }, config);
   return parseWith(cancelResultSchema, data).cancelled;
+}
+
+/** `/getCacheInfo` 返回: 当前用户的目录 / 正文缓存统计 (大小为近似字节数) */
+export const cacheInfoSchema = z.object({
+  tocCacheCount: z.number().default(0),
+  tocCacheSize: z.number().default(0),
+  chapterCount: z.number().default(0),
+  chapterSize: z.number().default(0),
+  totalSize: z.number().default(0),
+});
+
+export type CacheInfo = z.infer<typeof cacheInfoSchema>;
+
+export type ClearCacheType = "toc" | "chapters" | "all";
+
+/** 缓存统计 (设置页「缓存」卡片) */
+export async function getCacheInfo(config?: ApiRequestConfig): Promise<CacheInfo> {
+  const data = await get<unknown>("/getCacheInfo", undefined, config);
+  return parseWith(cacheInfoSchema, data);
+}
+
+/** 清空缓存: toc = 目录缓存, chapters = 正文缓存, all = 全部 */
+export async function clearCache(
+  type: ClearCacheType,
+  config?: ApiRequestConfig,
+): Promise<void> {
+  await post<unknown>("/clearCache", { type }, config);
 }
 
 export interface CacheStreamHandlers {

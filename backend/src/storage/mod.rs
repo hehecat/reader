@@ -1914,23 +1914,32 @@ impl Storage {
 
     // ---------------- 缓存管理 ----------------
 
-    /// 缓存统计：toc_cache 行数 / book_chapters 行数 / 章节正文近似大小（sum length(content)）/
-    /// 目录缓存大小（sum length(chapters_json)）/ 总大小（两者之和）
-    pub async fn get_cache_info(&self) -> Result<CacheInfo> {
-        let toc_cache_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM toc_cache")
-            .fetch_one(&self.pool)
-            .await?;
-        let toc_cache_size: i64 =
-            sqlx::query_scalar("SELECT COALESCE(SUM(length(chapters_json)), 0) FROM toc_cache")
+    /// 缓存统计（按命名空间隔离）：toc_cache 行数 / book_chapters 行数 /
+    /// 章节正文近似大小（sum length(content)）/ 目录缓存大小（sum length(chapters_json)）/
+    /// 总大小（两者之和）——只统计 ns 名下缓存，不泄露其它用户用量
+    pub async fn get_cache_info(&self, ns: &str) -> Result<CacheInfo> {
+        let toc_cache_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM toc_cache WHERE user_namespace = ?1")
+                .bind(ns)
                 .fetch_one(&self.pool)
                 .await?;
-        let chapter_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM book_chapters")
-            .fetch_one(&self.pool)
-            .await?;
-        let chapter_size: i64 =
-            sqlx::query_scalar("SELECT COALESCE(SUM(length(content)), 0) FROM book_chapters")
+        let toc_cache_size: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(length(chapters_json)), 0) FROM toc_cache WHERE user_namespace = ?1",
+        )
+        .bind(ns)
+        .fetch_one(&self.pool)
+        .await?;
+        let chapter_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM book_chapters WHERE user_namespace = ?1")
+                .bind(ns)
                 .fetch_one(&self.pool)
                 .await?;
+        let chapter_size: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(length(content)), 0) FROM book_chapters WHERE user_namespace = ?1",
+        )
+        .bind(ns)
+        .fetch_one(&self.pool)
+        .await?;
         Ok(CacheInfo {
             toc_cache_count,
             toc_cache_size,
@@ -1940,19 +1949,21 @@ impl Storage {
         })
     }
 
-    /// 清空缓存（type: "toc" 清目录缓存 / "chapters" 清章节缓存 / "all" 全清）；
-    /// 返回 (toc 删除行数, 章节删除行数)
-    pub async fn clear_cache(&self, cache_type: &str) -> Result<(u64, u64)> {
+    /// 清空某命名空间缓存（type: "toc" 清目录缓存 / "chapters" 清章节缓存 / "all" 全清）；
+    /// 返回 (toc 删除行数, 章节删除行数)——只删 ns 名下缓存，不跨用户清空
+    pub async fn clear_cache(&self, ns: &str, cache_type: &str) -> Result<(u64, u64)> {
         let mut toc_deleted = 0u64;
         let mut chapters_deleted = 0u64;
         if cache_type == "toc" || cache_type == "all" {
-            let r = sqlx::query("DELETE FROM toc_cache")
+            let r = sqlx::query("DELETE FROM toc_cache WHERE user_namespace = ?1")
+                .bind(ns)
                 .execute(&self.pool)
                 .await?;
             toc_deleted = r.rows_affected();
         }
         if cache_type == "chapters" || cache_type == "all" {
-            let r = sqlx::query("DELETE FROM book_chapters")
+            let r = sqlx::query("DELETE FROM book_chapters WHERE user_namespace = ?1")
+                .bind(ns)
                 .execute(&self.pool)
                 .await?;
             chapters_deleted = r.rows_affected();
@@ -8960,7 +8971,7 @@ mod tests {
         let storage = test_storage("cache").await;
 
         // 空库：全零
-        let info = storage.get_cache_info().await.unwrap();
+        let info = storage.get_cache_info("default").await.unwrap();
         assert_eq!(info.toc_cache_count, 0);
         assert_eq!(info.chapter_count, 0);
         assert_eq!(info.chapter_size, 0);
@@ -8997,7 +9008,7 @@ mod tests {
             .await
             .unwrap();
 
-        let info = storage.get_cache_info().await.unwrap();
+        let info = storage.get_cache_info("default").await.unwrap();
         assert_eq!(info.toc_cache_count, 2);
         assert_eq!(
             info.toc_cache_size, 34,
@@ -9008,18 +9019,18 @@ mod tests {
         assert_eq!(info.total_size, info.toc_cache_size + info.chapter_size);
 
         // 只清 toc
-        let (toc_del, chap_del) = storage.clear_cache("toc").await.unwrap();
+        let (toc_del, chap_del) = storage.clear_cache("default", "toc").await.unwrap();
         assert_eq!(toc_del, 2);
         assert_eq!(chap_del, 0);
-        let info = storage.get_cache_info().await.unwrap();
+        let info = storage.get_cache_info("default").await.unwrap();
         assert_eq!(info.toc_cache_count, 0);
         assert_eq!(info.chapter_count, 3, "章节缓存不受影响");
 
         // 只清 chapters
-        let (toc_del, chap_del) = storage.clear_cache("chapters").await.unwrap();
+        let (toc_del, chap_del) = storage.clear_cache("default", "chapters").await.unwrap();
         assert_eq!(toc_del, 0);
         assert_eq!(chap_del, 3);
-        let info = storage.get_cache_info().await.unwrap();
+        let info = storage.get_cache_info("default").await.unwrap();
         assert_eq!(info.chapter_count, 0);
         assert_eq!(info.total_size, 0);
 
@@ -9040,20 +9051,77 @@ mod tests {
             )
             .await
             .unwrap();
-        let (toc_del, chap_del) = storage.clear_cache("all").await.unwrap();
+        let (toc_del, chap_del) = storage.clear_cache("default", "all").await.unwrap();
         assert_eq!(toc_del, 1);
         assert_eq!(chap_del, 1);
-        let info = storage.get_cache_info().await.unwrap();
+        let info = storage.get_cache_info("default").await.unwrap();
         assert_eq!(info.toc_cache_count, 0);
         assert_eq!(info.chapter_count, 0);
         assert_eq!(info.total_size, 0);
 
         // 未知 type：不删任何表
-        let (toc_del, chap_del) = storage.clear_cache("unknown").await.unwrap();
+        let (toc_del, chap_del) = storage.clear_cache("default", "unknown").await.unwrap();
         assert_eq!(toc_del, 0);
         assert_eq!(chap_del, 0);
 
         cleanup(storage, "cache").await;
+    }
+
+    /// issue #1：缓存统计/清理按命名空间隔离——清 ns_a 不影响 ns_b 的目录与章节缓存
+    #[tokio::test]
+    async fn test_cache_namespace_isolation() {
+        let storage = test_storage("cachensiso").await;
+        storage
+            .cache_toc("ns_a", "https://book.com/a", "https://book.com/toc-a", "[]")
+            .await
+            .unwrap();
+        storage
+            .cache_toc("ns_b", "https://book.com/b", "https://book.com/toc-b", "[]")
+            .await
+            .unwrap();
+        storage
+            .cache_chapter_content("ns_a", "https://book.com/a", 1, "第一章", "正文A")
+            .await
+            .unwrap();
+        storage
+            .cache_chapter_content("ns_b", "https://book.com/b", 1, "第一章", "正文B")
+            .await
+            .unwrap();
+
+        // 统计互不串号
+        let info_a = storage.get_cache_info("ns_a").await.unwrap();
+        let info_b = storage.get_cache_info("ns_b").await.unwrap();
+        assert_eq!((info_a.toc_cache_count, info_a.chapter_count), (1, 1));
+        assert_eq!((info_b.toc_cache_count, info_b.chapter_count), (1, 1));
+
+        // 清 ns_a（all）→ 只删 ns_a 的 1 toc + 1 chapter
+        let (toc_del, chap_del) = storage.clear_cache("ns_a", "all").await.unwrap();
+        assert_eq!((toc_del, chap_del), (1, 1));
+
+        // ns_b 数据仍在
+        let info_b = storage.get_cache_info("ns_b").await.unwrap();
+        assert_eq!(info_b.toc_cache_count, 1, "清 ns_a 不应影响 ns_b 目录缓存");
+        assert_eq!(info_b.chapter_count, 1, "清 ns_a 不应影响 ns_b 章节缓存");
+        assert_eq!(
+            info_b.total_size,
+            info_b.toc_cache_size + info_b.chapter_size
+        );
+        assert_eq!(
+            storage
+                .get_chapter_content("ns_b", "https://book.com/b", 1)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("正文B"),
+            "ns_b 正文缓存应保留"
+        );
+
+        // ns_a 已清空
+        let info_a = storage.get_cache_info("ns_a").await.unwrap();
+        assert_eq!((info_a.toc_cache_count, info_a.chapter_count), (0, 0));
+        assert_eq!(info_a.total_size, 0);
+
+        cleanup(storage, "cachensiso").await;
     }
 
     /// 单书缓存：book_cache_info（章节数+大小）/ delete_book_cache（仅删该书，不动书架）

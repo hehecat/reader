@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, RotateCw } from "lucide-react";
 import * as React from "react";
 import { useSearchParams } from "react-router-dom";
 
@@ -18,6 +18,10 @@ export interface ChapterEndBlockProps {
   nextTitle: string | null;
   onPrevChapter: () => void;
   onNextChapter: () => void;
+  /** 绕过服务端正文缓存重新抓取本章 (可选: 未接时章末不显示入口) */
+  onReload?: () => void;
+  /** 重新抓取进行中 */
+  isReloading?: boolean;
 }
 
 /**
@@ -56,6 +60,8 @@ export function ChapterEndBlock({
   nextTitle,
   onPrevChapter,
   onNextChapter,
+  onReload,
+  isReloading = false,
 }: ChapterEndBlockProps) {
   // 书链接取自阅读页路由参数 (章末块由 Virtuoso context 透传, 不走 props 链)
   const [searchParams] = useSearchParams();
@@ -152,6 +158,22 @@ export function ChapterEndBlock({
           <ChevronRight aria-hidden />
         </Button>
       </nav>
+
+      {/* 不抢眼的兜底入口: 章末已显示正文时也能绕过缓存重新抓取 (缓存了防盗页/源站修正) */}
+      {onReload === undefined ? null : (
+        <div className="mt-3 flex justify-center">
+          <Button
+            variant="ghost"
+            size="sm"
+            loading={isReloading}
+            onClick={onReload}
+            className="text-xs text-muted-foreground"
+          >
+            <RotateCw aria-hidden />
+            重新拉取本章
+          </Button>
+        </div>
+      )}
 
       {isLocal ? null : (
         <div className="mt-6 flex items-center justify-between gap-3 rounded-xl border border-border bg-surface px-4 py-3">

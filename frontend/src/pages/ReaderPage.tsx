@@ -207,6 +207,19 @@ export default function ReaderPage() {
 
   const toc = useToc({ book, onNavigate: goToChapter });
 
+  // 重新拉取本章: 绕过服务端永久正文缓存 (源站修正过 / 缓存了防盗页); 失败保留原正文只提示
+  const { reload: reloadChapter } = content;
+  const handleReloadChapter = React.useCallback(() => {
+    reloadChapter().then(
+      () => {
+        toast.success("已重新拉取本章");
+      },
+      (error: unknown) => {
+        toast.error(humanizeError(errorMessage(error, "重新拉取本章失败")));
+      },
+    );
+  }, [reloadChapter]);
+
   const readMode = useSettingsStore((state) => state.readMode);
 
   // AI 阅读助手: 设置开关决定入口是否出现; 后端是否配置模型决定面板可用态
@@ -466,8 +479,17 @@ export default function ReaderPage() {
       nextTitle: chapters[progress.index + 1]?.title ?? null,
       onPrevChapter: handlePrevChapter,
       onNextChapter: handleNextChapter,
+      onReload: handleReloadChapter,
+      isReloading: content.isReloading,
     }),
-    [progress.index, chapters, handlePrevChapter, handleNextChapter],
+    [
+      progress.index,
+      chapters,
+      handlePrevChapter,
+      handleNextChapter,
+      handleReloadChapter,
+      content.isReloading,
+    ],
   );
 
   // Esc 关闭全部浮层 (←/→ 在 ContentView 内处理; 顶栏底栏常显, 没有需要点出来的工具栏)
@@ -653,6 +675,8 @@ export default function ReaderPage() {
             errorMessage={content.errorMessage}
             isEmpty={content.isEmpty}
             onRetry={content.refetch}
+            onReload={handleReloadChapter}
+            isReloading={content.isReloading}
             onSwitchSource={openSwitchSource}
             readMode={readMode}
             bookName={book.name}

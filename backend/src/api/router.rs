@@ -1922,16 +1922,17 @@ async fn submit_captcha(
 /// GET/POST /reader3/getCacheInfo：缓存统计（toc_cache 行数 / book_chapters 行数 /
 /// 章节近似大小 sum length(content) / 目录缓存大小 / 总大小）
 /// P0-9：需登录（resolve_namespace）——secure 模式匿名请求拒绝 NEED_LOGIN
+/// issue #1：统计按登录用户命名空间隔离（只统计本人缓存）
 async fn get_cache_info(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Json<ReturnData> {
-    // P0-9：缓存统计/清理接口加登录校验（缓存为全局表，不按命名空间隔离，仅要求登录）
-    if let Err(ret) = resolve_namespace(&state, &params, &headers).await {
-        return Json(ret);
-    }
-    match state.storage.get_cache_info().await {
+    let namespace = match resolve_namespace(&state, &params, &headers).await {
+        Ok(ns) => ns,
+        Err(ret) => return Json(ret),
+    };
+    match state.storage.get_cache_info(&namespace).await {
         Ok(info) => Json(ReturnData::ok(
             serde_json::to_value(info).unwrap_or(serde_json::Value::Null),
         )),
@@ -1944,15 +1945,17 @@ async fn get_cache_info(
 
 /// POST /reader3/clearCache：清空缓存（body/query {type: "toc"|"chapters"|"all"}）
 /// P0-9：需登录（resolve_namespace）——secure 模式匿名请求拒绝 NEED_LOGIN
+/// issue #1：只清当前登录用户命名空间缓存，不跨用户清空
 async fn clear_cache(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
     body: Option<axum::body::Bytes>,
 ) -> Json<ReturnData> {
-    if let Err(ret) = resolve_namespace(&state, &params, &headers).await {
-        return Json(ret);
-    }
+    let namespace = match resolve_namespace(&state, &params, &headers).await {
+        Ok(ns) => ns,
+        Err(ret) => return Json(ret),
+    };
     let mut cache_type = params.get("type").cloned().unwrap_or_default();
     if let Some(body) = body {
         if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) {
@@ -1967,7 +1970,7 @@ async fn clear_cache(
     if cache_type != "toc" && cache_type != "chapters" && cache_type != "all" {
         return Json(ReturnData::err("参数错误"));
     }
-    match state.storage.clear_cache(&cache_type).await {
+    match state.storage.clear_cache(&namespace, &cache_type).await {
         Ok((toc_deleted, chapters_deleted)) => Json(ReturnData::ok(serde_json::json!({
             "deletedToc": toc_deleted,
             "deletedChapters": chapters_deleted,
@@ -4148,6 +4151,11 @@ async fn get_book_content(
         .parse::<i64>()
         .unwrap_or(0)
         == 1;
+    // issue #2：refresh>0 跳过正文缓存直读（legacy getBookToc refresh 语义）——
+    // 不删旧缓存行，抓取成功后照旧 cache_chapter_content 覆盖；失败保留旧缓存
+    let refresh = param_of(&params, body_json.as_ref(), "refresh")
+        .parse::<i64>()
+        .unwrap_or(0);
     // legacy 参数：epubContent（1=EPUB XHTML 原文模式）——本地 EPUB 返回基本 HTML 结构
     //（纯文本按段落 <p> 包裹；legacy 章节原文 XHTML 的最小对齐，前端 HTML 渲染直接可用）
     let epub_content = param_of(&params, body_json.as_ref(), "epubContent")
@@ -4369,7 +4377,8 @@ async fn get_book_content(
     // ---- 文本书（type=0）：正文缓存 + ruleContent 文本解析 ----
     // F-10：书源书正文缓存——book_url 为键 + chapter_index = chapterUrl md5 哈希，
     // 同 chapterUrl 直读（永久，清理接口 clearCache 可清）；local:// 键域不参与
-    if !book_url.is_empty() && !book_url.starts_with("local://") {
+    // issue #2：refresh>0 时跳过缓存直读（不删行），强制回源并用新正文覆盖旧缓存
+    if refresh <= 0 && !book_url.is_empty() && !book_url.starts_with("local://") {
         let idx = crate::util::md5::chapter_url_hash(&chapter_url);
         if let Ok(Some(content)) = state
             .storage
@@ -8206,6 +8215,8 @@ async fn get_opds_settings(
 }
 
 /// POST /reader3/saveOpdsSettings：配置 OPDS 独立账号（body {username, password}；username 空 = 禁用）
+/// issue #1：服务端级全局配置——secure 模式仅管理员可改（check_manager_auth；
+/// 单用户模式无登录概念，直接放行）
 async fn save_opds_settings(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
@@ -8217,6 +8228,9 @@ async fn save_opds_settings(
         Err(ret) => return Json(ret),
     };
     let body_json = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    if let Err(ret) = check_manager_auth(&state, &params, &headers, body_json.as_ref()).await {
+        return Json(ret);
+    }
     let username = body_json
         .as_ref()
         .and_then(|b| b.get("username").and_then(|v| v.as_str()))
@@ -16330,7 +16344,7 @@ mod tests {
         assert!(ret.0.is_success, "{}", ret.0.error_msg);
         assert_eq!(ret.0.data["deletedToc"], 1);
         assert_eq!(ret.0.data["deletedChapters"], 0);
-        let info = state.storage.get_cache_info().await.unwrap();
+        let info = state.storage.get_cache_info("default").await.unwrap();
         assert_eq!(info.toc_cache_count, 0);
         assert_eq!(info.chapter_count, 2);
 
@@ -16388,12 +16402,7 @@ mod tests {
             .unwrap();
         state
             .storage
-            .cache_toc(
-                "default",
-                "https://book.com/a",
-                "https://book.com/toc",
-                "[]",
-            )
+            .cache_toc("alice", "https://book.com/a", "https://book.com/toc", "[]")
             .await
             .unwrap();
 
@@ -16416,7 +16425,7 @@ mod tests {
         assert!(!ret.0.is_success);
         assert_eq!(ret.0.data, json!("NEED_LOGIN"));
         // 数据未被清除
-        let info = state.storage.get_cache_info().await.unwrap();
+        let info = state.storage.get_cache_info("alice").await.unwrap();
         assert_eq!(info.toc_cache_count, 1);
         assert_eq!(info.chapter_count, 0);
 
@@ -16441,8 +16450,104 @@ mod tests {
         .await;
         assert!(ret.0.is_success, "{}", ret.0.error_msg);
         assert_eq!(ret.0.data["deletedToc"], 1);
-        let info = state.storage.get_cache_info().await.unwrap();
+        let info = state.storage.get_cache_info("alice").await.unwrap();
         assert_eq!(info.toc_cache_count, 0);
+
+        cleanup(state, dir).await;
+    }
+
+    /// issue #1：缓存管理按登录用户命名空间隔离（handler 层）——
+    /// alice 的 getCacheInfo 只统计本人缓存，clearCache 只删本人缓存，bob 数据保留
+    #[tokio::test]
+    async fn test_cache_api_namespace_isolation() {
+        let (mut state, dir) = test_state("cachensiso").await;
+        state.storage.config.secure = true;
+        for (name, token) in [("alice", "tok-a"), ("bob", "tok-b")] {
+            state
+                .storage
+                .insert_user(&User {
+                    username: name.into(),
+                    token: token.into(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+        }
+        for (ns, suffix) in [("alice", "a"), ("bob", "b")] {
+            state
+                .storage
+                .cache_toc(
+                    ns,
+                    &format!("https://book.com/{suffix}"),
+                    &format!("https://book.com/toc-{suffix}"),
+                    "[]",
+                )
+                .await
+                .unwrap();
+            state
+                .storage
+                .cache_chapter_content(
+                    ns,
+                    &format!("https://book.com/{suffix}"),
+                    1,
+                    "第一章",
+                    "正文",
+                )
+                .await
+                .unwrap();
+        }
+
+        let params: HashMap<String, String> = [("accessToken".into(), "alice:tok-a".into())]
+            .into_iter()
+            .collect();
+        let ret = get_cache_info(
+            AxumState(state.clone()),
+            Query(params.clone()),
+            HeaderMap::new(),
+        )
+        .await;
+        assert!(ret.0.is_success, "{}", ret.0.error_msg);
+        assert_eq!(ret.0.data["tocCacheCount"], 1, "只统计 alice 的目录缓存");
+        assert_eq!(ret.0.data["chapterCount"], 1, "只统计 alice 的章节缓存");
+
+        let ret = clear_cache(
+            AxumState(state.clone()),
+            Query(params),
+            HeaderMap::new(),
+            None,
+        )
+        .await;
+        assert!(ret.0.is_success, "{}", ret.0.error_msg);
+        assert_eq!(ret.0.data["deletedToc"], 1);
+        assert_eq!(ret.0.data["deletedChapters"], 1);
+
+        // bob 的缓存原样保留
+        let info_b = state.storage.get_cache_info("bob").await.unwrap();
+        assert_eq!(
+            (info_b.toc_cache_count, info_b.chapter_count),
+            (1, 1),
+            "alice 清理不应影响 bob"
+        );
+        assert_eq!(
+            state
+                .storage
+                .get_chapter_content("bob", "https://book.com/b", 1)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("正文")
+        );
+        let params_b: HashMap<String, String> = [("accessToken".into(), "bob:tok-b".into())]
+            .into_iter()
+            .collect();
+        let ret = get_cache_info(AxumState(state.clone()), Query(params_b), HeaderMap::new()).await;
+        assert!(ret.0.is_success, "{}", ret.0.error_msg);
+        assert_eq!(ret.0.data["tocCacheCount"], 1);
+        assert_eq!(ret.0.data["chapterCount"], 1);
+
+        // alice 已清空
+        let info_a = state.storage.get_cache_info("alice").await.unwrap();
+        assert_eq!((info_a.toc_cache_count, info_a.chapter_count), (0, 0));
 
         cleanup(state, dir).await;
     }
@@ -17205,6 +17310,118 @@ mod tests {
         cleanup(state, dir).await;
     }
 
+    /// issue #2：getBookContent refresh=1——跳过正文缓存直读（不删缓存行），
+    /// 回源成功后用新正文覆盖旧缓存；cache=1 预取语义仍正常
+    #[tokio::test]
+    async fn test_get_book_content_refresh_api() {
+        let _ssrf = crate::service::crawler::ssrf_allow_private_guard(true); // mock 绑定 127.0.0.1
+        let (state, dir) = test_state("contentrefresh").await;
+        let base_url = serve_bodies(vec![
+            r#"<html><body><div class="content">新正文。</div></body></html>"#.to_string(),
+        ])
+        .await;
+        let base = base_url.trim_end_matches("/sources.json").to_string();
+        state
+            .storage
+            .save_book_source(
+                "default",
+                &crate::model::BookSource {
+                    book_source_url: base.clone(),
+                    book_source_name: "刷新测试源".into(),
+                    rule_content: Some(serde_json::json!({ "content": "div.content@text" })),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let book_url = "https://book.com/refresh";
+        let ch1 = format!("{base}/ch1.html");
+        let idx1 = crate::util::md5::chapter_url_hash(&ch1);
+        let params = |chapter_url: &str| -> HashMap<String, String> {
+            [
+                ("chapterUrl".into(), chapter_url.to_string()),
+                ("bookUrl".into(), book_url.to_string()),
+                ("bookSource".into(), base.clone()),
+            ]
+            .into_iter()
+            .collect()
+        };
+        let params_refresh = |chapter_url: &str| -> HashMap<String, String> {
+            let mut p = params(chapter_url);
+            p.insert("refresh".into(), "1".into());
+            p
+        };
+        let params_cache = |chapter_url: &str| -> HashMap<String, String> {
+            let mut p = params(chapter_url);
+            p.insert("cache".into(), "1".into());
+            p
+        };
+
+        // 预置旧正文缓存
+        state
+            .storage
+            .cache_chapter_content("default", book_url, idx1, "第一章", "旧正文")
+            .await
+            .unwrap();
+
+        // 1) 不带 refresh → 命中旧缓存（若回源会拿到「新正文。」→ 断言失败即回归）
+        let ret = get_book_content(
+            AxumState(state.clone()),
+            Query(params(&ch1)),
+            HeaderMap::new(),
+            None,
+        )
+        .await;
+        assert!(ret.0.is_success, "{}", ret.0.error_msg);
+        assert_eq!(ret.0.data["content"], "旧正文", "默认应命中正文缓存");
+
+        // 2) refresh=1 → 跳过缓存回源，返回新正文并覆盖缓存行
+        let ret = get_book_content(
+            AxumState(state.clone()),
+            Query(params_refresh(&ch1)),
+            HeaderMap::new(),
+            None,
+        )
+        .await;
+        assert!(ret.0.is_success, "{}", ret.0.error_msg);
+        assert_eq!(ret.0.data["content"], "新正文。", "refresh=1 应回源");
+        assert_eq!(
+            state
+                .storage
+                .get_chapter_content("default", book_url, idx1)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("新正文。"),
+            "refresh=1 成功后应覆盖旧缓存"
+        );
+
+        // 3) cache=1 预取（未缓存章节 + 不带 refresh）→ 抓取并写回缓存
+        let ch2 = format!("{base}/ch2.html");
+        let idx2 = crate::util::md5::chapter_url_hash(&ch2);
+        let ret = get_book_content(
+            AxumState(state.clone()),
+            Query(params_cache(&ch2)),
+            HeaderMap::new(),
+            None,
+        )
+        .await;
+        assert!(ret.0.is_success, "{}", ret.0.error_msg);
+        assert_eq!(ret.0.data["content"], "新正文。");
+        assert_eq!(
+            state
+                .storage
+                .get_chapter_content("default", book_url, idx2)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("新正文。"),
+            "cache=1 预取仍应写回正文缓存"
+        );
+
+        cleanup(state, dir).await;
+    }
+
     /// 命名兼容批：6 条 legacy 别名路由端到端（真实 router + HTTP 请求）
     #[tokio::test]
     async fn test_alias_routes_end_to_end() {
@@ -17882,6 +18099,78 @@ mod tests {
         )
         .await;
         assert_eq!(ret.0.data["enabled"], false);
+
+        cleanup(state, dir).await;
+    }
+
+    /// issue #1：saveOpdsSettings 是服务端级全局配置——secure 模式仅管理员可改，
+    /// 普通用户/匿名请求不得写入全局 OPDS 账号
+    #[tokio::test]
+    async fn test_save_opds_settings_requires_manager() {
+        let (mut state, dir) = test_state("opdsprem").await;
+        state.storage.config.secure = true;
+        for (name, token, is_admin) in [("alice", "t1", true), ("bob", "t2", false)] {
+            state
+                .storage
+                .insert_user(&User {
+                    username: name.into(),
+                    token: token.into(),
+                    is_admin,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+        }
+        let body = || {
+            Some(Bytes::from(
+                json!({"username": "reader", "password": "secret123"}).to_string(),
+            ))
+        };
+
+        // 普通用户 → 拒绝，且全局账号未被写入
+        let bob_params: HashMap<String, String> = [("accessToken".into(), "bob:t2".into())]
+            .into_iter()
+            .collect();
+        let ret = save_opds_settings(
+            AxumState(state.clone()),
+            Query(bob_params),
+            HeaderMap::new(),
+            body(),
+        )
+        .await;
+        assert!(!ret.0.is_success);
+        assert_eq!(ret.0.error_msg, "仅管理员可执行该操作");
+        assert!(
+            state.storage.get_opds_account().await.unwrap().is_none(),
+            "非管理员不应写入全局 OPDS 账号"
+        );
+
+        // 匿名 → 拒绝
+        let ret = save_opds_settings(
+            AxumState(state.clone()),
+            Query(HashMap::new()),
+            HeaderMap::new(),
+            body(),
+        )
+        .await;
+        assert!(!ret.0.is_success, "未登录不得修改全局 OPDS 账号");
+
+        // 管理员 → 允许
+        let admin_params: HashMap<String, String> = [("accessToken".into(), "alice:t1".into())]
+            .into_iter()
+            .collect();
+        let ret = save_opds_settings(
+            AxumState(state.clone()),
+            Query(admin_params),
+            HeaderMap::new(),
+            body(),
+        )
+        .await;
+        assert!(ret.0.is_success, "{}", ret.0.error_msg);
+        assert_eq!(
+            state.storage.get_opds_account().await.unwrap().unwrap().0,
+            "reader"
+        );
 
         cleanup(state, dir).await;
     }

@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import DOMPurify from "dompurify";
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { proxiedAssetUrl } from "@/lib/asset";
 import { getBookContent } from "@/services/book";
@@ -133,6 +133,9 @@ export interface UseChapterContentResult {
   /** 请求成功但正文 (净化后) 为空 */
   isEmpty: boolean;
   refetch: () => void;
+  /** 绕过服务端正文缓存重新抓取本章, 成功后覆盖客户端缓存; 失败向外抛错 */
+  reload: () => Promise<void>;
+  isReloading: boolean;
 }
 
 /**
@@ -171,6 +174,29 @@ export function useChapterContent(
   });
 
   const isSuccess = contentQuery.isSuccess;
+
+  // 重新拉取本章: 带 refresh=1 绕过服务端的永久正文缓存 (源站修正 / 防盗页),
+  // 成功后回写同一个 query key, 页面直接换成新正文; 失败原样抛出交给调用方提示.
+  // 不走 refetch/invalidate: 那会让 queryFn 重跑, 也避免触发下方预取.
+  const [isReloading, setIsReloading] = useState(false);
+  const reload = useCallback(async () => {
+    if (chapter === undefined) {
+      return;
+    }
+    setIsReloading(true);
+    try {
+      const data = await getBookContent(chapter.url, index, {
+        refresh: true,
+        bookSourceUrl: origin,
+        bookUrl,
+        title: chapter.title,
+      });
+      queryClient.setQueryData(["content", bookUrl, index], data);
+    } finally {
+      setIsReloading(false);
+    }
+  }, [queryClient, bookUrl, index, chapter, origin]);
+
   // 预加载后续两章: 缓存未覆盖到的阅读前沿时, 翻页前大概率已缓存秒开
   useEffect(() => {
     if (!isSuccess || bookUrl === "") {
@@ -235,5 +261,7 @@ export function useChapterContent(
     refetch: () => {
       void contentQuery.refetch();
     },
+    reload,
+    isReloading,
   };
 }

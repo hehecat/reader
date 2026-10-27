@@ -1,4 +1,4 @@
-import { CircleAlert, FileQuestion } from "lucide-react";
+import { CircleAlert, FileQuestion, RotateCw } from "lucide-react";
 import * as React from "react";
 import {
   Virtuoso,
@@ -1037,6 +1037,10 @@ export interface ContentViewProps {
   onGoToSources?: () => void;
   /** 空正文时的换源救出口 (ReaderPage 弹候选列表) */
   onSwitchSource?: () => void;
+  /** 绕过服务端正文缓存重新抓取本章 (与「重试」= 重新查询区分) */
+  onReload?: () => void;
+  /** 重新抓取进行中 (按钮转圈并防重复点击) */
+  isReloading?: boolean;
   /** 点击正文中央/空白 (非控件、无选区、非拖拽): 由页面切换上下工具条显隐 */
   onToggleChrome?: () => void;
 }
@@ -1065,6 +1069,8 @@ export const ContentView = React.memo(function ContentView({
   onAutoScrollStop,
   onGoToSources,
   onSwitchSource,
+  onReload,
+  isReloading = false,
   onToggleChrome,
 }: ContentViewProps) {
   const indent = useSettingsStore((state) => state.indentParagraph);
@@ -1134,6 +1140,12 @@ export const ContentView = React.memo(function ContentView({
               <Button variant="secondary" onClick={onRetry}>
                 重试
               </Button>
+              {onReload === undefined ? null : (
+                <Button variant="secondary" loading={isReloading} onClick={onReload}>
+                  <RotateCw aria-hidden />
+                  重新拉取本章
+                </Button>
+              )}
             </>
           }
         />
@@ -1151,6 +1163,12 @@ export const ContentView = React.memo(function ContentView({
               <Button variant="secondary" onClick={onRetry}>
                 重试
               </Button>
+              {onReload === undefined ? null : (
+                <Button variant="secondary" loading={isReloading} onClick={onReload}>
+                  <RotateCw aria-hidden />
+                  重新拉取本章
+                </Button>
+              )}
               {onSwitchSource === undefined ? null : (
                 <Button variant="secondary" onClick={onSwitchSource}>
                   换源
