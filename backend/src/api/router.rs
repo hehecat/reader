@@ -7811,6 +7811,8 @@ pub fn internal_error(err: anyhow::Error) -> axum::response::Response {
 ///    未配置或校验失败回退系统用户账号（users 表，legacy 双 md5 校验）；
 /// ② accessToken（query/header，username:token，与 /reader3 一致）。
 /// P1-1：Basic 密码校验接入登录限流（用户名+客户端 IP——失败 5 次锁 5 分钟）。
+// Err 只在认证失败路径构造，Response(128B) 不在热路径上，不值得为此加 Box 一层
+#[allow(clippy::result_large_err)]
 async fn opds_ns(
     state: &AppState,
     headers: &HeaderMap,

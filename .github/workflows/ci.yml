@@ -23,8 +23,11 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
+      # 与 Dockerfile 的 rust:1.97-slim 对齐：stable 漂移会带来新 lint，
+      # 让 CI 在没改任何代码的情况下变红（例如 1.99 的 result_large_err）
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.97"
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
