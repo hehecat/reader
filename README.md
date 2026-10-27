@@ -301,6 +301,12 @@ docker compose up -d reader@sha-<旧sha>                      # 回滚(镜像标
 - **本机配置别入库**: 内网地址/自建域名/网关网络名只写 `deploy/docker-compose.override.yml`(已 gitignore),
   并 `git config core.hooksPath .githooks` 启用提交前检查; CI 也会拦
 - `deploy/storage/` 是运行时 sqlite(含 WAL/SHM), 不入库, 首次启动自动建库迁移
+- **构建提速**(`backend/Cargo.toml` 已配): dev/test 本 crate 只留行号级调试信息、依赖不带调试信息,
+  改一行到测试二进制就绪 **181s → 22s**(代价是首次冷构建约 11 分钟, 一次性)
+- 迭代只跑相关用例: `cargo test --lib service::crawler`(执行 <1s, 重链约 22s);
+  全套 730 个用例约 4 分钟, 提交前跑一次即可
+- 别在 `cargo check` 与 `cargo test` 之间来回切: 两套产物会互相触发重编(实测切换一次约 5 分钟)
+- 前端改样式用 `pnpm dev`(HMR 秒级), `pnpm build` 只在发版/验证时跑
 
 ---
 
