@@ -158,6 +158,7 @@ pub fn parse_epub(bytes: &[u8], toc_mode: &str) -> Result<ImportedBook> {
 /// 从 OPF manifest 定位 toc 文件并解析目录条目（对齐 legado EpubFile.getChapterList）：
 /// - EPUB2：`application/x-dtbncx+xml` 的 toc.ncx → navMap/navPoint 深度优先
 /// - EPUB3：`properties="nav"` 的 nav.xhtml → 第一个 `nav[epub:type=toc]` 的链接
+///
 /// 返回 (href, title) 列表（href 为相对 OPF 的规范化路径，含片段前缀）。
 fn parse_epub_toc<R: std::io::Read + std::io::Seek>(
     zip: &mut zip::ZipArchive<R>,
@@ -364,7 +365,9 @@ fn merge_epub_chapters<R: std::io::Read + std::io::Seek>(
                 return out;
             }
             // toc 条目内容全部读取失败 → 回退 spine
-            spin_titles.into_values().map(|t| Chapter {
+            spin_titles
+                .into_values()
+                .map(|t| Chapter {
                     title: t,
                     content: String::new(),
                 })
@@ -984,13 +987,12 @@ fn palmdoc_decompress(data: &[u8]) -> Vec<u8> {
             } else {
                 text.len() - offset
             };
-            let mut i = start;
-            for _ in 0..len {
-                if i >= text.len() {
-                    break;
+            // offset==0 时 start==text.len()，无源可拷（与原实现的 break 一致）；
+            // 其余情况按 LZ77 语义逐字节复制，允许 start+len 越过当前长度（边拷边扩）
+            if start < text.len() {
+                for i in start..start + len {
+                    text.push(text[i]);
                 }
-                text.push(text[i]);
-                i += 1;
             }
             continue;
         }
@@ -2269,6 +2271,7 @@ pub fn parse_umd(bytes: &[u8]) -> Result<ImportedBook> {
 }
 
 /// 带正文输出上限的 UMD 解析（P1-C3；测试用小上限验证解压炸弹超限路径）
+#[allow(clippy::while_let_loop)] // 显式 loop + let-else 便于多处 break，改成 while let 反而难读
 fn parse_umd_impl(bytes: &[u8], max_text: u64) -> Result<ImportedBook> {
     let mut cur = UmdCursor::new(bytes);
     let magic = cur.read_u32le().context("UMD 文件过短")?;

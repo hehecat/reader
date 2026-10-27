@@ -125,6 +125,7 @@ impl std::ops::Deref for RuleVars {
 }
 
 impl std::ops::DerefMut for RuleVars {
+    #[allow(clippy::type_complexity)] // 返回 (body, cookies, ua) 这类元组是内部约定，起别名反而要多跳一层
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.map
     }
@@ -143,6 +144,7 @@ const BOOK_VARS_BYTES_MAX: usize = 1024 * 1024;
 /// 逐章批量缓存的单值上限: 超过则丢弃 (toc 页 src 等整页文档不进逐章缓存)
 const BOOK_VARS_BATCH_VALUE_MAX: usize = 4096;
 
+#[allow(clippy::type_complexity)] // 键是 (ns, source, url) 三元组，起别名反而多跳一层
 static BOOK_VARS_CACHE: std::sync::RwLock<Vec<((String, String, String), RuleVars)>> =
     std::sync::RwLock::new(Vec::new());
 
@@ -150,6 +152,7 @@ static BOOK_VARS_CACHE: std::sync::RwLock<Vec<((String, String, String), RuleVar
 static BOOK_VARS_STORAGE: std::sync::LazyLock<std::sync::Mutex<Option<crate::storage::Storage>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
+#[allow(clippy::type_complexity)] // 内部约定的复合类型，起别名反而多跳一层，暂不拆
 /// 注册书级变量持久化存储（启动时调用一次）
 pub fn register_book_vars_storage(storage: crate::storage::Storage) {
     *BOOK_VARS_STORAGE.lock().unwrap_or_else(|e| e.into_inner()) = Some(storage);
@@ -580,6 +583,7 @@ fn unquote_put(s: &str) -> String {
 
 /// 替换规则中的 `@get:{key}`（legado makeUpRule getRuleType）：从变量表取值，缺失 → 空串；
 /// F12/AR4：`title`/`bookName` 变量表未命中时回退实体字段（legacy ar.kt:632-645）
+#[allow(clippy::while_let_loop)] // 显式 loop + let-else 便于多处 break，改成 while let 反而难读
 pub fn resolve_get(rule: &str, vars: &RuleVars) -> String {
     let mut out = String::new();
     let mut base = 0usize;
@@ -621,8 +625,8 @@ pub fn parse_rule(rule: &str) -> Rule {
     let parts = split_hashes(rule);
     let raw_main = parts[0].trim();
     // (规则体, 类型, 是否裸键 Default 模式——仅无显式前缀的兜底分支为 true)
-    let (main, kind, default_mode) = if raw_main.starts_with("@@") {
-        (raw_main[2..].trim().to_string(), RuleKind::Css, false)
+    let (main, kind, default_mode) = if let Some(rest) = raw_main.strip_prefix("@@") {
+        (rest.trim().to_string(), RuleKind::Css, false)
     } else if let Some(rest) = strip_prefix_ci(raw_main, "@CSS:") {
         (rest.trim().to_string(), RuleKind::Css, false)
     } else if let Some(rest) = strip_prefix_ci(raw_main, "@XPath:") {
@@ -633,9 +637,9 @@ pub fn parse_rule(rule: &str) -> Rule {
         (rest.trim().to_string(), RuleKind::Js, false)
     } else if let Some(rest) = strip_prefix_ci(raw_main, "js:") {
         (rest.trim().to_string(), RuleKind::Js, false)
-    } else if raw_main.starts_with(':') {
+    } else if let Some(rest) = raw_main.strip_prefix(':') {
         // legado allInOne：: 开头整条规则为正则
-        (raw_main[1..].trim().to_string(), RuleKind::Regex, false)
+        (rest.trim().to_string(), RuleKind::Regex, false)
     } else {
         // 孤立 @ 前缀剥除（legado RuleAnalyzer.trim：@ 或空白符）
         let cleaned = raw_main.trim_start_matches('@').trim();
@@ -763,6 +767,7 @@ fn split_hashes(rule: &str) -> Vec<&str> {
     parts
 }
 
+#[allow(clippy::if_same_then_else)] // 不同前缀走向同一 RuleKind 是有意的 legado 语义映射，分开写便于对照
 fn detect_kind(body: &str) -> RuleKind {
     let b = body.trim();
     // 对齐 legado SourceRule 类型检测（AnalyzeRule.kt）

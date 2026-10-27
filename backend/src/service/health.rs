@@ -70,7 +70,7 @@ pub fn invalid_snapshot(ns: &str) -> Vec<(String, i64, String)> {
         .filter(|(k, _)| k.starts_with(&prefix))
         .map(|(k, (ts, err))| (k[prefix.len()..].to_string(), *ts, err.clone()))
         .collect();
-    out.sort_by(|a, b| b.1.cmp(&a.1));
+    out.sort_by_key(|x| std::cmp::Reverse(x.1));
     out
 }
 

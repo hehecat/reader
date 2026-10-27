@@ -1353,7 +1353,12 @@ impl Storage {
         Ok(())
     }
 
-    pub async fn get_search_cache(&self, ns: &str, key: &str, ttl_ms: i64) -> Result<Option<String>> {
+    pub async fn get_search_cache(
+        &self,
+        ns: &str,
+        key: &str,
+        ttl_ms: i64,
+    ) -> Result<Option<String>> {
         let row: Option<(String, i64)> = sqlx::query_as(
             "SELECT result_json, created_at FROM search_cache WHERE user_namespace = ?1 AND cache_key = ?2",
         )
@@ -1460,8 +1465,16 @@ impl Storage {
         kind: &str,
         ok: bool,
     ) -> Result<()> {
-        let (ta, ts) = if kind == "toc" { (1i64, if ok { 1 } else { 0 }) } else { (0, 0) };
-        let (ca, cs) = if kind == "content" { (1i64, if ok { 1 } else { 0 }) } else { (0, 0) };
+        let (ta, ts) = if kind == "toc" {
+            (1i64, if ok { 1 } else { 0 })
+        } else {
+            (0, 0)
+        };
+        let (ca, cs) = if kind == "content" {
+            (1i64, if ok { 1 } else { 0 })
+        } else {
+            (0, 0)
+        };
         let now = chrono::Utc::now().timestamp_millis();
         sqlx::query(
             "INSERT INTO source_stats (user_namespace, source_url, toc_attempts, toc_successes, content_attempts, content_successes, updated_at)
@@ -1509,7 +1522,6 @@ impl Storage {
         let now = chrono::Utc::now().timestamp_millis();
         let mut tx = self.pool.begin().await?;
         for url in urls {
-            let vars_json = vars_json;
             sqlx::query(
                 "INSERT OR REPLACE INTO book_vars_cache \
                  (user_namespace, source_url, url, vars_json, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -2477,6 +2489,7 @@ impl Storage {
     /// 换源持久化（legacy setBookSource）：更新书架书的 origin/originName/bookUrl/tocUrl，
     /// 封面仅原为空时补（legacy editShelfBook 语义）；旧 URL 的章节/目录缓存清理
     /// （新源目录按需重建）。阅读进度在 books 行上天然保留。返回受影响行数。
+    #[allow(clippy::too_many_arguments)] // 抓取/OPDS 内部管线参数，拆结构体会让调用点更长，暂不拆
     pub async fn switch_book_source(
         &self,
         ns: &str,
@@ -2731,7 +2744,11 @@ impl Storage {
     pub async fn clear_toc_cache_for_book(&self, ns: &str, book_url: &str) -> Result<u64> {
         // 缓存键常是目录端点（`/toc/<id>`）而书是详情页（`/book/<id>`）——单靠等值匹配会漏，
         // 故再用 URL 末段 id 兜底（`%/ <id>` 形式，避免误伤同前缀的其它书）。
-        let tail = book_url.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+        let tail = book_url
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or("");
         let r = if tail.is_empty() {
             sqlx::query(
                 "DELETE FROM toc_cache WHERE user_namespace = ?1 AND (book_url = ?2 OR toc_url = ?2)",
@@ -3914,6 +3931,7 @@ impl Storage {
     /// legacy loc_book 文件书迁移：文件解析结果写入 book_chapters（键 = 原 book_url），
     /// books.local_file 记录关联路径（保留原记录 origin 不动，local_file 非空即迁移标记）
     /// 返回是否写入（书不存在返回 false）
+    #[allow(clippy::too_many_arguments)] // 抓取/OPDS 内部管线参数，拆结构体会让调用点更长，暂不拆
     pub async fn migrate_loc_book(
         &self,
         ns: &str,
@@ -5320,7 +5338,9 @@ pub async fn run_shelf_update(storage: &Storage) -> Result<usize> {
                                     book.book_url
                                 ),
                                 Ok(_) => {}
-                                Err(e) => tracing::warn!("失效目录缓存失败 [{}]: {e:#}", book.book_url),
+                                Err(e) => {
+                                    tracing::warn!("失效目录缓存失败 [{}]: {e:#}", book.book_url)
+                                }
                             }
                         }
                     }
@@ -9807,13 +9827,11 @@ mod tests {
                 .as_deref(),
             Some("A 的正文")
         );
-        assert!(
-            storage
-                .get_toc_cache("userA", "https://shared.com/toc", 86_400_000)
-                .await
-                .unwrap()
-                .is_some()
-        );
+        assert!(storage
+            .get_toc_cache("userA", "https://shared.com/toc", 86_400_000)
+            .await
+            .unwrap()
+            .is_some());
 
         // 他命名空间不可见（不串扰）
         assert_eq!(

@@ -1,7 +1,7 @@
 //! 路由：/health + /reader3/*（兼容 legacy API）
 
-use tower_http::compression::predicate::Predicate as _CompressionPredicate;
 use std::collections::HashMap;
+use tower_http::compression::predicate::Predicate as _CompressionPredicate;
 
 use axum::body::{Body, Bytes};
 use axum::extract::{ConnectInfo, Query, State};
@@ -112,9 +112,7 @@ pub fn router(config: crate::AppConfig, storage: Storage) -> axum::Router {
         .layer(
             tower_http::compression::CompressionLayer::new().compress_when(
                 tower_http::compression::predicate::DefaultPredicate::new().and(
-                    tower_http::compression::predicate::NotForContentType::new(
-                        "text/event-stream",
-                    ),
+                    tower_http::compression::predicate::NotForContentType::new("text/event-stream"),
                 ),
             ),
         )
@@ -128,7 +126,10 @@ pub fn router(config: crate::AppConfig, storage: Storage) -> axum::Router {
         )
         .route("/reader3/aiStatus", get(ai_status))
         .route("/reader3/aiChat", post(ai_chat))
-        .route("/reader3/aiSettings", get(ai_settings_get).post(ai_settings_save))
+        .route(
+            "/reader3/aiSettings",
+            get(ai_settings_get).post(ai_settings_save),
+        )
         .route("/reader3/aiTest", post(ai_test))
         .route("/reader3/aiGraph", post(ai_graph))
         .route("/reader3/saveOpdsSettings", post(save_opds_settings))
@@ -1018,8 +1019,7 @@ async fn get_book_sources(
                             "published": is_public,
                         })
                     } else {
-                        let mut value = serde_json::to_value(s)
-                            .unwrap_or(serde_json::Value::Null);
+                        let mut value = serde_json::to_value(s).unwrap_or(serde_json::Value::Null);
                         if let Some(obj) = value.as_object_mut() {
                             obj.insert("published".to_string(), serde_json::json!(is_public));
                         }
@@ -1432,7 +1432,7 @@ fn merge_login_params(
     m
 }
 
-/// 解析 bookSource 参数（书源 URL 或完整 JSON）——复用 resolve_book_source 语义
+// 解析 bookSource 参数（书源 URL 或完整 JSON）——复用 resolve_book_source 语义
 // ==================== 自定义字体（按用户存库, 阅读设置可选用/删除） ====================
 
 const FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "woff", "woff2"];
@@ -1475,7 +1475,13 @@ async fn upload_font(
             Ok(Some(mut field)) => {
                 if field.name() == Some("file") {
                     file_name = field.file_name().unwrap_or("font.ttf").to_string();
-                    match read_multipart_field_limited(&mut field, FONT_MAX_MB as usize * 1024 * 1024, FONT_MAX_MB as i64).await {
+                    match read_multipart_field_limited(
+                        &mut field,
+                        FONT_MAX_MB as usize * 1024 * 1024,
+                        FONT_MAX_MB as i64,
+                    )
+                    .await
+                    {
                         Ok(b) => file_bytes = Some(b),
                         Err(msg) => return Json(ReturnData::err(msg)),
                     }
@@ -1507,7 +1513,11 @@ async fn upload_font(
         .unwrap_or("font")
         .trim()
         .to_string();
-    let stem = if stem.is_empty() { "font".to_string() } else { stem };
+    let stem = if stem.is_empty() {
+        "font".to_string()
+    } else {
+        stem
+    };
     let id = format!(
         "{}-{:x}",
         stem.chars()
@@ -1552,7 +1562,9 @@ async fn get_font_list(
     if let Ok(mut rd) = tokio::fs::read_dir(&dir).await {
         while let Ok(Some(entry)) = rd.next_entry().await {
             let name = entry.file_name().to_string_lossy().into_owned();
-            let Some((id, ext)) = name.rsplit_once('.') else { continue };
+            let Some((id, ext)) = name.rsplit_once('.') else {
+                continue;
+            };
             if !FONT_EXTENSIONS.contains(&ext.to_lowercase().as_str()) {
                 continue;
             }
@@ -1594,7 +1606,11 @@ async fn get_font(
         Err(ret) => return Json(ret).into_response(),
     };
     let id = params.get("id").cloned().unwrap_or_default();
-    if id.is_empty() || !id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
         return StatusCode::BAD_REQUEST.into_response();
     }
     let dir = fonts_dir(&state, &namespace);
@@ -1625,7 +1641,11 @@ async fn delete_font(
     };
     let body_json = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
     let id = param_of(&params, body_json.as_ref(), "id");
-    if id.is_empty() || !id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
         return Json(ReturnData::err("参数错误"));
     }
     let dir = fonts_dir(&state, &namespace);
@@ -2768,7 +2788,7 @@ async fn search_book(
         page,
         search_timeout_param(&params, body_json.as_ref()),
     )
-        .await
+    .await
     {
         Ok(books) => {
             // legacy "=" 前缀/exact=1：按书名/作者等值过滤（大小写/全半角忽略）
@@ -2882,7 +2902,10 @@ async fn search_book_multi(
         let mut map: std::collections::HashMap<String, (f64, i64)> =
             std::collections::HashMap::new();
         for st in stats {
-            map.insert(st.source_url.clone(), (st.confidence(), st.avg_latency_ms()));
+            map.insert(
+                st.source_url.clone(),
+                (st.confidence(), st.avg_latency_ms()),
+            );
         }
         sources.sort_by(|a, b| {
             let (ca, la) = map.get(&a.book_source_url).copied().unwrap_or((0.5, 3000));
@@ -2929,16 +2952,15 @@ async fn search_book_multi(
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire().await;
             let t0 = std::time::Instant::now();
-            let res =
-                crate::service::search::search_one_source(
-                    &storage,
-                    &ns,
-                    &source,
-                    &key,
-                    page,
-                    timeout_secs,
-                )
-                    .await;
+            let res = crate::service::search::search_one_source(
+                &storage,
+                &ns,
+                &source,
+                &key,
+                page,
+                timeout_secs,
+            )
+            .await;
             let lat = t0.elapsed().as_millis() as i64;
             let (ok, intro_hits, intro_count) = match &res {
                 Ok(books) => (
@@ -3229,7 +3251,6 @@ async fn resolve_book_source(
     }
 }
 
-
 /// bookSource 缺省时按书籍/章节 URL 域名回算书源: 历史缺陷是空参 LIKE '%' 任意取
 /// 第一条源, 跨站误解析 (导航 li 混进目录等); 无同域源时回退旧空参语义.
 async fn resolve_book_source_for_url(
@@ -3287,12 +3308,12 @@ fn book_source_group_matches(group: &str, source_groups: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
-/// POST/GET /reader3/getBookInfo：书籍详情（ruleBookInfo）
-
-/// GET/POST /reader3/setBookSource：换源持久化（legacy setBookSource 对齐）
-/// 参数：bookUrl（旧）+ newUrl（新源书籍链接）+ bookSourceUrl（新书源）
-/// 行为：书架书原地更新 origin/originName/bookUrl/tocUrl（封面仅原为空时补，
-/// 阅读进度保留），旧 URL 章节/目录缓存清理；随后尽力预取新目录缓存（失败不影响换源）
+// POST/GET /reader3/getBookInfo：书籍详情（ruleBookInfo）
+//
+// GET/POST /reader3/setBookSource：换源持久化（legacy setBookSource 对齐）
+// 参数：bookUrl（旧）+ newUrl（新源书籍链接）+ bookSourceUrl（新书源）
+// 行为：书架书原地更新 origin/originName/bookUrl/tocUrl（封面仅原为空时补，
+// 阅读进度保留），旧 URL 章节/目录缓存清理；随后尽力预取新目录缓存（失败不影响换源）
 
 /// GET /reader3/getUserInfo（legacy 对齐）：当前用户 + secure 标志 + 字体清单。
 /// 未登录也返回 200（userInfo=null——legacy checkAuth 不拦截此端点）
@@ -3598,7 +3619,10 @@ async fn set_book_source(
         Ok(0) => Json(ReturnData::err("书籍信息错误")),
         Ok(_) => {
             // 换源后旧 URL 详情缓存失效, 新 URL 详情落缓存
-            let _ = state.storage.clear_book_info_cache(&namespace, &book_url).await;
+            let _ = state
+                .storage
+                .clear_book_info_cache(&namespace, &book_url)
+                .await;
             let info_value = serde_json::to_value(info.clone()).unwrap_or(serde_json::Value::Null);
             let _ = state
                 .storage
@@ -3743,10 +3767,9 @@ async fn get_book_info(
         Err(_) => return Json(ReturnData::err("系统错误")),
     };
     let shelf_match = books.iter().find(|b| b.book_url == url);
-    if shelf_match.is_some()
-        && crate::service::local_book::is_local_book(&url, shelf_match.unwrap().origin.as_str())
+    if let Some(book) =
+        shelf_match.filter(|b| crate::service::local_book::is_local_book(&url, b.origin.as_str()))
     {
-        let book = shelf_match.unwrap();
         let info = crate::model::book_chapter::BookInfo {
             name: book.name.clone(),
             author: book.author.clone(),
@@ -3815,7 +3838,8 @@ async fn get_book_info(
             }
         }
     }
-    let Some(source) = resolve_book_source_for_url(&state, &namespace, &bs_param, &url).await else {
+    let Some(source) = resolve_book_source_for_url(&state, &namespace, &bs_param, &url).await
+    else {
         return Json(ReturnData::err("书源不存在"));
     };
     match crate::service::book::fetch_book_info(
@@ -4007,7 +4031,8 @@ async fn get_book_toc(
         }
     }
     let bs_param = param_of(&params, body_json.as_ref(), "bookSource");
-    let Some(source) = resolve_book_source_for_url(&state, &namespace, &bs_param, &toc_url).await else {
+    let Some(source) = resolve_book_source_for_url(&state, &namespace, &bs_param, &toc_url).await
+    else {
         // legacy getChapterList：非本地书且无可用书源 → 未配置书源
         return Json(ReturnData::err("未配置书源"));
     };
@@ -4162,7 +4187,9 @@ async fn get_book_content(
         return Json(ReturnData::err("本地书章节不存在"));
     }
     let bs_param = param_of(&params, body_json.as_ref(), "bookSource");
-    let Some(source) = resolve_book_source_for_url(&state, &namespace, &bs_param, &chapter_url).await else {
+    let Some(source) =
+        resolve_book_source_for_url(&state, &namespace, &bs_param, &chapter_url).await
+    else {
         return Json(ReturnData::err("书源不存在"));
     };
     // ---- 非文本书分派（legacy BookType：0 文本/1 音频/2 漫画/3 文件/4 视频） ----
@@ -4446,7 +4473,11 @@ async fn get_source_stats_handler(
         Ok(ns) => ns,
         Err(ret) => return Json(ret),
     };
-    let stats = state.storage.get_source_stats(&namespace).await.unwrap_or_default();
+    let stats = state
+        .storage
+        .get_source_stats(&namespace)
+        .await
+        .unwrap_or_default();
     let list: Vec<serde_json::Value> = stats
         .iter()
         .map(|st| {
@@ -6267,6 +6298,7 @@ async fn migrate_loc_book(
 ///   用户仍可在自己命名空间隐藏/覆盖某条，互不影响；同 URL 主键 upsert，重复发布即更新。
 /// - 下架：`mode=remove` 时从公共池删除这些 URL。
 /// - 源取自 `from`（缺省=当前账号命名空间；管理员在 default 层时可显式指定）。
+///
 /// body：{bookSources:[url|{bookSourceUrl}...], mode?:"publish"|"remove", from?: ns}
 async fn set_as_default_book_sources(
     State(state): State<AppState>,
@@ -6324,7 +6356,11 @@ async fn set_as_default_book_sources(
             explicit
         }
     };
-    let all = state.storage.get_book_sources(&from).await.unwrap_or_default();
+    let all = state
+        .storage
+        .get_book_sources(&from)
+        .await
+        .unwrap_or_default();
     let mut published = 0i64;
     let mut missing: Vec<String> = Vec::new();
     for url in &urls {
@@ -6344,7 +6380,10 @@ async fn set_as_default_book_sources(
         }
     }
     // 兼容旧标记（历史字段, 无消费方）
-    let _ = state.storage.set_default_book_sources(&namespace, &urls).await;
+    let _ = state
+        .storage
+        .set_default_book_sources(&namespace, &urls)
+        .await;
     tracing::info!("发布公共源 {published} 条（来源 {from}, 操作者 {namespace}）");
     Json(ReturnData::ok(
         json!({ "published": published, "missing": missing }),
@@ -6448,9 +6487,7 @@ async fn search_book_source_sse(
                         true,
                         books
                             .iter()
-                            .filter(|b| {
-                                b.intro.as_deref().is_some_and(|t| !t.trim().is_empty())
-                            })
+                            .filter(|b| b.intro.as_deref().is_some_and(|t| !t.trim().is_empty()))
                             .count() as i64,
                         books.len() as i64,
                     ),
@@ -6729,7 +6766,9 @@ async fn get_users(
 
 /// 用户管理输出 JSON（不含密码/salt/token；camelCase 兼容 legacy）
 /// 各命名空间的当前数量（书源/书籍）: 一次 GROUP BY 拿全, 供用户管理列表显示用量
-async fn namespace_counts(storage: &crate::storage::Storage) -> (HashMap<String, i64>, HashMap<String, i64>) {
+async fn namespace_counts(
+    storage: &crate::storage::Storage,
+) -> (HashMap<String, i64>, HashMap<String, i64>) {
     let source_rows: Vec<(String, i64)> =
         sqlx::query_as("SELECT user_namespace, COUNT(*) FROM book_sources GROUP BY user_namespace")
             .fetch_all(&storage.pool)
@@ -6740,7 +6779,10 @@ async fn namespace_counts(storage: &crate::storage::Storage) -> (HashMap<String,
             .fetch_all(&storage.pool)
             .await
             .unwrap_or_default();
-    (source_rows.into_iter().collect(), book_rows.into_iter().collect())
+    (
+        source_rows.into_iter().collect(),
+        book_rows.into_iter().collect(),
+    )
 }
 
 fn user_admin_json(
@@ -6937,10 +6979,10 @@ async fn delete_users(
             match state.storage.list_users().await {
                 Ok(users) => {
                     let (source_counts, book_counts) = namespace_counts(&state.storage).await;
-            let arr: Vec<Value> = users
-                .iter()
-                .map(|u| user_admin_json(u, &source_counts, &book_counts))
-                .collect();
+                    let arr: Vec<Value> = users
+                        .iter()
+                        .map(|u| user_admin_json(u, &source_counts, &book_counts))
+                        .collect();
                     Json(ReturnData::ok(Value::Array(arr)))
                 }
                 Err(e) => {
@@ -7182,7 +7224,7 @@ async fn tts_synthesize(
                 }
             }
         }
-        "http" | "httptts" | "api" | _ if false => unreachable!(),
+        _ if false => unreachable!(),
         _ => {
             // legacy type=api：voice = HttpTTS 名称（getHttpTTSByName）
             let Some(tts) = state
@@ -7583,6 +7625,7 @@ fn login_required() -> ReturnData {
 /// 解析命名空间：
 /// - 非 secure → "default"
 /// - secure → 从 query/header 解析 accessToken（username:token）并校验 token，合法则返回用户名
+///
 /// GAP 59：主 token 或 users.token_map（多设备）中任一 token 均可通过
 pub(crate) async fn resolve_namespace(
     state: &AppState,
@@ -8542,9 +8585,7 @@ async fn save_book(
                                     }
                                 }
                             }
-                            None => tracing::debug!(
-                                "saveBook 封面转码不可用（保留原 URL）: {cov}"
-                            ),
+                            None => tracing::debug!("saveBook 封面转码不可用（保留原 URL）: {cov}"),
                         }
                     }
                     _ => tracing::debug!("saveBook 封面下载失败（保留原 URL）: {cov}"),
@@ -8925,7 +8966,10 @@ async fn search_book_multi_sse(
         let mut map: std::collections::HashMap<String, (f64, i64)> =
             std::collections::HashMap::new();
         for st in stats {
-            map.insert(st.source_url.clone(), (st.confidence(), st.avg_latency_ms()));
+            map.insert(
+                st.source_url.clone(),
+                (st.confidence(), st.avg_latency_ms()),
+            );
         }
         sources.sort_by(|a, b| {
             let (ca, la) = map.get(&a.book_source_url).copied().unwrap_or((0.5, 3000));
@@ -8965,7 +9009,7 @@ async fn search_book_multi_sse(
     let timeout_secs = search_timeout_param(&params, body_json.as_ref());
 
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::convert::Infallible>>(
-        concurrent_count.min(64).max(4),
+        concurrent_count.clamp(4, 64),
     );
     let total = sources.len() as i64;
     let start = (last_index + 1).max(0) as usize;
@@ -8976,33 +9020,38 @@ async fn search_book_multi_sse(
         // 并发受控（semaphore），结果到达即推送（FuturesUnordered 完成顺序）
         let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrent_count));
         let mut tasks = futures::stream::FuturesUnordered::new();
-        for i in start..end {
+        for (offset, source_item) in sources[start..end].iter().enumerate() {
+            let idx = start + offset;
             let sem = sem.clone();
             let key = key.clone();
             let ns = ns.clone();
             let storage = storage.clone();
-            let source = sources[i].clone();
+            let source = source_item.clone();
             // 错峰斜坡 150ms/源: 实测去掉斜坡+并发 32 会让出口瞬时壅塞(首结果 6s→113s),
             // 保留既有验证过的斜率(并发 24 时约 3.5s 爬满, 平滑不壅塞)
-            let ramp_ms = (i - start) as u64 * 150;
+            let ramp_ms = offset as u64 * 150;
             tasks.push(Box::pin(async move {
                 if ramp_ms > 0 {
                     tokio::time::sleep(std::time::Duration::from_millis(ramp_ms)).await;
                 }
                 let _permit = sem.acquire().await;
                 let t0 = std::time::Instant::now();
-                let res =
-                    crate::service::search::search_one_source(&storage, &ns, &source, &key, 1, timeout_secs)
-                        .await;
+                let res = crate::service::search::search_one_source(
+                    &storage,
+                    &ns,
+                    &source,
+                    &key,
+                    1,
+                    timeout_secs,
+                )
+                .await;
                 let lat = t0.elapsed().as_millis() as i64;
                 let (ok, intro_hits, intro_count) = match &res {
                     Ok(books) => (
                         true,
                         books
                             .iter()
-                            .filter(|b| {
-                                b.intro.as_deref().is_some_and(|t| !t.trim().is_empty())
-                            })
+                            .filter(|b| b.intro.as_deref().is_some_and(|t| !t.trim().is_empty()))
                             .count() as i64,
                         books.len() as i64,
                     ),
@@ -9035,8 +9084,8 @@ async fn search_book_multi_sse(
                         unique.push(b);
                     }
                 }
-                let payload = serde_json::json!({ "lastIndex": i as i64, "data": unique });
-                (i as i64, format!("data: {payload}\n\n"))
+                let payload = serde_json::json!({ "lastIndex": idx as i64, "data": unique });
+                (idx as i64, format!("data: {payload}\n\n"))
             }));
         }
         // 窗口预算：到点提前收口(不再被窗内最慢源拖满整窗), 并把
@@ -9057,7 +9106,9 @@ async fn search_book_multi_sse(
                     None => break, // 全部源搜完
                 }
             } else {
-                let left = hard_cap.checked_sub(window_t0.elapsed()).unwrap_or_default();
+                let left = hard_cap
+                    .checked_sub(window_t0.elapsed())
+                    .unwrap_or_default();
                 if left.is_zero() {
                     break;
                 }
@@ -9161,8 +9212,13 @@ fn sse_window_budget_secs() -> u64 {
     })
 }
 
-fn search_timeout_param(params: &HashMap<String, String>, body_json: Option<&serde_json::Value>) -> u64 {
-    let raw = param_of(params, body_json, "timeout").parse::<i64>().unwrap_or(15);
+fn search_timeout_param(
+    params: &HashMap<String, String>,
+    body_json: Option<&serde_json::Value>,
+) -> u64 {
+    let raw = param_of(params, body_json, "timeout")
+        .parse::<i64>()
+        .unwrap_or(15);
     raw.clamp(3, 60) as u64
 }
 
@@ -9216,9 +9272,7 @@ async fn ai_graph(
         return Json(ReturnData::err("缺少书籍地址"));
     }
     let Some(cfg) = crate::service::ai::config() else {
-        return Json(ReturnData::err(
-            "未配置 AI 端点（设置 → AI 阅读助手）",
-        ));
+        return Json(ReturnData::err("未配置 AI 端点（设置 → AI 阅读助手）"));
     };
     // 检索线索: 优先"人物/关系"关键词; 无命中时按开头+当前章兜底
     let probe_question = if question.trim().is_empty() {
@@ -9236,13 +9290,12 @@ async fn ai_graph(
     )
     .await;
     if retrieval.cached_chapters == 0 {
-        return Json(ReturnData::err("本书还没有已缓存章节, 先读几章再生成关系图"));
+        return Json(ReturnData::err(
+            "本书还没有已缓存章节, 先读几章再生成关系图",
+        ));
     }
-    let messages = crate::service::ai::build_graph_messages(
-        &book_name,
-        &retrieval.snippets,
-        &question,
-    );
+    let messages =
+        crate::service::ai::build_graph_messages(&book_name, &retrieval.snippets, &question);
     // 关系图是一次性结构化输出: 推理模型的思考很吃预算, 这里独立放宽到 8000(不受问答设置限制)
     match crate::service::ai::chat_once(&cfg, messages, 8000).await {
         Ok(raw) => match crate::service::ai::extract_json_object(&raw) {
@@ -9299,14 +9352,22 @@ async fn ai_settings_save(
         .trim()
         .trim_end_matches('/')
         .to_string();
-    let api_key_in = param_of(&params, body_json.as_ref(), "apiKey").trim().to_string();
-    let model = param_of(&params, body_json.as_ref(), "model").trim().to_string();
+    let api_key_in = param_of(&params, body_json.as_ref(), "apiKey")
+        .trim()
+        .to_string();
+    let model = param_of(&params, body_json.as_ref(), "model")
+        .trim()
+        .to_string();
     // 0 = 不限制(省略 max_tokens); 其余夹在 200-16000
     let raw_tokens = param_of(&params, body_json.as_ref(), "maxTokens")
         .trim()
         .parse::<u64>()
         .unwrap_or(3500);
-    let max_tokens = if raw_tokens == 0 { 0 } else { raw_tokens.clamp(200, 16000) };
+    let max_tokens = if raw_tokens == 0 {
+        0
+    } else {
+        raw_tokens.clamp(200, 16000)
+    };
 
     if base_url.is_empty() {
         if let Err(e) = crate::service::ai::clear(&state.storage).await {
@@ -9331,7 +9392,12 @@ async fn ai_settings_save(
     } else {
         model
     };
-    let cfg = crate::service::ai::AiConfig { base_url, api_key, model, max_tokens };
+    let cfg = crate::service::ai::AiConfig {
+        base_url,
+        api_key,
+        model,
+        max_tokens,
+    };
     match crate::service::ai::save(&state.storage, cfg).await {
         Ok(()) => Json(ReturnData::ok(json!({ "saved": true }))),
         Err(e) => Json(ReturnData::err(format!("保存失败: {e}"))),
@@ -9354,7 +9420,9 @@ async fn ai_test(
         .trim()
         .trim_end_matches('/')
         .to_string();
-    let key_in = param_of(&params, body_json.as_ref(), "apiKey").trim().to_string();
+    let key_in = param_of(&params, body_json.as_ref(), "apiKey")
+        .trim()
+        .to_string();
     let saved = crate::service::ai::config();
     let base_url = if base_in.is_empty() {
         match saved.as_ref() {
@@ -9416,8 +9484,12 @@ async fn ai_status(
         Err(ret) => return Json(ret),
     };
     match crate::service::ai::config() {
-        Some(cfg) => Json(ReturnData::ok(json!({ "enabled": true, "model": cfg.model }))),
-        None => Json(ReturnData::ok(json!({ "enabled": false, "model": Value::Null }))),
+        Some(cfg) => Json(ReturnData::ok(
+            json!({ "enabled": true, "model": cfg.model }),
+        )),
+        None => Json(ReturnData::ok(
+            json!({ "enabled": false, "model": Value::Null }),
+        )),
     }
 }
 
@@ -9482,7 +9554,10 @@ async fn ai_chat(
                     let role = m.get("role")?.as_str()?;
                     let content = m.get("content")?.as_str()?;
                     if role == "user" || role == "assistant" {
-                        Some((role.to_string(), content.chars().take(2000).collect::<String>()))
+                        Some((
+                            role.to_string(),
+                            content.chars().take(2000).collect::<String>(),
+                        ))
                     } else {
                         None
                     }
@@ -11134,18 +11209,17 @@ async fn get_system_info(
     // 已登录: 顺手下发数据文件访问 Cookie（/epub、/book-assets 的 img/iframe 带不了自定义头）
     let cookie = system_info_cookie(&state, current_user.as_ref());
     // 普通用户只看与自身相关的开关: 内存/CPU/请求计数/在线会话/端口属运维信息, 仅管理员可见
-    let is_admin = !config.secure
-        || current_user.as_ref().map(|u| u.is_admin).unwrap_or(false);
+    let is_admin = !config.secure || current_user.as_ref().map(|u| u.is_admin).unwrap_or(false);
     if !is_admin {
         return system_info_response(
             json!({
-            "secure": config.secure,
-            "mode": mode,
-            "isAdmin": false,
-            "version": env!("CARGO_PKG_VERSION"),
-            "inviteRequired": !config.invite_code.is_empty(),
-            "userLimit": config.user_limit,
-        }),
+                "secure": config.secure,
+                "mode": mode,
+                "isAdmin": false,
+                "version": env!("CARGO_PKG_VERSION"),
+                "inviteRequired": !config.invite_code.is_empty(),
+                "userLimit": config.user_limit,
+            }),
             cookie,
         );
     }
@@ -11196,7 +11270,8 @@ fn system_info_response(data: serde_json::Value, cookie: Option<String>) -> Resp
     let mut resp = Json(ReturnData::ok(data)).into_response();
     if let Some(value) = cookie {
         if let Ok(hv) = axum::http::HeaderValue::from_str(&value) {
-            resp.headers_mut().insert(axum::http::header::SET_COOKIE, hv);
+            resp.headers_mut()
+                .insert(axum::http::header::SET_COOKIE, hv);
         }
     }
     resp
@@ -15422,11 +15497,7 @@ mod tests {
         // 带有效 token 的请求直达业务逻辑并拿到列表（不再返回 NEED_SECURE_KEY）
         assert!(ret.0.is_success, "{}", ret.0.error_msg);
         assert!(ret.0.data.is_array(), "应返回用户列表");
-        assert_ne!(
-            ret.0.data,
-            json!("NEED_SECURE_KEY"),
-            "不应再要求管理密码"
-        );
+        assert_ne!(ret.0.data, json!("NEED_SECURE_KEY"), "不应再要求管理密码");
 
         // 错 secureKey 不再被校验
         let params: HashMap<String, String> = [
@@ -15443,11 +15514,7 @@ mod tests {
         )
         .await;
         // 管理密码已废弃: 不再有 NEED_SECURE_KEY 拦截, 请求直达业务逻辑
-        assert_ne!(
-            ret.0.data,
-            json!("NEED_SECURE_KEY"),
-            "不应再要求管理密码"
-        );
+        assert_ne!(ret.0.data, json!("NEED_SECURE_KEY"), "不应再要求管理密码");
 
         // 正确 secureKey → 列表（含启用状态；不含密码字段）
         let params: HashMap<String, String> = [
@@ -15583,11 +15650,7 @@ mod tests {
         )
         .await;
         // 管理密码已废弃: 不再有 NEED_SECURE_KEY 拦截, 请求直达业务逻辑
-        assert_ne!(
-            ret.0.data,
-            json!("NEED_SECURE_KEY"),
-            "不应再要求管理密码"
-        );
+        assert_ne!(ret.0.data, json!("NEED_SECURE_KEY"), "不应再要求管理密码");
 
         cleanup(state, dir).await;
     }
@@ -15681,11 +15744,7 @@ mod tests {
         )
         .await;
         // 管理密码已废弃: 不再有 NEED_SECURE_KEY 拦截, 请求直达业务逻辑
-        assert_ne!(
-            ret.0.data,
-            json!("NEED_SECURE_KEY"),
-            "不应再要求管理密码"
-        );
+        assert_ne!(ret.0.data, json!("NEED_SECURE_KEY"), "不应再要求管理密码");
 
         cleanup(state, dir).await;
     }
@@ -15946,11 +16005,7 @@ mod tests {
         )
         .await;
         // 管理密码已废弃: 不再有 NEED_SECURE_KEY 拦截, 请求直达业务逻辑
-        assert_ne!(
-            ret.0.data,
-            json!("NEED_SECURE_KEY"),
-            "不应再要求管理密码"
-        );
+        assert_ne!(ret.0.data, json!("NEED_SECURE_KEY"), "不应再要求管理密码");
 
         cleanup(state, dir).await;
     }
@@ -16065,11 +16120,7 @@ mod tests {
         )
         .await;
         // 管理密码已废弃: 不再有 NEED_SECURE_KEY 拦截, 请求直达业务逻辑
-        assert_ne!(
-            ret.0.data,
-            json!("NEED_SECURE_KEY"),
-            "不应再要求管理密码"
-        );
+        assert_ne!(ret.0.data, json!("NEED_SECURE_KEY"), "不应再要求管理密码");
 
         cleanup(state, dir).await;
     }
@@ -16160,11 +16211,7 @@ mod tests {
         )
         .await;
         // 管理密码已废弃: 不再有 NEED_SECURE_KEY 拦截, 请求直达业务逻辑
-        assert_ne!(
-            ret.0.data,
-            json!("NEED_SECURE_KEY"),
-            "不应再要求管理密码"
-        );
+        assert_ne!(ret.0.data, json!("NEED_SECURE_KEY"), "不应再要求管理密码");
         // 缺密码 → 参数错误
         let body = Bytes::from(r#"{"username":"alice"}"#);
         let ret = reset_user_password(
@@ -18907,6 +18954,7 @@ mod tests {
 
     /// cacheBookOnServer / cacheBookSSE / cancelCacheBook：本地书（无网络）
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // 测试里用全局锁串行化 env/端口，跨 await 持有是刻意的
     async fn test_cache_book_api() {
         let (state, dir) = test_state("cachebook").await;
         let book_url = "local://cache1";
@@ -19040,6 +19088,7 @@ mod tests {
     /// cacheBookOnServer：书源书后台缓存（目录 → 并发 3 逐章 → 缓存表）
     /// 注意：mock 按请求路径返回（并发抓章时请求到达序不定——路径寻址保证确定性）
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // 测试里用全局锁串行化 env/端口，跨 await 持有是刻意的
     async fn test_cache_book_web_api() {
         let _ssrf = crate::service::crawler::ssrf_allow_private_guard(true); // mock 绑定 127.0.0.1（P1 SSRF 校验放行，仅测试）
         let (state, dir) = test_state("cacheweb").await;
@@ -21487,7 +21536,17 @@ mod tests {
         // 开启后放行（无书源 → 走正常业务错误，说明权限已过）
         state
             .storage
-            .update_user_permissions("alice", None, None, Some(true), None, None, None, None, None)
+            .update_user_permissions(
+                "alice",
+                None,
+                None,
+                Some(true),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         let ret = search_book(
@@ -21602,7 +21661,17 @@ mod tests {
         // 开启后放行
         state
             .storage
-            .update_user_permissions("alice", None, None, None, Some(true), None, None, None, None)
+            .update_user_permissions(
+                "alice",
+                None,
+                None,
+                None,
+                Some(true),
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         let ret = get_rss_sources(

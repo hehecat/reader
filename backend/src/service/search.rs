@@ -449,8 +449,8 @@ pub(crate) fn concurrent_rate_sleep_ms(rate: Option<&str>) -> u64 {
     }
     if let Some((count, window)) = rate.split_once('/') {
         if let (Ok(c), Ok(w)) = (count.trim().parse::<u64>(), window.trim().parse::<u64>()) {
-            if c > 0 {
-                return w / c;
+            if let Some(r) = w.checked_div(c) {
+                return r;
             }
         }
     }
@@ -814,6 +814,7 @@ pub(crate) fn analyze_book_list_for_explore(
 
 /// 解析书单（对齐 legacy BookList.analyzeBookList v1：无 JS/无变量）
 #[allow(dead_code)] // TODO(审阅): 当前无调用方，待确认是接线还是删除
+#[allow(clippy::too_many_arguments)] // 抓取/OPDS 内部管线参数，拆结构体会让调用点更长，暂不拆
 fn analyze_book_list(
     ns: &str,
     body: &str,
@@ -837,6 +838,7 @@ fn analyze_book_list(
     )
 }
 
+#[allow(clippy::too_many_arguments)] // 抓取/OPDS 内部管线参数，拆结构体会让调用点更长，暂不拆
 fn analyze_book_list_impl(
     ns: &str,
     body: &str,
@@ -1164,14 +1166,7 @@ fn field_url_impl(
     }
     // 规则解析（CSS/JSONPath/Regex 等）；结果为相对路径时转绝对
     // （legado isUrl：URL 字段走 getString0 仅取首个）
-    let v = field_impl(
-        context,
-        Some(&expanded),
-        default,
-        None,
-        vars,
-        true,
-    );
+    let v = field_impl(context, Some(&expanded), default, None, vars, true);
     if v.starts_with('/') && !v.starts_with("//") {
         to_absolute(&v, base)
     } else {
@@ -1190,6 +1185,7 @@ pub(crate) fn expand_embedded_with_vars(rule: &str, context: &str, vars: &RuleVa
     expand_embedded_impl(&resolve_get(rule, vars), context, None)
 }
 
+#[allow(clippy::while_let_loop)] // 显式 loop + let-else 便于多处 break，改成 while let 反而难读
 fn expand_embedded_impl(rule: &str, context: &str, mut vars: Option<&mut RuleVars>) -> String {
     if !rule.contains("{{") {
         return rule.to_string();

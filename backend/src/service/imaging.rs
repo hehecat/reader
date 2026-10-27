@@ -159,7 +159,9 @@ mod tests {
             .expect("非 heic 无需转码");
         assert_eq!(ext, "png");
         assert_eq!(data, bytes);
-        let (ext, _) = normalize_cover("", None, vec![9u8]).await.expect("空扩展名回退 jpg");
+        let (ext, _) = normalize_cover("", None, vec![9u8])
+            .await
+            .expect("空扩展名回退 jpg");
         assert_eq!(ext, "jpg");
     }
 

@@ -195,6 +195,7 @@ fn content_type_charset(headers: &[(String, String)]) -> Option<String> {
 /// - `READER_CA_FILE=/path` → 追加自定义根证书（PEM）
 /// - `READER_HTTP_PROXY=http://host:port` → 直连请求统一走该代理（legacy OkHttp 代理语义；
 ///   书源级 proxy 仍优先用于浏览器求解，不互相覆盖）
+#[allow(clippy::type_complexity)] // 返回 (body, cookies, ua) 这类元组是内部约定，起别名反而要多跳一层
 pub fn http_client_builder(
     timeout_secs: u64,
     redirect_policy: reqwest::redirect::Policy,
@@ -204,8 +205,11 @@ pub fn http_client_builder(
 
 // ---- DNS 钉扎：fake-ip/DNS 劫持环境（clash tun 等）下容器解析到 198.18.x 假 IP 直连必败 →
 // 连接层失败时经 DoH(dns.alidns.com, IP 直连免递归)解析真 IP 并按 host 钉扎 10 分钟
+#[allow(clippy::type_complexity)] // host -> (过期时刻, IP 列表)，起别名反而多跳一层
 static DNS_PINS: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, Vec<std::net::IpAddr>)>>,
+    std::sync::Mutex<
+        std::collections::HashMap<String, (std::time::Instant, Vec<std::net::IpAddr>)>,
+    >,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 fn pin_dns(host: &str, ips: Vec<std::net::IpAddr>) {
@@ -218,7 +222,11 @@ fn pin_dns(host: &str, ips: Vec<std::net::IpAddr>) {
 fn dns_pins() -> Vec<(String, Vec<std::net::IpAddr>)> {
     DNS_PINS
         .lock()
-        .map(|m| m.iter().map(|(h, (_, ips))| (h.clone(), ips.clone())).collect())
+        .map(|m| {
+            m.iter()
+                .map(|(h, (_, ips))| (h.clone(), ips.clone()))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -234,7 +242,9 @@ async fn doh_resolve(domain: &str) -> Option<Vec<std::net::IpAddr>> {
         .build()
         .ok()?;
     let v: serde_json::Value = client
-        .get(format!("https://dns.alidns.com/resolve?name={domain}&type=A"))
+        .get(format!(
+            "https://dns.alidns.com/resolve?name={domain}&type=A"
+        ))
         .send()
         .await
         .ok()?
@@ -432,11 +442,14 @@ fn has_url_encoded(v: &str) -> bool {
             i += 1;
             continue;
         }
-        if c == b'%' && i + 2 < b.len()
-            && b[i + 1].is_ascii_hexdigit() && b[i + 2].is_ascii_hexdigit() {
-                i += 3;
-                continue;
-            }
+        if c == b'%'
+            && i + 2 < b.len()
+            && b[i + 1].is_ascii_hexdigit()
+            && b[i + 2].is_ascii_hexdigit()
+        {
+            i += 3;
+            continue;
+        }
         return false;
     }
     true
@@ -842,6 +855,7 @@ fn validate_redirect_target_strict(url: &str) -> Result<()> {
 /// - 字面 IP：直接判定（回环/私网/链路本地/未指定/广播一律拒绝）；
 /// - 域名：DNS 解析后逐个 IP 校验（任一解析到私网即拒绝）；localhost 直接拒绝；
 /// - 解析失败 / 无地址 → 拒绝。
+///
 /// 供 fetch_image 每跳调用（含重定向目标）——/assets/proxy 非 secure 模式同样生效。
 pub async fn validate_public_target(url: &str) -> Result<()> {
     if SSRF_ALLOW_PRIVATE.load(Ordering::Relaxed) {
@@ -1153,6 +1167,7 @@ pub async fn http_post(
 
 /// [`http_get`] 带 legacy UrlOption.retry 重试：retry=None/0 → 单次请求；
 /// n>0 失败后最多再试 n 次（立即重试，无退避；封顶 10 防呆）
+#[allow(clippy::too_many_arguments)] // 抓取/OPDS 内部管线参数，拆结构体会让调用点更长，暂不拆
 pub async fn http_get_retry(
     ns: &str,
     url: &str,
@@ -1169,6 +1184,7 @@ pub async fn http_get_retry(
 }
 
 /// [`http_post`] 重试语义同 [`http_get_retry`]
+#[allow(clippy::too_many_arguments)] // 抓取/OPDS 内部管线参数，拆结构体会让调用点更长，暂不拆
 pub async fn http_post_retry(
     ns: &str,
     url: &str,
@@ -1186,6 +1202,7 @@ pub async fn http_post_retry(
 }
 
 /// 简单重试循环（legacy AnalyzeUrl UrlOption.retry）：共 retry+1 次尝试，失败即重试
+#[allow(clippy::too_many_arguments)] // 抓取/OPDS 内部管线参数，拆结构体会让调用点更长，暂不拆
 async fn fetch_with_retry<T, F, Fut>(retry: Option<u32>, mut f: F) -> Result<T>
 where
     F: FnMut() -> Fut,
@@ -1208,6 +1225,7 @@ where
 }
 
 /// 书源抓取统一入口：cookie 注入 → 直连 → CF 质询检测 → FlareSolverr 兜底
+#[allow(clippy::too_many_arguments)] // 抓取/OPDS 内部管线参数，拆结构体会让调用点更长，暂不拆
 async fn http_fetch(
     ns: &str,
     url: &str,
@@ -1218,7 +1236,8 @@ async fn http_fetch(
     charset: Option<&str>,
     proxy: Option<&str>,
 ) -> Result<FetchResponse> {
-    let first = http_fetch_inner(ns, url, headers, timeout_secs, method, body, charset, proxy).await;
+    let first =
+        http_fetch_inner(ns, url, headers, timeout_secs, method, body, charset, proxy).await;
     match first {
         Err(e) if proxy.is_none() => {
             let conn_fail = e
@@ -1228,14 +1247,18 @@ async fn http_fetch(
                 return Err(e);
             }
             // fake-ip/DNS 劫持环境（clash tun 等）：连接层失败 → DoH 解析真 IP 钉扎后重试一次
-            let host = url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_string));
+            let host = url::Url::parse(url)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_string));
             let resolved = match host {
                 Some(h) => doh_resolve(&h).await.map(|ips| (h, ips)),
                 None => None,
             };
             match resolved {
                 Some((h, ips)) => {
-                    tracing::info!("DoH 解析 {h} -> {ips:?}（本地 DNS 疑似劫持/fake-ip）——钉扎重试");
+                    tracing::info!(
+                        "DoH 解析 {h} -> {ips:?}（本地 DNS 疑似劫持/fake-ip）——钉扎重试"
+                    );
                     pin_dns(&h, ips);
                     http_fetch_inner(ns, url, headers, timeout_secs, method, body, charset, proxy)
                         .await
@@ -1247,7 +1270,7 @@ async fn http_fetch(
     }
 }
 
-
+#[allow(clippy::too_many_arguments)] // 抓取/OPDS 内部管线参数，拆结构体会让调用点更长，暂不拆
 async fn http_fetch_inner(
     ns: &str,
     url: &str,
@@ -1917,6 +1940,7 @@ static CF_BROWSER_AVAIL_OVERRIDE: std::sync::atomic::AtomicI8 = std::sync::atomi
 /// - 浏览器不可用 → 明确错误（提示配置 camoufox）
 /// - 成功：solution.html 作为响应正文；cookies 与用户 cookie 按 name 合并后存库（按用户）
 ///   + 浏览器 UA 记录（与 cf_clearance 绑定）
+///
 /// proxy：书源级代理（None = READER_CAMOUFOX_PROXY）——机房 IP 解 Turnstile 需住宅代理
 /// 返回 (兜底响应, 合并后 cookie 串（含 turnstile_token 伪 cookie——重试直接用）, 浏览器 UA)
 async fn solve_cf_builtin(
@@ -2730,7 +2754,10 @@ mod tests {
                 "全局放行应生效: {url}"
             );
             let err = validate_source_target(url).await.unwrap_err();
-            assert!(err.to_string().contains("已拦截"), "书源应拦截 {url}: {err}");
+            assert!(
+                err.to_string().contains("已拦截"),
+                "书源应拦截 {url}: {err}"
+            );
             let err2 = validate_source_redirect_target(url).unwrap_err();
             assert!(
                 err2.to_string().contains("已拦截"),
@@ -2738,7 +2765,9 @@ mod tests {
             );
         }
         // 公网目标不受影响
-        assert!(validate_source_target("https://example.com/x").await.is_ok());
+        assert!(validate_source_target("https://example.com/x")
+            .await
+            .is_ok());
     }
 
     /// `SOURCE_ALLOW_PRIVATE` 开关：显式放行时书源可访问私网，关闭后恢复拦截
@@ -2748,7 +2777,9 @@ mod tests {
         let prev = SOURCE_ALLOW_PRIVATE.swap(true, Ordering::Relaxed);
         let allowed = validate_source_target("http://127.0.0.1:1/x").await.is_ok();
         SOURCE_ALLOW_PRIVATE.store(prev, Ordering::Relaxed);
-        let blocked = validate_source_target("http://127.0.0.1:1/x").await.is_err();
+        let blocked = validate_source_target("http://127.0.0.1:1/x")
+            .await
+            .is_err();
         assert!(allowed, "SOURCE_ALLOW_PRIVATE=true 时应放行私网书源");
         assert!(blocked, "开关关闭后应恢复拦截");
     }

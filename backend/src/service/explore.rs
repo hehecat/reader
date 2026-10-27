@@ -52,6 +52,7 @@ fn entry_type(title: &str, url: &str) -> String {
 /// 解析 exploreUrl（legado 语义）：
 /// - `@js:代码`：执行 JS（返回 JSON.stringify([{title,url},...])）→ 解析条目
 /// - 普通多行 URL：每行一个条目（title 从 URL 尾部提取）
+#[allow(clippy::collapsible_match)] // 先解包 Ok 再解包 Array，分层写更清楚
 pub fn parse_explore_entries(explore_url: &str) -> Vec<ExploreEntry> {
     let mut entries = Vec::new();
     let lines: Vec<&str> = explore_url.lines().collect();
@@ -231,21 +232,22 @@ pub async fn explore_url(
     // URL 模板（{{page}}/{page}）→ 页码
     let url = build_explore_url(url, page);
     // 相对 URL 拼书源 baseUrl (legado 语义: 带/前缀与不带前缀的相对路径都要绝对化)
-    let raw_url = if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("//") {
-        url.to_string()
-    } else {
-        let base = source
-            .book_source_url
-            .split("##")
-            .next()
-            .unwrap_or("")
-            .trim_end_matches('/');
-        if url.starts_with('/') {
-            format!("{base}{url}")
+    let raw_url =
+        if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("//") {
+            url.to_string()
         } else {
-            format!("{base}/{url}")
-        }
-    };
+            let base = source
+                .book_source_url
+                .split("##")
+                .next()
+                .unwrap_or("")
+                .trim_end_matches('/');
+            if url.starts_with('/') {
+                format!("{base}{url}")
+            } else {
+                format!("{base}/{url}")
+            }
+        };
     // URL 后缀（,{...}：charset/method/body——对齐搜索链路）
     let (final_url, suffix) = crate::service::search::split_url_suffix(&raw_url);
     let mut headers = source
@@ -605,6 +607,7 @@ mod tests {
 
     /// legado BookList：ruleExplore.bookList 为空 → 回退 ruleSearch
     #[test]
+    #[allow(clippy::field_reassign_with_default)] // 先 Default 再按条件覆盖字段，比一次性构造更贴近可读的分支逻辑
     fn test_explore_rule_falls_back_to_search() {
         let mut source = crate::model::BookSource::default();
         source.rule_explore = Some(serde_json::json!({ "bookList": "" }));
@@ -625,6 +628,7 @@ mod tests {
 
     /// bookUrlPattern 单详情：BookInfo → SearchBook 字段映射（legacy Book.toSearchBook）
     #[test]
+    #[allow(clippy::field_reassign_with_default)] // 先 Default 再按条件覆盖字段，比一次性构造更贴近可读的分支逻辑
     fn test_single_search_book_mapping() {
         let mut source = crate::model::BookSource::default();
         source.book_source_url = "https://a.com".into();

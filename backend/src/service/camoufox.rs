@@ -406,16 +406,16 @@ fn parse_login_session(v: Value) -> Result<LoginSession> {
         .and_then(|x| x.as_str())
         .map(String::from);
     let captcha = v.get("captcha").map(|c| LoginCaptcha {
-            base64: c
-                .get("base64")
-                .and_then(|x| x.as_str())
-                .unwrap_or("")
-                .to_string(),
-            x: c.get("x").and_then(|x| x.as_f64()).unwrap_or(0.0),
-            y: c.get("y").and_then(|x| x.as_f64()).unwrap_or(0.0),
-            w: c.get("w").and_then(|x| x.as_f64()).unwrap_or(0.0),
-            h: c.get("h").and_then(|x| x.as_f64()).unwrap_or(0.0),
-        });
+        base64: c
+            .get("base64")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        x: c.get("x").and_then(|x| x.as_f64()).unwrap_or(0.0),
+        y: c.get("y").and_then(|x| x.as_f64()).unwrap_or(0.0),
+        w: c.get("w").and_then(|x| x.as_f64()).unwrap_or(0.0),
+        h: c.get("h").and_then(|x| x.as_f64()).unwrap_or(0.0),
+    });
     Ok(LoginSession {
         status,
         session_id,

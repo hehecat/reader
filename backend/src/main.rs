@@ -16,13 +16,20 @@ fn main() -> Result<()> {
 
     // 自建部署 opt-in: 书源回源放行私网/回环 (LAN/本机书源服务常见, 如 docker 桥接宿主机);
     // 默认关闭保持 SSRF 防护. 仅影响书源抓取回源, 不影响鉴权.
-    if std::env::var("SSRF_ALLOW_PRIVATE").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")) {
-        reader_dev::service::crawler::SSRF_ALLOW_PRIVATE.store(true, std::sync::atomic::Ordering::Relaxed);
+    if std::env::var("SSRF_ALLOW_PRIVATE").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    {
+        reader_dev::service::crawler::SSRF_ALLOW_PRIVATE
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         tracing::warn!("SSRF_ALLOW_PRIVATE=on: 图片/TTS/登录检测放行私网/回环目标 (自建部署专用, 公网部署勿开)");
     }
-    if std::env::var("READER_ALLOW_PRIVATE_SOURCE").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")) {
-        reader_dev::service::crawler::SOURCE_ALLOW_PRIVATE.store(true, std::sync::atomic::Ordering::Relaxed);
-        tracing::warn!("READER_ALLOW_PRIVATE_SOURCE=on: 书源抓取放行私网/回环目标 (需要局域网/本地书源时才开)");
+    if std::env::var("READER_ALLOW_PRIVATE_SOURCE")
+        .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    {
+        reader_dev::service::crawler::SOURCE_ALLOW_PRIVATE
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        tracing::warn!(
+            "READER_ALLOW_PRIVATE_SOURCE=on: 书源抓取放行私网/回环目标 (需要局域网/本地书源时才开)"
+        );
     }
 
     init_tracing();

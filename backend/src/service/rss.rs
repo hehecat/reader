@@ -97,7 +97,7 @@ fn parse_feed_at(xml: &str, source: &RssSource, base_url: &str) -> Result<Vec<Rs
         .map(|e| article_from_entry(e, source))
         .collect();
     // 按发布时间倒序（无时间戳的排最后，保持 feed 顺序）
-    articles.sort_by(|a, b| b.time.cmp(&a.time));
+    articles.sort_by_key(|a| std::cmp::Reverse(a.time));
     Ok(articles)
 }
 

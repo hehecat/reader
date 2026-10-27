@@ -1621,7 +1621,10 @@ fn sp_clear(
     if let Some(m) = APP_PREFS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .get_mut(&app_prefs_key(&inner.ns, pref)) { m.clear() }
+        .get_mut(&app_prefs_key(&inner.ns, pref))
+    {
+        m.clear()
+    }
     Ok(this.clone())
 }
 
@@ -2129,7 +2132,6 @@ fn cache_num_get(inner: &JsBridgeInner, args: &[JsValue], default_val: f64) -> f
     let def = args
         .get(1)
         .and_then(|v| v.as_number())
-        .map(|n| n)
         .unwrap_or(default_val);
     match cache_get_value(&inner.ns, &key) {
         Some(v) => v.trim().parse::<f64>().unwrap_or(def),
@@ -4321,7 +4323,8 @@ fn symmetric_data_to_bytes(v: &JsValue, context: &mut Context) -> Vec<u8> {
     }
     let s = js_value_to_string(v, context);
     let s = s.trim();
-    let is_hex = !s.is_empty() && s.len().is_multiple_of(2) && s.bytes().all(|b| b.is_ascii_hexdigit());
+    let is_hex =
+        !s.is_empty() && s.len().is_multiple_of(2) && s.bytes().all(|b| b.is_ascii_hexdigit());
     if is_hex {
         return hex::decode(s).unwrap_or_default();
     }

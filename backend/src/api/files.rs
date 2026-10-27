@@ -1431,7 +1431,10 @@ mod tests {
         config.secure = true;
         config.secure_key = "".into();
         assert!(!manager_ok(&config, None), "匿名不得访问管理路径");
-        assert!(!manager_ok(&config, Some(&plain)), "普通用户不得访问管理路径");
+        assert!(
+            !manager_ok(&config, Some(&plain)),
+            "普通用户不得访问管理路径"
+        );
         assert!(manager_ok(&config, Some(&admin)), "管理员可访问管理路径");
         config.secure_key = "sk-123".into();
         assert!(!manager_ok(&config, None));
@@ -1494,10 +1497,9 @@ mod tests {
             })
             .await
             .unwrap();
-        let admin_auth: HashMap<String, String> =
-            [("accessToken".into(), "root:rtok".into())]
-                .into_iter()
-                .collect();
+        let admin_auth: HashMap<String, String> = [("accessToken".into(), "root:rtok".into())]
+            .into_iter()
+            .collect();
         let body = Bytes::from(r#"{"path":"/pwn.txt","content":"x","home":"__STORAGE__"}"#);
         let ret = save(
             State(state.clone()),

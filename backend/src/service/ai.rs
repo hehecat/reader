@@ -110,7 +110,11 @@ pub async fn clear(storage: &Storage) -> anyhow::Result<()> {
 
 /// 读取环境变量配置；缺少 base/key 时返回 None（AI 面板整体不可用）
 fn env_config() -> Option<AiConfig> {
-    let base_url = std::env::var("READER_AI_BASE_URL").ok()?.trim().trim_end_matches('/').to_string();
+    let base_url = std::env::var("READER_AI_BASE_URL")
+        .ok()?
+        .trim()
+        .trim_end_matches('/')
+        .to_string();
     let api_key = std::env::var("READER_AI_API_KEY").ok()?.trim().to_string();
     if base_url.is_empty() || api_key.is_empty() {
         return None;
@@ -124,7 +128,12 @@ fn env_config() -> Option<AiConfig> {
         .ok()
         .and_then(|s| s.trim().parse::<u64>().ok())
         .unwrap_or(3500); // 0 = 不限制(请求里省略 max_tokens)
-    Some(AiConfig { base_url, api_key, model, max_tokens })
+    Some(AiConfig {
+        base_url,
+        api_key,
+        model,
+        max_tokens,
+    })
 }
 
 pub fn enabled() -> bool {
@@ -146,10 +155,52 @@ pub struct Snippet {
 
 /// 常见疑问词/虚词：不参与检索，避免"什么时候/为什么"把整本书都命中
 const STOPWORDS: &[&str] = &[
-    "什么", "怎么", "为什么", "如何", "哪里", "哪个", "哪些", "多少", "是不是", "有没有", "之后",
-    "之前", "后来", "然后", "现在", "这个", "那个", "这些", "那些", "时候", "请问", "帮我", "一下",
-    "他们", "我们", "你们", "这里", "那里", "因为", "所以", "但是", "可以", "还是", "就是", "已经",
-    "一个", "没有", "知道", "告诉我", "讲讲", "说说", "关于", "相关", "内容", "情节", "哪一章",
+    "什么",
+    "怎么",
+    "为什么",
+    "如何",
+    "哪里",
+    "哪个",
+    "哪些",
+    "多少",
+    "是不是",
+    "有没有",
+    "之后",
+    "之前",
+    "后来",
+    "然后",
+    "现在",
+    "这个",
+    "那个",
+    "这些",
+    "那些",
+    "时候",
+    "请问",
+    "帮我",
+    "一下",
+    "他们",
+    "我们",
+    "你们",
+    "这里",
+    "那里",
+    "因为",
+    "所以",
+    "但是",
+    "可以",
+    "还是",
+    "就是",
+    "已经",
+    "一个",
+    "没有",
+    "知道",
+    "告诉我",
+    "讲讲",
+    "说说",
+    "关于",
+    "相关",
+    "内容",
+    "情节",
+    "哪一章",
 ];
 
 fn is_cjk(c: char) -> bool {
@@ -204,7 +255,12 @@ fn push_token(out: &mut Vec<String>, raw: &str) {
 /// 截取一段正文（按字符边界，前后各留一些上下文）
 fn window_around(content: &str, needle: &str, limit: usize) -> Option<String> {
     let pos = content.find(needle)?;
-    let start = content[..pos].char_indices().rev().nth(250).map(|(i, _)| i).unwrap_or(0);
+    let start = content[..pos]
+        .char_indices()
+        .rev()
+        .nth(250)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
     let rest: String = content[start..].chars().take(limit).collect();
     Some(rest.trim().to_string())
 }
@@ -233,11 +289,17 @@ pub async fn retrieve(
         Ok(v) => v,
         Err(e) => {
             tracing::warn!("AI 检索读取章节失败: {e}");
-            return Retrieval { snippets: Vec::new(), cached_chapters: 0 };
+            return Retrieval {
+                snippets: Vec::new(),
+                cached_chapters: 0,
+            };
         }
     };
     if chapters.is_empty() {
-        return Retrieval { snippets: Vec::new(), cached_chapters: 0 };
+        return Retrieval {
+            snippets: Vec::new(),
+            cached_chapters: 0,
+        };
     }
     let cached_chapters = chapters.len();
     let kws = keywords(question);
@@ -295,9 +357,16 @@ pub async fn retrieve(
                 continue;
             }
             budget = budget.saturating_sub(text.chars().count());
-            out.push(Snippet { index: ch.0, title: ch.1.clone(), text: text.to_string() });
+            out.push(Snippet {
+                index: ch.0,
+                title: ch.1.clone(),
+                text: text.to_string(),
+            });
         }
-        return Retrieval { snippets: out, cached_chapters };
+        return Retrieval {
+            snippets: out,
+            cached_chapters,
+        };
     }
 
     scored.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
@@ -322,9 +391,16 @@ pub async fn retrieve(
         }
         let text = parts.join("\n…\n");
         budget = budget.saturating_sub(text.chars().count());
-        out.push(Snippet { index: ch.0, title: ch.1.clone(), text });
+        out.push(Snippet {
+            index: ch.0,
+            title: ch.1.clone(),
+            text,
+        });
     }
-    Retrieval { snippets: out, cached_chapters }
+    Retrieval {
+        snippets: out,
+        cached_chapters,
+    }
 }
 
 /// 组装对话消息：系统提示（含片段/规则）+ 最近 4 条历史 + 本轮问题
@@ -397,7 +473,10 @@ where
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("模型返回 {status}: {}", text.chars().take(300).collect::<String>());
+        anyhow::bail!(
+            "模型返回 {status}: {}",
+            text.chars().take(300).collect::<String>()
+        );
     }
     let mut stream = resp.bytes_stream();
     let mut buf = String::new();
@@ -416,7 +495,14 @@ where
             };
             let data = data.trim();
             if data == "[DONE]" {
-                return Ok((text, if finish_reason.is_empty() { "stop".into() } else { finish_reason }));
+                return Ok((
+                    text,
+                    if finish_reason.is_empty() {
+                        "stop".into()
+                    } else {
+                        finish_reason
+                    },
+                ));
             }
             let Ok(v) = serde_json::from_str::<Value>(data) else {
                 continue;
@@ -440,7 +526,14 @@ where
             }
         }
     }
-    Ok((text, if finish_reason.is_empty() { "stop".into() } else { finish_reason }))
+    Ok((
+        text,
+        if finish_reason.is_empty() {
+            "stop".into()
+        } else {
+            finish_reason
+        },
+    ))
 }
 
 /// 调上游并把增量转发成 SSE 事件（meta 由调用方先发）。
@@ -466,6 +559,7 @@ pub async fn stream_chat(
 
     let mut convo: Vec<Value> = messages;
     let mut continued = 0usize;
+    #[allow(unused_assignments)] // 初值仅为循环未执行时的兜底
     let mut finish = "stop".to_string();
     let mut saw_any = false;
     loop {
@@ -536,7 +630,10 @@ pub async fn chat_once(
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("模型返回 {status}: {}", text.chars().take(200).collect::<String>());
+        anyhow::bail!(
+            "模型返回 {status}: {}",
+            text.chars().take(200).collect::<String>()
+        );
     }
     let v: Value = resp.json().await?;
     let content = v["choices"][0]["message"]["content"]
@@ -550,11 +647,7 @@ pub async fn chat_once(
 }
 
 /// 拼人物关系图的系统提示
-pub fn build_graph_messages(
-    book_name: &str,
-    snippets: &[Snippet],
-    question: &str,
-) -> Vec<Value> {
+pub fn build_graph_messages(book_name: &str, snippets: &[Snippet], question: &str) -> Vec<Value> {
     let mut ctx = String::new();
     for s in snippets {
         ctx.push_str(&format!("\n【{}】\n{}\n", s.title, s.text));
@@ -573,7 +666,10 @@ pub fn build_graph_messages(
     } else {
         format!("重点关注：{question}")
     };
-    vec![json!({ "role": "system", "content": system }), json!({ "role": "user", "content": user })]
+    vec![
+        json!({ "role": "system", "content": system }),
+        json!({ "role": "user", "content": user }),
+    ]
 }
 
 /// 从模型输出中提取 JSON 对象（容忍 ```json 包裹 / 前后解释文字）

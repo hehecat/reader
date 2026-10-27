@@ -164,7 +164,13 @@ pub fn check_login(js: &str, cookie: &str, result: &str, url: &str) -> Result<bo
 /// loginUrl 无占位符/无 `,{...}` POST 后缀时（源仓库常见裸 login.php）：
 /// 自动解析登录页第一个含密码框的 <form>——action + 隐藏字段 + 账密输入名 → 表单 POST。
 /// 解析失败返回 None（保持原 GET 行为）。
-fn parse_login_form(html: &str, base_url: &str, username: &str, password: &str) -> Option<(String, String)> {
+#[allow(clippy::if_same_then_else)] // 不同前缀走向同一 RuleKind 是有意的 legado 语义映射，分开写便于对照
+fn parse_login_form(
+    html: &str,
+    base_url: &str,
+    username: &str,
+    password: &str,
+) -> Option<(String, String)> {
     use regex::Regex;
     use std::sync::LazyLock;
     static FORM_RE: LazyLock<Regex> =
@@ -173,8 +179,9 @@ fn parse_login_form(html: &str, base_url: &str, username: &str, password: &str) 
         LazyLock::new(|| Regex::new("(?is)\\baction\\s*=\\s*[\"\']([^\"\']*)[\"\']").unwrap());
     static INPUT_RE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new("(?is)<input\\b[^>]*>").unwrap());
-    static ATTR_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new("(?is)\\b(name|type|value)\\s*=\\s*[\"\']([^\"\']*)[\"\']").unwrap());
+    static ATTR_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new("(?is)\\b(name|type|value)\\s*=\\s*[\"\']([^\"\']*)[\"\']").unwrap()
+    });
 
     let form_html = FORM_RE
         .find_iter(html)
@@ -188,7 +195,11 @@ fn parse_login_form(html: &str, base_url: &str, username: &str, password: &str) 
     let target = if action.is_empty() {
         base_url.to_string()
     } else {
-        url::Url::parse(base_url).ok()?.join(action).ok()?.to_string()
+        url::Url::parse(base_url)
+            .ok()?
+            .join(action)
+            .ok()?
+            .to_string()
     };
 
     let mut pairs: Vec<(String, String)> = Vec::new();
@@ -204,7 +215,10 @@ fn parse_login_form(html: &str, base_url: &str, username: &str, password: &str) 
         if name.is_empty() {
             continue;
         }
-        let typ = attrs.get("type").cloned().unwrap_or_else(|| "text".to_string());
+        let typ = attrs
+            .get("type")
+            .cloned()
+            .unwrap_or_else(|| "text".to_string());
         let value = attrs.get("value").cloned().unwrap_or_default();
         match typ.to_lowercase().as_str() {
             "password" => pass_field = Some(name),
@@ -212,7 +226,10 @@ fn parse_login_form(html: &str, base_url: &str, username: &str, password: &str) 
             "hidden" => pairs.push((name, value)),
             _ => {
                 let nl = name.to_lowercase();
-                if nl.contains("user") || nl.contains("account") || nl.contains("uname") || nl.contains("login")
+                if nl.contains("user")
+                    || nl.contains("account")
+                    || nl.contains("uname")
+                    || nl.contains("login")
                 {
                     user_field = Some(name);
                 } else if typ.eq_ignore_ascii_case("email") && user_field.is_none() {
@@ -232,7 +249,9 @@ fn parse_login_form(html: &str, base_url: &str, username: &str, password: &str) 
         let mut out = String::with_capacity(t.len());
         for b in t.as_bytes() {
             match b {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(*b as char),
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    out.push(*b as char)
+                }
                 b' ' => out.push('+'),
                 _ => out.push_str(&format!("%{b:02X}")),
             }
@@ -515,7 +534,10 @@ pub async fn login_http(
         None
     };
 
-    let has_check_js = source.login_check_js.as_deref().is_some_and(|j| !j.trim().is_empty());
+    let has_check_js = source
+        .login_check_js
+        .as_deref()
+        .is_some_and(|j| !j.trim().is_empty());
     // 基线(登录前)页面: 有密码框才可用「回访表单消失」判定; JS 壳页无法验证 → 引导代开页/手动 Cookie
     let mut baseline_body: Option<String> = None;
     // 裸 loginUrl（GET 且无占位符/后缀 body）：先取登录页, 自动解析表单改 POST
@@ -643,7 +665,10 @@ pub async fn login_http(
                 {
                     Ok(pr) => {
                         // crawler 按 ns 自动带 jar cookie → 回访即登录态视角: 仍见密码框 = 未登录
-                        let base_form = baseline_body.as_deref().map(has_password_form).unwrap_or(false);
+                        let base_form = baseline_body
+                            .as_deref()
+                            .map(has_password_form)
+                            .unwrap_or(false);
                         login_failure_marker(&pr.body).is_none()
                             && base_form
                             && !has_password_form(&pr.body)
@@ -786,7 +811,10 @@ async fn login_session_to_outcome(
             let cookie_str = sess.cookies_to_string();
             let html = &sess.html;
             let page_url = &sess.url;
-            let has_check_js = source.login_check_js.as_deref().is_some_and(|j| !j.trim().is_empty());
+            let has_check_js = source
+                .login_check_js
+                .as_deref()
+                .is_some_and(|j| !j.trim().is_empty());
             let ok = match &source.login_check_js {
                 Some(js) if !js.trim().is_empty() => check_login(js, &cookie_str, html, page_url)?,
                 _ => {
@@ -929,6 +957,7 @@ pub async fn get_captcha(storage: &Storage, ns: &str, source: &BookSource) -> Re
 /// POST /reader3/submitCaptcha：图片验证码文本回填。
 /// - 浏览器流验证码（captchaId 携带 camoufox 会话）→ /login/captcha 两步回填
 /// - HTTP 流验证码 → 重跑 HTTP 登录（带 captcha 占位符）
+///
 /// 成功 → cookie 存库 → loginCheckJs → {isLogin}
 pub async fn submit_captcha(
     storage: &Storage,
@@ -1258,15 +1287,21 @@ mod send_tests {
           <input type="submit" value="登录">
         </form>
         </body></html>"#;
-        let (url, body) =
-            parse_login_form(html, "https://www.example.com/login.php", "hehecat", "p@ss w0rd")
-                .expect("应解析出表单");
+        let (url, body) = parse_login_form(
+            html,
+            "https://www.example.com/login.php",
+            "hehecat",
+            "p@ss w0rd",
+        )
+        .expect("应解析出表单");
         assert_eq!(url, "https://www.example.com/login.php?do=submit");
         assert!(body.contains("token=abc123"), "{body}");
         assert!(body.contains("username=hehecat"), "{body}");
         assert!(body.contains("pwd=p%40ss+w0rd"), "{body}");
         // 无密码框的页面不解析
-        assert!(parse_login_form("<form><input name='a'></form>", "https://x.com/", "u", "p").is_none());
+        assert!(
+            parse_login_form("<form><input name='a'></form>", "https://x.com/", "u", "p").is_none()
+        );
     }
 
     /// 失败标记嗅探: 站点回 200 但正文含失败文案

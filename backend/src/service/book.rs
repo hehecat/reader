@@ -283,7 +283,11 @@ pub fn analyze_related_books(
 /// （如 fq 源的 `/toc/<id>`），book.toc_url 为空时先查 book vars 的 `tocUrl` 缓存（推导过
 /// 就不再抓书页），再抓书页按 ruleBookInfo.tocUrl 推导，结果写回 vars 供复用。
 /// 推导不出 → 返回 book_url 兜底（部分源的目录确实就在书页）。
-pub async fn resolve_toc_url(ns: &str, source: &crate::model::BookSource, book_url: &str) -> String {
+pub async fn resolve_toc_url(
+    ns: &str,
+    source: &crate::model::BookSource,
+    book_url: &str,
+) -> String {
     if book_url.is_empty() {
         return String::new();
     }
@@ -304,7 +308,6 @@ pub async fn resolve_toc_url(ns: &str, source: &crate::model::BookSource, book_u
     }
     book_url.to_string()
 }
-
 
 /// F12/AR4：`book_name` 为解析前已知的书名（搜索结果/书架）——@get:{bookName} 回退源
 #[allow(clippy::too_many_arguments)]
@@ -1057,6 +1060,7 @@ pub async fn analyze_media_url(
 /// - CSS/JSONPath/Regex 规则：全部命中值均为图片 URL
 /// - @js:/<js> 规则：结果可为 URL 字符串或字符串数组（JSON 序列化形态）
 /// - 规则缺失：章节 URL 本身为图片直链时直接返回
+///
 /// P1 跨阶段：`book_url` 非空时双键合并读取（详情 @put 直达正文），结束双键回写
 pub async fn analyze_comic_images(
     ns: &str,
@@ -1587,6 +1591,7 @@ mod fetch_url_suffix_tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::field_reassign_with_default)] // 先 Default 再按条件覆盖字段，比一次性构造更贴近可读的分支逻辑
     async fn fetch_url_js_and_headers_suffix() {
         let _ssrf = ssrf_allow_private_guard(true); // mock 绑定 127.0.0.1
         let base = mock().await;
@@ -1634,6 +1639,7 @@ mod init_rule_tests {
     use super::*;
     use crate::model::book_source::BookSource;
 
+    #[allow(clippy::field_reassign_with_default)] // 先 Default 再按条件覆盖字段，比一次性构造更贴近可读的分支逻辑
     fn src_with(book_info: serde_json::Value) -> BookSource {
         let mut s = BookSource::default();
         s.rule_book_info = Some(book_info);
@@ -1961,6 +1967,7 @@ mod tests {
     /// P1-1 详情 @put → 重启模拟（清内存缓存）→ 不跑目录直接取正文——
     /// book_url 键从 SQLite 读穿透回填，正文规则中的 @get:{bid} 仍可命中
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // 测试里用全局锁串行化 env/端口，跨 await 持有是刻意的
     async fn test_detail_put_survives_restart_into_content() {
         let _guard = BOOK_VARS_DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _ssrf = crate::service::crawler::ssrf_allow_private_guard(true);
@@ -2016,6 +2023,7 @@ mod tests {
     /// 重启模拟后——① 已知章节按章节键读穿透命中；② 全新章节 URL 无章节键，
     /// 经 book 级双键合并回退仍命中
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // 测试里用全局锁串行化 env/端口，跨 await 持有是刻意的
     async fn test_toc_vars_visible_to_content_after_restart() {
         let _guard = BOOK_VARS_DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _ssrf = crate::service::crawler::ssrf_allow_private_guard(true);
@@ -2079,6 +2087,7 @@ mod tests {
 
     /// P1 rule-API 级回环：两级保存落库 → 清内存 → load_merged 读穿透重组
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // 测试里用全局锁串行化 env/端口，跨 await 持有是刻意的
     async fn test_book_vars_sqlite_roundtrip_unit() {
         let _guard = BOOK_VARS_DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let ns = format!("p1rt-{}", uuid::Uuid::new_v4());

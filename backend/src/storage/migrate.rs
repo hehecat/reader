@@ -9,6 +9,7 @@
 //! - bookSource.json / rssSource.json → book_sources / rss_sources 表
 //! - bookmark.json / replaceRule.json / txtTocRule.json / httpTTS.json / bookGroup.json / userConfig.json
 //!   → bookmarks / replace_rules / txt_toc_rules / http_tts_list / book_groups / user_config 表
+//!
 //! 每类幂等：目标表非空即跳过（表空才迁）；bookmarks 带 raw_json 原文保底（legacy content 不丢）。
 
 use std::collections::HashMap;
@@ -1721,6 +1722,7 @@ mod tests {
 
     /// 六类 legacy 文件全量迁移 + 字段映射断言
     #[tokio::test]
+    #[allow(clippy::type_complexity)] // 返回 (body, cookies, ua) 这类元组是内部约定，起别名反而要多跳一层
     async fn test_migrate_legacy_all_types() {
         let storage = setup("all", true).await;
         let pool = &storage.pool;

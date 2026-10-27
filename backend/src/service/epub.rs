@@ -86,6 +86,7 @@ pub(crate) fn extract_tag(xml: &str, tag: &str) -> Option<String> {
 }
 
 /// 提取全部同名标签文本
+#[allow(clippy::while_let_loop)] // 显式 loop + let-else 便于多处 break，改成 while let 反而难读
 pub(crate) fn extract_all_tags(xml: &str, tag: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut rest = xml;
@@ -129,13 +130,9 @@ fn extract_attr(
 ) -> Option<String> {
     let mut rest = xml;
     loop {
-        let Some(start) = rest.find(&format!("<{tag}")) else {
-            return None;
-        };
+        let start = rest.find(&format!("<{tag}"))?;
         let after = &rest[start..];
-        let Some(gt) = after.find('>') else {
-            return None;
-        };
+        let gt = after.find('>')?;
         let tag_block = &after[..gt + 1];
         // 检查 attr_key="attr_val"（宽容：引号单双）
         let pattern_attr = format!("{attr_key}=\"{attr_val}\"");

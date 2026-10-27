@@ -14,6 +14,7 @@
 //! - GET /opds/source/{name}        某来源书籍（name 为 base64url）
 //! - GET /opds/search?q=            搜索（书名/作者，大小写不敏感）
 //! - GET /opds/opensearch.xml       OpenSearch 描述
+//!
 //! 分页：?startIndex=&maxItems=（默认每页 50，上限 500）
 //!
 //! 获取/下载：
@@ -27,7 +28,7 @@
 //! OPDS-PSE（Partial Save Entries）：
 //! - GET  /opds/save/{bookId}       当前进度 entry（Atom + content JSON；?format=json 输出 JSON）
 //! - POST /opds/save/{bookId}       body/query：progress/position/total/chapterIndex/chapterTitle/timestamp
-//!                                  → 写 books.dur_chapter_*
+//!   → 写 books.dur_chapter_*
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -620,6 +621,7 @@ fn book_entry_xml(storage: &Storage, ns: &str, book: &Book, base: &str) -> Strin
 }
 
 /// 书籍 acquisition feed（OPDS 1.2 + OpenSearch 分页元素）
+#[allow(clippy::too_many_arguments)] // 抓取/OPDS 内部管线参数，拆结构体会让调用点更长，暂不拆
 async fn books_feed_xml(
     storage: &Storage,
     ns: &str,
@@ -1100,6 +1102,7 @@ fn publication_json(storage: &Storage, ns: &str, book: &Book, base: &str) -> ser
 }
 
 /// OPDS 2.0 acquisition feed（分页：metadata.numberOfItems + next/prev links）
+#[allow(clippy::too_many_arguments)] // 抓取/OPDS 内部管线参数，拆结构体会让调用点更长，暂不拆
 async fn feed_json(
     storage: &Storage,
     ns: &str,
@@ -1682,6 +1685,7 @@ pub async fn save_entry_xml(
 
 /// 应用进度保存（POST /opds/save/{bookId} → books.dur_chapter_*）
 /// progress/total 无对应列：仅用于响应回显（position/total 可推算 progress）。
+#[allow(clippy::too_many_arguments)] // 抓取/OPDS 内部管线参数，拆结构体会让调用点更长，暂不拆
 pub async fn apply_save(
     storage: &Storage,
     ns: &str,

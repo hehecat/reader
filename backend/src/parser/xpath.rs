@@ -263,6 +263,7 @@ fn value_to_strings(value: &Value) -> Vec<String> {
 ///   一行，Reader Dev 纯文本渲染需要块级边界；语义为 XPath 文本的增强）
 /// - 属性：属性值
 /// - 文本节点：文本内容
+///
 /// Root / 注释 / 处理指令 / 命名空间节点不产出结果
 fn node_to_string(node: &Node) -> Option<String> {
     match node {

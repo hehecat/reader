@@ -119,7 +119,10 @@ pub fn spawn_build_if_needed(storage_dir: &Path) {
                 });
             }
         } else {
-            tracing::info!("词典数据未安装({} 无数据文件), 选中查词不可用", dir.display());
+            tracing::info!(
+                "词典数据未安装({} 无数据文件), 选中查词不可用",
+                dir.display()
+            );
             STATE.lock().unavailable = true;
         }
         return;
@@ -187,7 +190,9 @@ fn build_dict_atomic(dir: &Path, db_path: &Path) -> Result<()> {
 /// 导入原始文件 → dict.sqlite (幂等: 已存在表则跳过)
 fn build_dict(dir: &Path, db_path: &Path) -> Result<()> {
     let t0 = std::time::Instant::now();
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
     rt.block_on(async {
         if db_path.exists() {
             let _ = std::fs::remove_file(db_path);
@@ -311,7 +316,11 @@ fn build_dict(dir: &Path, db_path: &Path) -> Result<()> {
         pool.close().await;
         Ok::<(), anyhow::Error>(())
     })?;
-    tracing::info!("词典库构建完成({}ms): {}", t0.elapsed().as_millis(), db_path.display());
+    tracing::info!(
+        "词典库构建完成({}ms): {}",
+        t0.elapsed().as_millis(),
+        db_path.display()
+    );
     // 复位 building: 之后查询走惰性开库路径(否则会一直返回 building)
     STATE.lock().building = false;
     Ok(())
@@ -344,24 +353,35 @@ fn split_csv_line(line: &str) -> Vec<String> {
 }
 
 fn is_english(word: &str) -> bool {
-    word.chars().all(|c| c.is_ascii_alphabetic() || c == ' ' || c == '-' || c == '\'')
+    word.chars()
+        .all(|c| c.is_ascii_alphabetic() || c == ' ' || c == '-' || c == '\'')
 }
 
 /// 查询: 英文精确(小写) → 中文精确 → 中文前缀(≤6 字)
+#[allow(clippy::type_complexity)] // 返回 (body, cookies, ua) 这类元组是内部约定，起别名反而要多跳一层
 pub async fn lookup(storage_dir: &Path, word: &str) -> Result<LookupResult> {
-    let query = word.trim().trim_matches(|c: char| {
-        !c.is_alphanumeric() && !('\u{4e00}'..='\u{9fff}').contains(&c)
-    });
+    let query = word
+        .trim()
+        .trim_matches(|c: char| !c.is_alphanumeric() && !('\u{4e00}'..='\u{9fff}').contains(&c));
     if query.is_empty() {
-        return Ok(LookupResult { status: DictStatus::Ok, entries: Vec::new() });
+        return Ok(LookupResult {
+            status: DictStatus::Ok,
+            entries: Vec::new(),
+        });
     }
     {
         let st = STATE.lock();
         if st.unavailable {
-            return Ok(LookupResult { status: DictStatus::Unavailable, entries: Vec::new() });
+            return Ok(LookupResult {
+                status: DictStatus::Unavailable,
+                entries: Vec::new(),
+            });
         }
         if st.building && st.pool.is_none() {
-            return Ok(LookupResult { status: DictStatus::Building, entries: Vec::new() });
+            return Ok(LookupResult {
+                status: DictStatus::Building,
+                entries: Vec::new(),
+            });
         }
     }
     // 惰性开库(构建完成/库已存在的场景); 连接在锁外 await
@@ -371,7 +391,10 @@ pub async fn lookup(storage_dir: &Path, word: &str) -> Result<LookupResult> {
         Some(p)
     } else if db_path.is_file() {
         let opts = SqliteConnectOptions::new().filename(&db_path);
-        let pool = SqlitePoolOptions::new().max_connections(2).connect_with(opts).await?;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await?;
         {
             let mut st = STATE.lock();
             st.pool = Some(pool.clone());
@@ -384,7 +407,11 @@ pub async fn lookup(storage_dir: &Path, word: &str) -> Result<LookupResult> {
     let Some(pool) = pool else {
         let building = STATE.lock().building;
         return Ok(LookupResult {
-            status: if building { DictStatus::Building } else { DictStatus::Unavailable },
+            status: if building {
+                DictStatus::Building
+            } else {
+                DictStatus::Unavailable
+            },
             entries: Vec::new(),
         });
     };
@@ -399,7 +426,10 @@ pub async fn lookup(storage_dir: &Path, word: &str) -> Result<LookupResult> {
         .fetch_all(&pool)
         .await?;
         for (w, phonetic, translation, definition) in rows {
-            let body = translation.clone().filter(|t| !t.trim().is_empty()).or(definition);
+            let body = translation
+                .clone()
+                .filter(|t| !t.trim().is_empty())
+                .or(definition);
             entries.push(DictEntry {
                 kind: "en".to_string(),
                 word: w,
@@ -414,10 +444,12 @@ pub async fn lookup(storage_dir: &Path, word: &str) -> Result<LookupResult> {
     if entries.is_empty() && is_english(query) {
         for cand in lemma_candidates(&query.to_lowercase()) {
             let rows: Vec<(String, Option<String>, Option<String>, Option<String>)> =
-                sqlx::query_as("SELECT word, phonetic, translation, definition FROM en WHERE word = ?1")
-                    .bind(&cand)
-                    .fetch_all(&pool)
-                    .await?;
+                sqlx::query_as(
+                    "SELECT word, phonetic, translation, definition FROM en WHERE word = ?1",
+                )
+                .bind(&cand)
+                .fetch_all(&pool)
+                .await?;
             if !rows.is_empty() {
                 for (w, phonetic, translation, definition) in rows {
                     let body = translation.filter(|t| !t.trim().is_empty()).or(definition);
@@ -492,7 +524,10 @@ pub async fn lookup(storage_dir: &Path, word: &str) -> Result<LookupResult> {
             }
         }
     }
-    Ok(LookupResult { status: DictStatus::Ok, entries })
+    Ok(LookupResult {
+        status: DictStatus::Ok,
+        entries,
+    })
 }
 
 /// 英文词形剥离候选(粗粒度, 覆盖常见屈折)
@@ -627,7 +662,11 @@ async fn lookup_online(pool: &SqlitePool, word: &str) -> Vec<DictEntry> {
     if let Some(json) = json {
         // 英汉 / 中英 释义
         for key in ["ec", "ce"] {
-            let Some(words) = json.get(key).and_then(|v| v.get("word")).and_then(|v| v.as_array()) else {
+            let Some(words) = json
+                .get(key)
+                .and_then(|v| v.get("word"))
+                .and_then(|v| v.as_array())
+            else {
                 continue;
             };
             let mut lines = Vec::new();
@@ -648,8 +687,10 @@ async fn lookup_online(pool: &SqlitePool, word: &str) -> Vec<DictEntry> {
                     word: word.to_string(),
                     phonetic,
                     pinyin: simple_pinyin(&json),
-                    body: Some(lines.join("
-")),
+                    body: Some(lines.join(
+                        "
+",
+                    )),
                     source: "有道词典".to_string(),
                 });
             }
@@ -680,7 +721,11 @@ async fn lookup_online(pool: &SqlitePool, word: &str) -> Vec<DictEntry> {
                     phonetic: None,
                     pinyin: None,
                     body: Some(summary.to_string()),
-                    source: if src.contains("百度") { "百度百科".to_string() } else { "百科".to_string() },
+                    source: if src.contains("百度") {
+                        "百度百科".to_string()
+                    } else {
+                        "百科".to_string()
+                    },
                 });
             }
         }
@@ -702,7 +747,11 @@ async fn lookup_online(pool: &SqlitePool, word: &str) -> Vec<DictEntry> {
                     .join("；");
                 let key = item.get("key").and_then(|v| v.as_str()).unwrap_or("");
                 if !joined.is_empty() {
-                    lines.push(if key.is_empty() { joined } else { format!("{key}: {joined}") });
+                    lines.push(if key.is_empty() {
+                        joined
+                    } else {
+                        format!("{key}: {joined}")
+                    });
                 }
             }
             if !lines.is_empty() {
@@ -711,8 +760,10 @@ async fn lookup_online(pool: &SqlitePool, word: &str) -> Vec<DictEntry> {
                     word: word.to_string(),
                     phonetic: None,
                     pinyin: None,
-                    body: Some(lines.join("
-")),
+                    body: Some(lines.join(
+                        "
+",
+                    )),
                     source: "有道网络释义".to_string(),
                 });
             }
@@ -757,7 +808,10 @@ async fn lookup_online(pool: &SqlitePool, word: &str) -> Vec<DictEntry> {
         }
     }
     if !entries.is_empty() && net_ok {
-        let blob = OnlineCache { ver: ONLINE_VER, entries: entries.clone() };
+        let blob = OnlineCache {
+            ver: ONLINE_VER,
+            entries: entries.clone(),
+        };
         if let Ok(payload) = serde_json::to_string(&blob) {
             let _ = sqlx::query(
                 "INSERT OR REPLACE INTO online(word, payload, updated_at) VALUES (?1, ?2, ?3)",
@@ -812,14 +866,23 @@ fn newhh_entry(json: &serde_json::Value, word: &str) -> Option<DictEntry> {
             let defs: Vec<String> = sense
                 .get("def")
                 .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|d| d.as_str()).map(str::to_string).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|d| d.as_str())
+                        .map(str::to_string)
+                        .collect()
+                })
                 .unwrap_or_default();
             for d in defs {
                 let d = d.trim();
                 if d.is_empty() {
                     continue;
                 }
-                lines.push(if cat.is_empty() { d.to_string() } else { format!("【{cat}】{d}") });
+                lines.push(if cat.is_empty() {
+                    d.to_string()
+                } else {
+                    format!("【{cat}】{d}")
+                });
             }
         }
     }
@@ -872,10 +935,17 @@ fn wiki_entry(json: &serde_json::Value, word: &str) -> Option<DictEntry> {
 
 /// 双语例句(blng_sents_part, 取前 2 条)
 fn sents_entry(json: &serde_json::Value, word: &str) -> Option<DictEntry> {
-    let pairs = json.get("blng_sents_part")?.get("sentence-pair")?.as_array()?;
+    let pairs = json
+        .get("blng_sents_part")?
+        .get("sentence-pair")?
+        .as_array()?;
     let mut lines = Vec::new();
     for p in pairs.iter().take(2) {
-        let zh = p.get("sentence").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let zh = p
+            .get("sentence")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
         if zh.is_empty() {
             continue;
         }

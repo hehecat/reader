@@ -14,6 +14,7 @@
 //! - fancy-regex 引擎（lookbehind 等扩展语法）使用回溯，默认回溯上限
 //!   [`DEFAULT_BACKTRACK_LIMIT`]（100 万次）；超限时执行返回错误，
 //!   本包装按“不匹配/跳过”处理，不会卡死请求线程。
+//!
 //! 注意：Rust 无法像 Android `RegexTimeoutException` 一样在同步执行中按墙钟
 //! 中断正则，回溯上限是等价且可移植的防卡死手段。
 
