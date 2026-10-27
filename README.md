@@ -4,314 +4,84 @@
 
 **自托管在线阅读服务 —— 多源搜索 · 书架 · 阅读器 · 换源 · 多级缓存 · TTS 朗读**
 
-Rust(axum) 后端 + React 前端, 单一仓库 · GitHub Actions 构建 · GHCR 分发
-legado 语义书源规则引擎
+Rust(axum) + React · 单容器 · SQLite 单文件 · 数据全部留在自己机器上
+
+[![ci](https://github.com/hehecat/reader/actions/workflows/ci.yml/badge.svg)](https://github.com/hehecat/reader/actions/workflows/ci.yml)
+
+[快速开始](#快速开始) · [功能](#功能) · [配置](docs/configuration.md) · [运维](docs/operations.md) · [界面](docs/screenshots.md)
 
 </div>
 
----
+![reader 界面海报](https://cdn.jsdelivr.net/gh/hehecat/reader@main/docs/images/poster.png)
 
-## 目录
+书源在你手里，书架在你手里，进度也在你手里。
 
-- [五分钟上手](#五分钟上手)
-- [功能特性](#功能特性)
-- [配置详解](#配置详解)
-- [可选组件](#可选组件)
-- [故障排查](#故障排查)
-- [升级与回滚](#升级与回滚)
-- [性能实测](#性能实测)
-- [界面](#界面)
-- [开发须知](#开发须知)
-- [致谢](#致谢)
+reader 把 legado 的书源规则搬进一个 Rust 单容器：多源并发搜索、换源、整书缓存、离线词典、TTS 朗读，全部跑在自己的机器上，不依赖第三方账号或云服务。对外只有一个端口，反代、域名、公网 IP 都不是必需的。
 
----
-
-## 五分钟上手
-
-### 0. 准备
-
-- 一台能跑 Docker 的机器(Linux//macOS/Windows+WSL 均可), 磁盘预留 3GB(镜像约 2GB + 数据)
-- 无需公网 IP、无需域名、无需反代 — 容器单端口直服前端与全部 API
-- 无需数据库服务 — 内置 SQLite 单文件
-
-### 1. 启动(推荐 compose)
+## 快速开始
 
 ```bash
 git clone https://github.com/hehecat/reader.git
 cd reader/deploy
-docker compose up -d          # 默认单用户模式, 无需 .env
+docker compose up -d
 ```
 
-打开 `http://<机器IP>:8080` 直接注册/登录。
-> 多用户: `cp .env.example .env` 设 `READER_APP_SECURE=true` 与邀请码后 `docker compose up -d`。
-> 端口占用: `.env` 设 `READER_PORT=<其他>` 或在环境变量里传。
-> 本机独有配置(外部网络/内网解析等)写 `docker-compose.override.yml`(已 gitignore)，参考同名 `.example`。
+打开 `http://<机器IP>:8080`，注册即可用（默认单用户模式，无需 `.env`）。
 
-> 不用 compose 也行:
-> ```bash
-> docker run -d --name reader -p 8080:8080 \
->   -v "$PWD/data:/storage/storage" -e READER_APP_WORKDIR=/storage \
->   ghcr.io/hehecat/reader:latest
-> ```
+1. **导入书源（必做）**：侧边栏「书源」→「导入」，粘贴 legado 书源 JSON 或填远程地址。仓库不自带任何书源（版权考虑）。
+2. **搜索**：输入书名，多源 SSE 流式出结果，随时可以停。
+3. **阅读**：点结果直接读，不自动进书架；想收藏再点「加入书架」。
 
-### 2. 账号
+不用 compose 也行：
 
-- **默认单用户模式**: 登录页直接注册/登录即建本地账号, 数据存 `default` 命名空间, 无邀请码
-- 多人共用一台: `.env` 设 `READER_APP_SECURE=true` + `READER_APP_INVITECODE=<邀请码>` (首个注册用户为管理员, 管理操作只认管理员登录态)
+```bash
+docker run -d --name reader -p 8080:8080 \
+  -v "$PWD/data:/storage/storage" -e READER_APP_WORKDIR=/storage \
+  ghcr.io/hehecat/reader:latest
+```
 
-### 3. 导入书源(**必做, 否则搜索无结果**)
+多用户：`cp .env.example .env`，设 `READER_APP_SECURE=true` 与 `READER_APP_INVITECODE=<邀请码>`，再 `docker compose up -d`。
 
-服务不自带任何书源(版权考虑)。书源 = legado/阅读 兼容的 JSON 规则文件:
+## 功能
 
-1. 侧边栏「书源」→「导入」→ 粘贴 JSON 或填远程 URL
-2. 社区书源合集可自行搜索「legado 书源」获取; 导入后在书源页启用/分组/调试
+- **多源 SSE 流式搜索**：逐源推送、进度可见；置信度排序、6h 死源跳过、相关性收口，可隐藏 0 章结果
+- **legado 规则引擎**：CSS / JSONPath / XPath / 正则 / JS 沙箱，`@put/@get` 书级变量贯通搜索→详情→目录→正文
+- **书源治理**：增删改查、启停分组、导入导出、逐规则 SSE 调试工作台、失效源标记
+- **阅读器**：主题/字号/行距/沉浸模式、键盘翻页、书签与批注、进度多端同步
+- **书架**：分组、网格/列表、未读角标；搜索列表会话快照，返回即恢复、可续搜
+- **换源**：书架书走后端换源并保留进度；未入架书纯前端切换，不动书架
+- **多级缓存**：目录 24h、正文永久、书籍信息 24h；缓存命中路径 4–13ms
+- **本地书**：epub/txt/mobi/azw3/pdf/fb2/docx/cbz/umd 自动导入，导出 TXT/EPUB
+- **离线词典**：ECDICT 英汉 77 万词条 + 新华字典，划词即查，零网络零密钥
+- **TTS 朗读**：接自建网关（edge-tts 或云厂商），不装则降级浏览器语音
+- **多用户与安全**：命名空间隔离、邀请码注册、token 鉴权、SSRF 防护
+- **前端零外依赖**：Noto Serif/Sans SC 按 unicode-range 切 606 个子集自托管，字体不走 CDN
+- **AI 阅读助手**（可选）：只检索本机已缓存章节，答案标注章节出处，不编造
 
-### 4. 搜索与阅读
+## 配置
 
-- 「搜索」输入书名 → 多源 SSE 流式出结果(进度可见, 随时停止/续搜)
-- 点结果卡 → 详情/目录 → 点章节**直接阅读, 不自动加入书架**(想收藏手动点「加入书架」)
-- 书架: 分组/进度条/未读; 阅读器: 主题/翻页/批注/书签/TTS/目录/进度同步
-
-完成。其余都是可选。
-
----
-
-## 功能特性
-
-### 搜索与书源治理
-
-- **多源 SSE 流式搜索**: 逐源完成逐批推送, 进度可见(已找到 N 本 · 书源 x/y), 随时停止/续搜
-- **置信度排序与死源跳过**: 每源记录搜索/目录/正文成功率、延迟、简介丰富度; 置信度 = 质量分 × 速度因子; 连败源 6h 跳过到期放行探针(`all=1` 强制全搜)
-- **相关性收口**: 聚合前过滤「书名/作者/简介都不含关键词全部 token」的结果, 不混站内推荐垃圾
-- **隐藏无章节结果**(设置页开关): 后台并发探针校验目录, 0 章结果不展示; 缓存 7 天 + 静默重验
-- **书源管理**: 增删改/启停/分组/导入导出; 源工作台逐规则调试(搜索/目录/正文 SSE 流式日志); 失效源标记与清理
-- **换源**: 书架书走后端换源(保留当前章进度); 未入架书纯前端切换(详情/目录/阅读全跟新源, 不动书架)
-- **legado 语义规则引擎**: CSS/JSONPath/XPath/正则/JS 沙箱, `@put/@get` 书级变量贯通搜索→详情→目录→正文
-
-### 阅读
-
-- 主题(亮/暗/护眼/跟随系统)、字号/行距/段距/宽度、沉浸模式、自动滚动、键盘翻页
-- **选中查词**: 划词弹出工具条「词典」, 离线查询(英汉 ECDICT 77 万词条 + 新华字典字/词/成语), 零网络零密钥
-- **TTS 朗读**(可选 TTS 网关, 见下); 书签 + 划选批注; 章末块导航
-- 阅读进度多端同步; 书架卡片显示阅读进度与未读
-- 正文/目录/书籍信息多级缓存, 未命中自动抓取并回写
-
-### AI 阅读助手(可选)
-
-阅读器右侧的问答面板(移动端为全屏面板), 用来回忆"人物何时出场/物品哪章得到/人物关系":
-
-- **开关**: 阅读设置 → `AI 阅读助手`; 开启后阅读器顶栏出现 AI 按钮
-- **知识来源**: 只检索**本机已缓存**的章节正文(读过的章节 / 整书缓存), 不联网抓原文
-- **可信回答**: 答案逐条标注 `[章节标题]`, 点引用直接跳到该章; 片段没提到的内容会明说"没有提到", 不编造
-- **边界**: 没读过的章节答不了; 读得越多覆盖越全。泛问("主角是谁")会自动取"开头两章 + 当前章附近"作样本
-- **配置**: 需要一个 OpenAI 兼容端点(见下方 `READER_AI_*` 环境变量), 未配置时开关可开但面板只显示配置提示
-
-### 书架与缓存
-
-- 书架分组、网格/列表布局、自定义封面长缓存
-- **缓存层级**: 目录(24h, 前置命中毫秒级) · 正文(永久, md5(chapterUrl) 键, 多端共用) · 书籍信息(24h) · 搜索批次
-- 搜索列表会话快照: 预览/阅读返回, 原列表与书源游标即时恢复, 可续搜
-
-### 本地书与导出
-
-- 本地书监听目录自动导入(epub/txt/mobi/azw3/pdf/fb2/docx/cbz/umd), 手动上传导入
-- 导出 TXT/EPUB(内嵌中文字体 + 完整目录导航)
-- WebDAV 备份/恢复(幂等, 兼容 legacy 备份)
-
-### 多用户与安全
-
-- 命名空间隔离(书架/书源/进度/缓存按用户)
-- secure 模式: 邀请码注册; token 鉴权; 管理操作仅限管理员; SSRF 防护开关
-- 验证码/登录墙: 容器内 camoufox(Firefox 内核)按需 spawn 求解(可外置)
-
-### 前端
-
-- React + Vite + Tailwind, 响应式(移动端竖屏阅读适配), 深色主题
-- **字体零外依赖**: Noto Serif/Sans SC 606 个 unicode-range 子集本地自托管, 按需加载
-- 路由级代码切分; SSE 流式 UI; 搜索历史/快照恢复
-
----
-
-## 配置详解
-
-### 数据目录
-
-compose 默认挂 `deploy/storage/`(容器内 `/storage/storage`), 内含:
-
-- `reader.db` — SQLite 主库(书架/书源/进度/缓存/用户)
-- `reader.db.bak-*` — 启动前自动快照(保留 5 份, `READER_DB_BACKUP=0` 关)
-- 封面/本地书/WebDAV 数据
-
-### 环境变量
+最常用的几个（完整列表、反代要求、可选组件见 [docs/configuration.md](docs/configuration.md)）：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `READER_APP_WORKDIR` | 当前目录 | 数据根(其 `storage/` 子目录存库与资产) |
-| `READER_APP_SECURE` | false | 多用户 secure 模式开关 |
-| `READER_APP_INVITECODE` | - | secure 模式注册邀请码 |
-| `READER_SERVER_PORT` | 8080 | 容器监听端口(compose 用 `READER_PORT` 映射宿主端口) |
-| `READER_TOC_CACHE_TTL_MS` | 86400000 | 目录缓存 TTL(24h) |
-| `READER_DB_BACKUP` | 1 | 启动前 db 快照开关(0 关) |
-| `READER_AUTO_BACKUP_HOUR` | 3 | 每日 WebDAV zip 备份时刻(0-23) |
-| `READER_HTTP_RETRIES` | 2 | 搜索/抓取单源重试次数(compose 默认 1, 死源排空更快) |
-| `SSRF_ALLOW_PRIVATE` | false | 图片代理/TTS/登录检测允许私网地址(内网 TTS 等自建场景) |
-| `READER_ALLOW_PRIVATE_SOURCE` | false | 书源抓取允许私网/回环地址(局域网书源、本地测试源才开; 默认拦截防 SSRF) |
-| `READER_AI_BASE_URL` | 空 | OpenAI 兼容端点(如 `http://octopus:8080/v1`); 与 KEY 同时非空才启用 AI 面板 |
-| `READER_AI_API_KEY` | 空 | 上述端点密钥 |
-| `READER_AI_MODEL` | deepseek-v4.1-flash | 模型名(支持推理模型, 思考过程不显示) |
-| `READER_AI_MAX_TOKENS` | 3500 | 单次回答上限(0 = 不限制, 推理模型思考也吃预算) |
-| `READER_DICT_ONLINE` | 1 | 词典在线兜底开关(本地未命中时有道查询, 缓存 30 天) |
-| `READER_DICT_DIR` | /app/dict | 离线词典原始数据目录(ecdict.csv / word.json / ci.json / idiom.json) |
-| `READER_CAMOUFOX_URL` | - | 外置 camoufox 服务地址; 缺省容器内自 spawn |
-| `READER_BROWSER_FIRST` | 1 | 抓取优先经浏览器反检测; 0 恢复直连优先(compose 默认 0) |
+| `READER_SERVER_PORT` | 8080 | 容器监听端口（compose 用 `READER_PORT` 映射宿主端口） |
+| `READER_APP_SECURE` | false | 多用户模式开关 |
+| `READER_APP_INVITECODE` | - | 多用户注册邀请码 |
+| `READER_AI_BASE_URL` / `READER_AI_API_KEY` | 空 | OpenAI 兼容端点，两者都非空才启用 AI 面板 |
+| `READER_BROWSER_FIRST` | 1 | 抓取优先走浏览器反检测（compose 默认 0） |
 
-**运行时可调(无需重启/重建)**: 设置页「搜索 → 单源搜索超时」(3-60s, 即时保存, 随每次搜索请求下发)。
+数据都在挂载目录的 `storage/` 下：`reader.db` 加封面、本地书、WebDAV 备份；启动前自动快照保留 5 份。
 
-**后端改动本地验证(不等 GH 镜像)**: `scripts/dev-backend.sh`(增量 debug 编译 + 临时实例 :4599 独立 storage) /
-`scripts/dev-backend.sh smoke`(冒烟: index/注册登录/书架) / `stop` 停止。GH Actions 只出发布镜像;
-镜像构建为 cargo-chef 三段式, 依赖层命中缓存时 src 改动只编本 crate。
+## 文档
 
-**CF 质询/浏览器自动登录**: 镜像内置 camoufox Python 求解器脚本, 但**不内置浏览器二进制**(~600MB, 容器内环境兼容性不可靠)。需要浏览器自动登录时, 在宿主机跑:
-```bash
-pip install camoufox && python -m camoufox fetch
-python scripts/camoufox_solver.py
-```
-再给容器设 `READER_CAMOUFOX_URL=http://<宿主机IP>:<端口>`。未配置时施报「camoufox 求解服务启动失败」并缓存, 不影响直连抓取。
-
-### 反代(通常不需要)
-
-默认**不需要任何反代**: 容器单端口直服前端与全部 API, 局域网/内网穿透直接用。
-仅当你需要 HTTPS(公网访问建议)时才自备反代, 届时注意三点:
-
-1. SSE 路径(`/reader3/*SSE`)不压缩、关代理缓冲, 否则搜索流式失效
-2. **HTML 永不缓存**: `/` 与 `/reader3/*` 必须 no-cache/不缓存; 只允许缓存 `/static/*`(前端哈希产物, 容器已发 immutable); `/assets/*` 是用户封面存储路由, 勿加 immutable。给 HTML 加缓存会导致旧 index.html 引用旧 chunk 哈希 → 整页 404(常见事故)
-3. 参考 `deploy/Caddyfile.example`
-
-容器自身已发正确缓存头(HTML no-cache + Surrogate-Control: no-store; /static/* immutable), 无代理部署天然自洽。
-
----
-
-## 可选组件
-
-### TTS 网关(朗读)
-
-阅读器 TTS 走独立网关(单文件 Python, `deploy/tts-gateway.py`):
-
-```bash
-pip install edge-tts
-python3 tts-gateway.py        # 默认 :9912, 配置 ~/.local/share/tts-gateway-config.json
-```
-
-- 引擎: edge-tts(免费云神经音, 中文音色内置筛选); 可配腾讯/阿里/火山等密钥云
-- 前端「设置 → 阅读偏好 → TTS」网关地址填 `http://<运行网关的机器IP>:9912`(无反代时直连); 若配了反代也可留空走同源 `/tts-gateway`
-- 不装网关: 朗读自动降级为浏览器系统语音
-
-### 词典(选中查词)
-
-镜像默认内置离线词典(构建期下载 ECDICT 英汉 + 新华字典字词/成语, MIT),
-本地未命中时自动走**在线兜底**(有道 jsonapi 免密钥: 释义/百科/网络释义), 结果缓存 30 天;
-`READER_DICT_ONLINE=0` 可关成纯离线:
-
-- 数据目录: 镜像内 `/app/dict`(可用 `READER_DICT_DIR` 覆盖挂载自己的数据)
-- 首次启动后台导入为 `{数据目录}/dict.sqlite`(索引库, 之后查询毫秒级); 导入期间查词返回「查询中」自动轮询
-- 不需要词典: 构建时 `--build-arg WITH_DICT=0` 跳过(镜像小 ~130MB), 查词入口提示未安装
-
-### camoufox(反爬求解)
-
-镜像已内置(pip 包 + Firefox 二进制), 遇验证码/Cloudflare 质询自动 spawn 求解, 无需配置。源站普遍直连可达时可设 `READER_BROWSER_FIRST=0` 提速。
-
----
-
-## 故障排查
-
-| 症状 | 原因与处理 |
-|---|---|
-| 搜索永远「已找到 0 本」 | 反代压缩/缓冲了 SSE(见反代两条硬要求); 或无启用书源 |
-| 搜索首结果慢(>30s) | 持有该书的源站慢; 设置页调低「单源搜索超时」快速跳过, 或等续搜扫到快源 |
-| 首屏字体不对 | 字体本地自托管, 无外依赖; 若缺失回退系统字体栈, 检查 `/fonts/noto.css` 可达 |
-| 端口占用 | compose `.env` 设 `READER_PORT=<其他>` |
-| 权限报错 | 确保挂载目录可写(compose 自动创建 `deploy/storage/`) |
-| 某源搜索/目录空 | 源规则老化(站点改版); 书源页「失效」标记/清理, 或工作台调试修规则 |
-| 多设备进度不同步 | 进度按用户命名空间同步, 确认同账号登录 |
-
----
-
-## 升级与回滚
-
-```bash
-cd deploy && docker compose pull && docker compose up -d     # 升级
-docker compose up -d reader@sha-<旧sha>                      # 回滚(镜像标签含 sha)
-```
-
-镜像标签: `latest`(main) · `main` · `sha-<full>` · semver(tag)。数据在挂载目录, 升级不丢; 启动前自动快照可再退一层。
-
-自建镜像(不依赖 GHCR): 仓库根 `docker build -t reader .`(多阶段: pnpm → cargo → camoufox; 后端编译需 `RUSTFLAGS='--cfg reqwest_unstable'`, Dockerfile 已内置)。
-
----
-
-## 性能实测
-
-作者机器(4 核)直连后端, 缓存命中路径, median of 3:
-
-| 功能点 | 时延 |
-|---|---|
-| 书架/分组/书签 | 2-5ms |
-| 详情/目录/正文(缓存命中) | 4-13ms |
-| 书源全量/轻量/统计 | 100/50/18ms |
-| 搜索首结果(缓存词/新词) | ~1.7s |
-| 页面加载(书架/搜索/书源/书海) | 1.0-1.7s |
-| 外部请求 | 0(字体/资源全本地) |
-
----
-
-## 界面
-
-一张海报看全貌(上排 PC 1440×900 · 下排移动 390×844):
-
-![reader 界面海报](https://cdn.jsdelivr.net/gh/hehecat/reader@main/docs/images/poster.png)
-
-### PC 端
-
-| 书架(网格/分组/未读角标) | 多源搜索(SSE 流式·关键词高亮) |
-|---|---|
-| ![pc-shelf](https://cdn.jsdelivr.net/gh/hehecat/reader@main/docs/images/pc-shelf.png) | ![pc-search](https://cdn.jsdelivr.net/gh/hehecat/reader@main/docs/images/pc-search.png) |
-| **详情与章节目录(多源徽标·换源)** | **阅读器(主题·批注·TTS·沉浸)** |
-| ![pc-detail](https://cdn.jsdelivr.net/gh/hehecat/reader@main/docs/images/pc-detail.png) | ![pc-reader](https://cdn.jsdelivr.net/gh/hehecat/reader@main/docs/images/pc-reader.png) |
-
-书源治理页(置信度/成功率/延迟):
-
-![pc-sources](https://cdn.jsdelivr.net/gh/hehecat/reader@main/docs/images/pc-sources.png)
-
-### 移动端
-
-| 书架 | 搜索 | 详情 | 阅读器 |
-|---|---|---|---|
-| ![m-shelf](https://cdn.jsdelivr.net/gh/hehecat/reader@main/docs/images/mobile-shelf.png) | ![m-search](https://cdn.jsdelivr.net/gh/hehecat/reader@main/docs/images/mobile-search.png) | ![m-detail](https://cdn.jsdelivr.net/gh/hehecat/reader@main/docs/images/mobile-detail.png) | ![m-reader](https://cdn.jsdelivr.net/gh/hehecat/reader@main/docs/images/mobile-reader.png) |
-
----
-
-## 开发须知
-
-- 后端编译**必须**带 `RUSTFLAGS='--cfg reqwest_unstable'`(reqwest http3 实验特性; `.cargo/config.toml` 已写但部分环境不拾取)
-- 前端包管理 pnpm(lockfile v9); 注意 `bookSource`(单源搜索/正文/探索) 与 `bookSourceUrl`(SSE 单源) 参数名差异
-- SSE 相关改动务必真机验证流式(压缩/缓冲是历史事故高发区)
-- 书源规则调试用前端「书源工作台」, 逐规则 SSE 日志
-- push `main`/tag → Actions 构建镜像推 GHCR(GHA 层缓存, 增量约 2 分钟)
-- PR/push 另有 `.github/workflows/ci.yml`: 后端 `cargo test --lib --tests` + clippy, 前端 lint + build
-- **本机配置别入库**: 内网地址/自建域名/网关网络名只写 `deploy/docker-compose.override.yml`(已 gitignore),
-  并 `git config core.hooksPath .githooks` 启用提交前检查; CI 也会拦
-- `deploy/storage/` 是运行时 sqlite(含 WAL/SHM), 不入库, 首次启动自动建库迁移
-- **构建提速**(`backend/Cargo.toml` 已配): dev/test 本 crate 只留行号级调试信息、依赖不带调试信息,
-  改一行到测试二进制就绪 **181s → 22s**(代价是首次冷构建约 11 分钟, 一次性)
-- 迭代只跑相关用例: `cargo test --lib service::crawler`(执行 <1s, 重链约 22s);
-  全套 730 个用例约 4 分钟, 提交前跑一次即可
-- 别在 `cargo check` 与 `cargo test` 之间来回切: 两套产物会互相触发重编(实测切换一次约 5 分钟)
-- 前端改样式用 `pnpm dev`(HMR 秒级), `pnpm build` 只在发版/验证时跑
-
----
+- [配置与部署](docs/configuration.md) — 数据目录、全部环境变量、反代、TTS / 词典 / camoufox
+- [运维](docs/operations.md) — 故障排查、升级回滚、性能基线
+- [界面截图](docs/screenshots.md)
+- [开发指南](AGENTS.md) — 仓库结构、构建与测试、开发纪律
+- [后端笔记](backend/BACKEND-NOTES.md) — v5 时代的设计背景（部分内容已过时）
 
 ## 致谢
 
-- [legado](https://github.com/gedoor/legado): 书源规则语义与生态
-- [reader(warpdotsys)](https://github.com/warpdotsys/reader-dev): Rust 重写路线参考
-- [hectorqin/reader](https://github.com/hectorqin/reader): legacy 服务器版起点
+- [legado](https://github.com/gedoor/legado)：书源规则语义与生态
+- [reader(warpdotsys)](https://github.com/warpdotsys/reader-dev)：Rust 重写路线参考
+- [hectorqin/reader](https://github.com/hectorqin/reader)：legacy 服务器版起点
