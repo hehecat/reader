@@ -29,6 +29,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend
+      # rust-embed 在编译期要求 #[folder] 目录存在；frontend/dist 不入库，
+      # 这里放占位文件（与 Dockerfile builder 阶段同一手法），CI 不跑前端构建
+      - name: 占位前端产物
+        run: mkdir -p web-ui/dist && printf '<!doctype html><title>ci-placeholder</title>' > web-ui/dist/index.html
       - name: cargo test (lib + 集成)
         run: cargo test --lib --tests
       - name: cargo fmt --check
@@ -46,7 +50,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          # 与 Dockerfile 的 pnpm@11 对齐：pnpm-workspace.yaml 用了 allowBuilds（pnpm 11 语法）
+          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: 22
