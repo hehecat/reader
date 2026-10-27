@@ -1,0 +1,57 @@
+# PR / push 质量门: 后端单测 + clippy, 前端 lint + 类型检查+build
+# (build.yml 只负责打镜像并推 GHCR, 不跑测试; 这里补上「合进来之前能不能过」)
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    env:
+      # reqwest 的 http3 特性需要该 cfg（与 Dockerfile / backend/.cargo/config.toml 保持一致）
+      RUSTFLAGS: --cfg reqwest_unstable
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - name: cargo test (lib + 集成)
+        run: cargo test --lib --tests
+      # 暂不加 `-D warnings`：现有 105 条 warning 是历史欠账，先让它跑起来不出红，
+      # 等单独开一轮专门清 warning（清完再把这里收紧成 -D warnings）
+      - name: cargo clippy
+        run: cargo clippy --all-targets
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      # build = tsc -b && vite build，顺带做类型检查
+      - run: pnpm build
