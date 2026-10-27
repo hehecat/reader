@@ -25,16 +25,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend
       - name: cargo test (lib + 集成)
         run: cargo test --lib --tests
-      # 暂不加 `-D warnings`：现有 105 条 warning 是历史欠账，先让它跑起来不出红，
-      # 等单独开一轮专门清 warning（清完再把这里收紧成 -D warnings）
-      - name: cargo clippy
-        run: cargo clippy --all-targets
+      - name: cargo fmt --check
+        run: cargo fmt --check
+      # warning 已清零，从这里开始新代码再带 warning 直接红
+      - name: cargo clippy (-D warnings)
+        run: cargo clippy --all-targets -- -D warnings
 
   frontend:
     runs-on: ubuntu-latest
