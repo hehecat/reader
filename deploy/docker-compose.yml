@@ -33,19 +33,9 @@ services:
       READER_AI_API_KEY: "${READER_AI_API_KEY:-}"
       READER_AI_MODEL: "${READER_AI_MODEL:-deepseek-v4.1-flash}"
       READER_AI_MAX_TOKENS: "${READER_AI_MAX_TOKENS:-3500}"
-    networks:
-      - default
-      # octopus 网关所在网络: 容器内用 http://octopus:8080/v1 访问, 不出公网
-      - yatori_yatori-net
-    extra_hosts:
-      # 自建番茄源(FQ): 容器内直接解析到内网地址, 避免绕公网 IP 回环(hairpin)偶发超时;
-      # 源 URL 保持公网域名不变, 手机在外网仍可用
-      - "fq.hehecat.win:192.168.50.3"
+    # 需要接入外部网关(如 octopus)或固定内网解析时, 写进
+    # docker-compose.override.yml(已 gitignore, 参考 docker-compose.override.yml.example)
     restart: unless-stopped
-
-networks:
-  yatori_yatori-net:
-    external: true
 
 volumes:
   data:

@@ -1,0 +1,23 @@
+# 本机偏好覆盖示例（复制为 docker-compose.override.yml，compose 自动合并）
+#
+# 主 compose 只含「任何人都能直接起来」的配置；下面两项属于本机网络环境，
+# 放这里，避免新用户 `docker compose up -d` 因找不到外部网络直接失败。
+#
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#
+services:
+  reader:
+    # ① 接入外部网关（例：OpenAI 兼容网关），容器内用 http://<网关服务名>:8080/v1
+    #    该网络必须已存在：docker network create <网络名>，或由另一个 compose 项目创建
+    networks:
+      - default
+      - <外部网络名>
+
+    # ② 固定内网解析（例：自建源域名直连内网机器，避免绕公网 IP 回环超时）
+    extra_hosts:
+      - "source.example.com:192.0.2.10"  # 192.0.2.0/24 是 RFC 5737 文档保留网段，填你自己的内网 IP
+
+networks:
+  # 名字与上面 networks 里的一致
+  外部网络名:
+    external: true
