@@ -93,6 +93,20 @@ tray-icon = { version = "0.19", optional = true }
 [features]
 gui = ["dep:tao", "dep:wry", "dep:tray-icon"]
 
+# 开发/测试构建：完整 debuginfo 让 85k 行的单 crate 编译与链接都慢，且 target/ 膨胀到 20G+。
+# 行号表足够看 backtrace；依赖连行号表都不要（依赖出问题只看栈顶就够）。
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.test]
+debug = "line-tables-only"
+
+[profile.test.package."*"]
+debug = false
+
 [profile.release]
 lto = true
 strip = true
