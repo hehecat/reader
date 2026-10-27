@@ -711,13 +711,20 @@ pub static SOURCE_ALLOW_PRIVATE: AtomicBool = AtomicBool::new(false);
 #[cfg(test)]
 static SSRF_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-/// 测试用 RAII 守卫：持全局互斥锁并将私网放行开关置为 `allow`；Drop 时恢复原值。
+/// 测试用 RAII 守卫：持全局互斥锁并把两个私网放行开关同时置为 `allow`；Drop 时恢复原值。
+///
+/// 两个开关必须一起翻：图片/TTS 等回源只看 `SSRF_ALLOW_PRIVATE`，而书源抓取
+/// (search/toc/正文/换源/订阅) 只认 `SOURCE_ALLOW_PRIVATE`（`ed2fbcd` 起独立收紧）。
+/// mock 站点绑定 127.0.0.1 的测试两条路径都会走到，只翻前者就会出现
+/// 「图片抓得到、书源抓不到」的假失败。
+///
 /// 用法：`let _g = ssrf_allow_private_guard(true);`（mock 服务器绑定 127.0.0.1 的测试）；
 /// 拦截断言测试用 `ssrf_allow_private_guard(false)` 持锁确保无并发放行。
 #[cfg(test)]
 pub struct SsrfAllowGuard {
     _lock: std::sync::MutexGuard<'static, ()>,
     prev: bool,
+    prev_source: bool,
 }
 
 /// 取测试守卫（见 [`SsrfAllowGuard`]）
@@ -725,13 +732,19 @@ pub struct SsrfAllowGuard {
 pub fn ssrf_allow_private_guard(allow: bool) -> SsrfAllowGuard {
     let _lock = SSRF_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let prev = SSRF_ALLOW_PRIVATE.swap(allow, Ordering::Relaxed);
-    SsrfAllowGuard { _lock, prev }
+    let prev_source = SOURCE_ALLOW_PRIVATE.swap(allow, Ordering::Relaxed);
+    SsrfAllowGuard {
+        _lock,
+        prev,
+        prev_source,
+    }
 }
 
 #[cfg(test)]
 impl Drop for SsrfAllowGuard {
     fn drop(&mut self) {
         SSRF_ALLOW_PRIVATE.store(self.prev, Ordering::Relaxed);
+        SOURCE_ALLOW_PRIVATE.store(self.prev_source, Ordering::Relaxed);
     }
 }
 
@@ -2703,7 +2716,10 @@ mod tests {
     /// 书源入口与重定向仍拦截私网/回环——防"全局放行顺带放开书源"导致的 SSRF。
     #[tokio::test]
     async fn test_source_target_blocked_even_when_global_allows() {
-        let _g = ssrf_allow_private_guard(true); // 全局放行（持锁）
+        // 持锁，先把两个开关都置「拦截」，再只翻全局那个：
+        // 本用例要守的就是「全局放行不能顺带放行书源」这条独立收紧
+        let _g = ssrf_allow_private_guard(false);
+        SSRF_ALLOW_PRIVATE.store(true, Ordering::Relaxed);
         for url in [
             "http://127.0.0.1:8085/x.png",
             "http://172.17.0.1:9911/book/1",

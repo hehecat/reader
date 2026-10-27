@@ -218,6 +218,11 @@ fn env_i64(key: &str, default: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// 进程级 env 互斥：`std::env` 是全局可变状态，并行测试里读写会互相踩
+    /// （曾出现「另一个用例把 READER_APP_* 设成 true，断言默认值就炸」的偶发失败）
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// P1-8：env_flag 布尔解析——true/1/yes/on（大小写不敏感）→ true，其余/缺失 → false
     #[test]
@@ -233,6 +238,7 @@ mod tests {
     /// P1-8：默认用户权限 env 正确读取——未配置默认全开；显式 false 关闭
     #[test]
     fn test_default_user_env_flags() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // 缺失（默认）→ true
         std::env::remove_var("READER_APP_DEFAULTUSERENABLEBOOKSOURCE");
         std::env::remove_var("READER_APP_DEFAULTUSERENABLERSSSOURCE");
@@ -263,20 +269,27 @@ mod tests {
     /// P1-8：AppConfig::from_env 将 env 落到默认用户权限字段（未配置默认全开）
     #[test]
     fn test_from_env_default_user_flags() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("READER_APP_DEFAULTUSERENABLEWEBDAV");
         std::env::remove_var("READER_APP_DEFAULTUSERENABLELOCALSTORE");
         std::env::remove_var("READER_APP_DEFAULTUSERENABLEBOOKSOURCE");
         std::env::remove_var("READER_APP_DEFAULTUSERENABLERSSSOURCE");
         let cfg = AppConfig::from_env();
-        assert!(cfg.default_user_enable_webdav);
-        assert!(cfg.default_user_enable_local_store);
+        // 安全默认收窄：WebDAV/本地存储涉及服务端数据导出与落盘，默认关；
+        // 书源/RSS 是核心阅读能力，默认开
+        assert!(!cfg.default_user_enable_webdav);
+        assert!(!cfg.default_user_enable_local_store);
         assert!(cfg.default_user_enable_book_source);
         assert!(cfg.default_user_enable_rss_source);
         assert_eq!(cfg.default_user_book_source_limit, 80000);
         assert_eq!(cfg.default_user_book_limit, 5000);
-        // 显式 false 可关闭
+        // 显式 true 可开启 / 显式 false 可关闭
+        std::env::set_var("READER_APP_DEFAULTUSERENABLEWEBDAV", "true");
         std::env::set_var("READER_APP_DEFAULTUSERENABLEBOOKSOURCE", "false");
         let cfg2 = AppConfig::from_env();
+        assert!(cfg2.default_user_enable_webdav);
         assert!(!cfg2.default_user_enable_book_source);
+        std::env::remove_var("READER_APP_DEFAULTUSERENABLEWEBDAV");
+        std::env::remove_var("READER_APP_DEFAULTUSERENABLEBOOKSOURCE");
     }
 }

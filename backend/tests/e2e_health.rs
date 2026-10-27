@@ -84,7 +84,7 @@ async fn e2e_invalid_source_lifecycle() {
     let dead_base = format!("http://127.0.0.1:{dead_port}");
     let dead = source_with(&dead_base, "/gone");
     assert!(
-        search::search_one_source(&storage, &ns, &dead, "x", 1)
+        search::search_one_source(&storage, &ns, &dead, "x", 1, 15)
             .await
             .is_err(),
         "拒绝连接应报错"
@@ -98,7 +98,7 @@ async fn e2e_invalid_source_lifecycle() {
     assert!(snap[0].2.contains("404") || !snap[0].2.is_empty());
 
     // 2) 失效期内再搜：前置短路直接返回空（不发请求）
-    let r = search::search_one_source(&storage, &ns, &dead, "x", 1)
+    let r = search::search_one_source(&storage, &ns, &dead, "x", 1, 15)
         .await
         .expect("短路路径应返回 Ok(vec![])");
     assert!(r.is_empty(), "短路应返回空结果");
@@ -150,7 +150,7 @@ async fn e2e_success_clears_stale_mark() {
 
     // 直接调用会短路——先手动清除再走成功链路验证清除逻辑
     health::clear_source_invalid(&ns, &alive.book_source_url);
-    let results = search::search_one_source(&storage, &ns, &alive, "存活", 1)
+    let results = search::search_one_source(&storage, &ns, &alive, "存活", 1, 15)
         .await
         .expect("存活源搜索失败");
     assert_eq!(results.len(), 1);

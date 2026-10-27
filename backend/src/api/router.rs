@@ -1973,7 +1973,7 @@ async fn clear_cache(
 
 /// GET/POST /reader3/searchBookContent：全书搜索（params key + bookUrl）
 /// 本地书：book_chapters 表 LIKE 匹配正文 → data: [{chapterIndex, title, snippet}]
-/// 书源书：返回提示“仅支持本地书内容搜索”
+/// 书源书：搜已缓存章节（未缓存时 resultCount=0，前端引导「缓存本书」）；不在书架/无缓存 → 书籍不存在
 async fn search_book_content(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
@@ -15417,8 +15417,10 @@ mod tests {
             None,
         )
         .await;
-        // 管理密码已废弃: 不再有 NEED_SECURE_KEY 拦截, 请求直达业务逻辑
-        assert!(!ret.0.is_success);
+        // 管理密码已废弃 + 单用户模式（secure=false）不做管理员判定：
+        // 带有效 token 的请求直达业务逻辑并拿到列表（不再返回 NEED_SECURE_KEY）
+        assert!(ret.0.is_success, "{}", ret.0.error_msg);
+        assert!(ret.0.data.is_array(), "应返回用户列表");
         assert_ne!(
             ret.0.data,
             json!("NEED_SECURE_KEY"),
@@ -16484,7 +16486,8 @@ mod tests {
         assert!(ret.0.is_success);
         assert_eq!(ret.0.data.as_array().unwrap().len(), 1);
 
-        // 书源书 → 仅支持本地书内容搜索
+        // 书源书在书架但未缓存章节 → 成功 + 空列表
+        //（书源书已支持搜「已缓存」章节；空列表由前端提示先「缓存本书」）
         let params: HashMap<String, String> = [
             ("key".into(), "关键词".into()),
             ("bookUrl".into(), "https://book.com/web".into()),
@@ -16498,10 +16501,10 @@ mod tests {
             None,
         )
         .await;
-        assert!(!ret.0.is_success);
-        assert_eq!(ret.0.error_msg, "仅支持本地书内容搜索");
+        assert!(ret.0.is_success, "{}", ret.0.error_msg);
+        assert_eq!(ret.0.data.as_array().unwrap().len(), 0);
 
-        // 不存在的书 → 书籍不存在；缺 key / 缺 bookUrl → 参数错误
+        // 不在书架、也无缓存章节 → 书籍不存在；缺 key / 缺 bookUrl → 参数错误
         let params: HashMap<String, String> = [
             ("key".into(), "关键词".into()),
             ("bookUrl".into(), "local://ghost".into()),
@@ -17197,14 +17200,15 @@ mod tests {
         let json: Value = resp.json().await.unwrap();
         assert!(!json["isSuccess"].as_bool().unwrap());
 
-        // getUserList（= getUsers）：非 secure 模式管理接口拒绝（而非 404）
+        // getUserList（= getUsers）：路由可达（非 404）；单用户模式下返回列表
         let resp = client
             .get(format!("{base}/reader3/getUserList"))
             .send()
             .await
             .unwrap();
+        assert_eq!(resp.status(), 200);
         let json: Value = resp.json().await.unwrap();
-        assert!(!json["isSuccess"].as_bool().unwrap());
+        assert!(json["isSuccess"].as_bool().unwrap(), "{json}");
 
         // getBookGroupList（= getBookGroups）：空列表
         let resp = client
@@ -20522,8 +20526,26 @@ mod tests {
     #[tokio::test]
     async fn test_set_as_default_book_sources_api() {
         let (state, dir) = test_state("defaultsrc").await;
-        let body =
-            Bytes::from(r#"{"bookSources":["https://s1.com",{"bookSourceUrl":"https://s2.com"}]}"#);
+        // 手里先有两条源（from 缺省 = 当前 namespace）
+        for url in ["https://s1.com", "https://s2.com"] {
+            state
+                .storage
+                .save_book_source(
+                    "default",
+                    &crate::model::BookSource {
+                        book_source_url: url.into(),
+                        book_source_name: url.into(),
+                        enabled: true,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        // 发布到公共源：字符串 + {bookSourceUrl} 两种入参形态都认；查不到的进 missing
+        let body = Bytes::from(
+            r#"{"bookSources":["https://s1.com",{"bookSourceUrl":"https://s2.com"},"https://nope.com"]}"#,
+        );
         let ret = set_as_default_book_sources(
             AxumState(state.clone()),
             Query(HashMap::new()),
@@ -20532,35 +20554,10 @@ mod tests {
         )
         .await;
         assert!(ret.0.is_success, "{}", ret.0.error_msg);
-        assert_eq!(ret.0.data["count"], 2);
-        let list = state
-            .storage
-            .get_default_book_sources("default")
-            .await
-            .unwrap();
-        assert_eq!(
-            list,
-            vec!["https://s1.com".to_string(), "https://s2.com".to_string()]
-        );
-        // 覆盖
-        let body = Bytes::from(r#"{"bookSources":["https://s3.com"]}"#);
-        let ret = set_as_default_book_sources(
-            AxumState(state.clone()),
-            Query(HashMap::new()),
-            HeaderMap::new(),
-            Some(body),
-        )
-        .await;
-        assert!(ret.0.is_success);
-        assert_eq!(
-            state
-                .storage
-                .get_default_book_sources("default")
-                .await
-                .unwrap(),
-            vec!["https://s3.com".to_string()]
-        );
-        // 校验
+        assert_eq!(ret.0.data["published"], 2, "{}", ret.0.data);
+        assert_eq!(ret.0.data["missing"], json!(["https://nope.com"]));
+
+        // 空列表 → 参数错误
         let body = Bytes::from(r#"{"bookSources":[]}"#);
         let ret = set_as_default_book_sources(
             AxumState(state.clone()),
@@ -20570,6 +20567,22 @@ mod tests {
         )
         .await;
         assert_eq!(ret.0.error_msg, "参数错误");
+
+        // mode=remove → 下架公共源，返回 removed 计数
+        let body = Bytes::from(r#"{"bookSources":["https://s1.com"],"mode":"remove"}"#);
+        let ret = set_as_default_book_sources(
+            AxumState(state.clone()),
+            Query(HashMap::new()),
+            HeaderMap::new(),
+            Some(body),
+        )
+        .await;
+        assert!(ret.0.is_success, "{}", ret.0.error_msg);
+        assert!(
+            ret.0.data["removed"].as_i64().unwrap_or(0) >= 1,
+            "{}",
+            ret.0.data
+        );
 
         cleanup(state, dir).await;
     }
@@ -24022,7 +24035,12 @@ mod tests {
                 .body(Body::empty())
                 .unwrap()
         };
-        let index = std::fs::read_to_string("web-simple/index.html").unwrap();
+        // 轻量页资产（web-simple/）未入库：无资产时跳过，避免把「资产缺失」
+        // 误报成路由回归；路由注册本身由 /simple 前缀断言覆盖
+        let Ok(index) = std::fs::read_to_string("web-simple/index.html") else {
+            eprintln!("跳过：web-simple/ 静态资产不在仓库内");
+            return;
+        };
 
         // ① 别名路由目录请求 → index.html
         let resp = app

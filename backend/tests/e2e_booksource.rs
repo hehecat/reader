@@ -267,7 +267,7 @@ async fn e2e_css_source_full_pipeline() {
 
     // ---- 1) 搜索 ----
     let source = css_source(port);
-    let results = search::search_one_source(&storage, ns, &source, "测试", 1)
+    let results = search::search_one_source(&storage, ns, &source, "测试", 1, 15)
         .await
         .expect("搜索失败");
     assert_eq!(results.len(), 2, "应命中两条搜索结果");
@@ -376,7 +376,7 @@ async fn e2e_json_source_full_pipeline() {
     let source: BookSource = serde_json::from_value(json_src).unwrap();
 
     // 搜索
-    let results = search::search_one_source(&storage, ns, &source, "接口", 1)
+    let results = search::search_one_source(&storage, ns, &source, "接口", 1, 15)
         .await
         .expect("JSON 搜索失败");
     assert_eq!(results.len(), 2);

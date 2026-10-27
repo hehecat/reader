@@ -12,20 +12,28 @@
 use std::sync::atomic::Ordering;
 
 /// RAII 守卫：临时放行 SSRF 私网校验（swap 保存旧值，Drop 恢复——嵌套安全）
+///
+/// 同时翻 `SSRF_ALLOW_PRIVATE`（图片/TTS 等回源）与 `SOURCE_ALLOW_PRIVATE`
+/// （书源抓取，`ed2fbcd` 起独立收紧）——mock 站点的书源抓取只认后者。
 pub struct PrivateNetGuard {
     prev: bool,
+    prev_source: bool,
 }
 
 impl PrivateNetGuard {
     /// 放行私网/回环目标（仅测试进程可设置该静态；生产代码无任何入口）
     pub fn on() -> PrivateNetGuard {
         let prev = reader_dev::service::crawler::SSRF_ALLOW_PRIVATE.swap(true, Ordering::Relaxed);
-        PrivateNetGuard { prev }
+        let prev_source =
+            reader_dev::service::crawler::SOURCE_ALLOW_PRIVATE.swap(true, Ordering::Relaxed);
+        PrivateNetGuard { prev, prev_source }
     }
 }
 
 impl Drop for PrivateNetGuard {
     fn drop(&mut self) {
         reader_dev::service::crawler::SSRF_ALLOW_PRIVATE.store(self.prev, Ordering::Relaxed);
+        reader_dev::service::crawler::SOURCE_ALLOW_PRIVATE
+            .store(self.prev_source, Ordering::Relaxed);
     }
 }

@@ -172,7 +172,7 @@ async fn e2e_gbk_charset_pipeline() {
     let source: BookSource = serde_json::from_value(src_json).unwrap();
 
     // ---- GBK 带 meta 声明的搜索页 ----
-    let results = search::search_one_source(&storage, ns, &source, "编码", 1)
+    let results = search::search_one_source(&storage, ns, &source, "编码", 1, 15)
         .await
         .expect("GBK 搜索失败");
     assert_eq!(results.len(), 1, "GBK 页面应正确解码出结果");
@@ -247,7 +247,7 @@ async fn e2e_gbk_autodetect_pipeline() {
     });
     let source: BookSource = serde_json::from_value(src_json).unwrap();
 
-    let results = search::search_one_source(&storage, ns, &source, "裸流", 1)
+    let results = search::search_one_source(&storage, ns, &source, "裸流", 1, 15)
         .await
         .expect("启发式解码搜索失败");
     assert_eq!(results.len(), 1);
@@ -280,7 +280,7 @@ async fn e2e_post_and_js_chain() {
     });
     let source: BookSource = serde_json::from_value(src_json).unwrap();
 
-    let results = search::search_one_source(&storage, ns, &source, "接口", 1)
+    let results = search::search_one_source(&storage, ns, &source, "接口", 1, 15)
         .await
         .expect("POST 搜索失败");
     assert_eq!(results.len(), 1, "POST body 模板应携带关键词命中");
@@ -328,7 +328,7 @@ async fn e2e_webview_fallback_to_http() {
 
     // 浏览器不可用时 solve_cf_challenge 会尝试 ensure_service——失败即回退。
     // mock 站为 GBK 页面：回退路径的解码/解析全链路应正常出结果
-    let results = search::search_one_source(&storage, ns, &source, "编码", 1)
+    let results = search::search_one_source(&storage, ns, &source, "编码", 1, 15)
         .await
         .expect("webView 回退后搜索应成功");
     assert_eq!(results.len(), 1, "回退 HTTP 后应正常解析");
