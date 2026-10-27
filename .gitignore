@@ -11,3 +11,5 @@ docker-compose.override.yml
 deploy/Caddyfile.local
 backend/web-ui/dist/
 deploy/web-dist.old/
+# 运行时 sqlite（含 WAL/SHM）不入库：容器首次启动自动建库+迁移
+deploy/storage/

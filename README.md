@@ -45,6 +45,7 @@ docker compose up -d          # 默认单用户模式, 无需 .env
 打开 `http://<机器IP>:8080` 直接注册/登录。
 > 多用户: `cp .env.example .env` 设 `READER_APP_SECURE=true` 与邀请码后 `docker compose up -d`。
 > 端口占用: `.env` 设 `READER_PORT=<其他>` 或在环境变量里传。
+> 本机独有配置(外部网络/内网解析等)写 `docker-compose.override.yml`(已 gitignore)，参考同名 `.example`。
 
 > 不用 compose 也行:
 > ```bash
@@ -296,6 +297,10 @@ docker compose up -d reader@sha-<旧sha>                      # 回滚(镜像标
 - SSE 相关改动务必真机验证流式(压缩/缓冲是历史事故高发区)
 - 书源规则调试用前端「书源工作台」, 逐规则 SSE 日志
 - push `main`/tag → Actions 构建镜像推 GHCR(GHA 层缓存, 增量约 2 分钟)
+- PR/push 另有 `.github/workflows/ci.yml`: 后端 `cargo test --lib --tests` + clippy, 前端 lint + build
+- **本机配置别入库**: 内网地址/自建域名/网关网络名只写 `deploy/docker-compose.override.yml`(已 gitignore),
+  并 `git config core.hooksPath .githooks` 启用提交前检查; CI 也会拦
+- `deploy/storage/` 是运行时 sqlite(含 WAL/SHM), 不入库, 首次启动自动建库迁移
 
 ---
 

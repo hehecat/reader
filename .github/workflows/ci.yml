@@ -55,3 +55,21 @@ jobs:
       - run: pnpm lint
       # build = tsc -b && vite build，顺带做类型检查
       - run: pnpm build
+
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # 本机网络配置（内网地址/自建域名/网关网络名）只许写 docker-compose.override.yml（已 gitignore）
+      - name: 个人网络配置不得入库
+        run: |
+          if git grep -nE '192\.168\.|(^|[^0-9.])10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.|\.hehecat\.win|yatori' -- deploy README.md; then
+            echo "::error::deploy/ 或 README 出现内网地址/个人域名，请写进 docker-compose.override.yml（已 gitignore）"
+            exit 1
+          fi
+      - name: 运行时 sqlite 不得入库
+        run: |
+          if git ls-files -- 'deploy/storage/*.db*' | grep -q .; then
+            echo "::error::deploy/storage 下的 sqlite 已被跟踪，请 git rm --cached"
+            exit 1
+          fi

@@ -1,0 +1,15 @@
+#!/bin/sh
+# 个人网络配置（内网地址/自建域名/网关网络名）不许进仓库：
+# deploy/docker-compose.override.yml 已 gitignore，本机配置写那里。
+# 启用：git config core.hooksPath .githooks
+set -e
+bad=$(git diff --cached --name-only --diff-filter=ACM -- deploy README.md \
+  | xargs -r git diff --cached -U0 -- \
+  | grep -E '^\+' \
+  | grep -nE '192\.168\.|(^|[^0-9.])10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.|\.hehecat\.win|yatori' || true)
+if [ -n "$bad" ]; then
+  echo "拒绝提交：deploy/ 或 README 里出现内网地址/个人域名" >&2
+  echo "$bad" >&2
+  echo "本机配置请写 deploy/docker-compose.override.yml（已 gitignore）" >&2
+  exit 1
+fi
