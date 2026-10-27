@@ -133,7 +133,7 @@ pub async fn fetch_url(ns: &str, url: &str, source: &BookSource) -> Result<crawl
     // A1 webView 抓取：URL option webView=true 时经浏览器渲染取最终 HTML（JS 动态页）。
     // 浏览器未启用/求解失败时回退普通 HTTP（legacy WebView 失败同样回落 onError→重试语义）
     let mut resp = if suffix.web_view == Some(true) {
-        match crate::service::browser::solve_cf_challenge(ns, &final_url, &[], 15_000, proxy).await
+        match crate::service::browser::solve_cf_challenge(ns, &final_url, &[], 25_000, proxy).await
         {
             Ok(sol) => crawler::FetchResponse {
                 body: sol.html,
@@ -155,7 +155,7 @@ pub async fn fetch_url(ns: &str, url: &str, source: &BookSource) -> Result<crawl
                             ns,
                             &final_url,
                             &headers,
-                            15,
+                            25,
                             suffix.body.as_deref(),
                             suffix.charset.as_deref(),
                             proxy,
@@ -168,7 +168,7 @@ pub async fn fetch_url(ns: &str, url: &str, source: &BookSource) -> Result<crawl
                             ns,
                             &final_url,
                             &headers,
-                            15,
+                            25,
                             suffix.charset.as_deref(),
                             proxy,
                             suffix.retry,
