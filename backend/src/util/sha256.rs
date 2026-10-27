@@ -37,7 +37,7 @@ pub fn verify_password(password: &str, stored: &str) -> bool {
     match stored.split_once('$') {
         Some((salt, hash)) => {
             !salt.is_empty()
-                && crate::util::constant_time::ct_eq(&hash_password(password, salt), &hash)
+                && crate::util::constant_time::ct_eq(&hash_password(password, salt), hash)
         }
         None => false,
     }

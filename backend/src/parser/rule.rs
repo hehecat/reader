@@ -1024,6 +1024,7 @@ fn apply_rule_inner(
 /// - 提取失败 / JS 报错 / 结果为空 → 替换为空串；未闭合的 `{{` → 原样返回
 ///
 /// 注意：JS 字符串内若含 `}}` 会提前截断（v1 限制，规则 JS 避免字面 `}}`）
+#[allow(dead_code)] // TODO(审阅): 当前无调用方，待确认是接线还是删除
 fn expand_inline_depth(body: &str, text: &str, depth: usize) -> String {
     expand_inline_depth_checked(body, text, depth, None).0
 }
@@ -1982,7 +1983,7 @@ fn find_word_op_top(s: &str) -> Option<(&'static str, usize)> {
                     && (i + op.len() == b.len() || (b[i + op.len()] as char).is_whitespace())
                 {
                     // 首字符互异无前缀冲突；取最早出现者
-                    if best.map_or(true, |(_, p)| i < p) {
+                    if best.is_none_or(|(_, p)| i < p) {
                         best = Some((op, i));
                     }
                     break;

@@ -73,7 +73,7 @@ async fn e2e_invalid_source_lifecycle() {
     let storage = test_storage("e2e-health").await;
     // 唯一 ns 隔离全局失效表，避免并行测试互扰
     let ns = format!("ns-h-{}", std::process::id());
-    let base = format!("http://127.0.0.1:{port}");
+    let _base = format!("http://127.0.0.1:{port}");
 
     // 1) 网络层故障（拒绝连接）源搜索失败 → 标记失效
     // （临时 listener bind 后立即 drop，端口无人监听 → connection refused）

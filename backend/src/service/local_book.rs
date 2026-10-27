@@ -234,7 +234,7 @@ fn nav_links(html: &str, nav_path: &str) -> Vec<(String, String)> {
 /// 解析 toc.ncx 的 navMap（navPoint 深度优先，含嵌套子点；标题取 navLabel/text）。
 fn ncx_nav_points(xml: &str, ncx_path: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
-    let mut stack: Vec<(usize, String)> = Vec::new();
+    let stack: Vec<(usize, String)> = Vec::new();
     // 简化解析：逐 navPoint 开闭标签处理（不引入 XML 依赖——EPUB2 NCX 结构固定）
     let mut pos = 0usize;
     while let Some(open) = xml[pos..].find("<navPoint") {
@@ -349,7 +349,7 @@ fn merge_epub_chapters<R: std::io::Read + std::io::Seek>(
                     }
                 }
                 let full = href;
-                if let Ok(bytes) = read_zip(zip, &full) {
+                if let Ok(bytes) = read_zip(zip, full) {
                     let html = String::from_utf8_lossy(&bytes);
                     let text = html_to_text(&html);
                     if !text.trim().is_empty() {
@@ -364,9 +364,7 @@ fn merge_epub_chapters<R: std::io::Read + std::io::Seek>(
                 return out;
             }
             // toc 条目内容全部读取失败 → 回退 spine
-            spin_titles
-                .into_iter()
-                .map(|(_, t)| Chapter {
+            spin_titles.into_values().map(|t| Chapter {
                     title: t,
                     content: String::new(),
                 })
@@ -377,7 +375,7 @@ fn merge_epub_chapters<R: std::io::Read + std::io::Seek>(
             let mut out = Vec::new();
             for (href, title) in toc_entries {
                 let full = href;
-                if let Ok(bytes) = read_zip(zip, &full) {
+                if let Ok(bytes) = read_zip(zip, full) {
                     let html = String::from_utf8_lossy(&bytes);
                     let text = html_to_text(&html);
                     if !text.trim().is_empty() {
@@ -858,9 +856,7 @@ fn validate_mobi_lengths(bytes: &[u8]) -> Result<()> {
     if num_records == 0 {
         return Ok(());
     }
-    let rec_list_end = 78usize
-        .checked_add(num_records.saturating_mul(8))
-        .unwrap_or(usize::MAX);
+    let rec_list_end = 78usize.saturating_add(num_records.saturating_mul(8));
     if rec_list_end > bytes.len() {
         return Ok(()); // 记录表越界：交给 mobi crate 报错
     }
@@ -2941,6 +2937,7 @@ mod tests {
     /// 构造最小 EPUB（EPUB2：toc.ncx；EPUB3：nav.xhtml）验证六模式：
     /// - spine 顺序 [c1, c2]（标题 第一章/第二章）
     /// - toc.ncx 顺序 [c2, c1]（标题 TOC-2/TOC-1）
+    #[allow(dead_code)] // TODO(审阅): 当前无调用方，待确认是接线还是删除
     fn build_test_epub() -> Vec<u8> {
         use std::io::Write;
         let mut buf = std::io::Cursor::new(Vec::new());
@@ -3051,6 +3048,7 @@ mod tests {
         assert_eq!(plain.chapters.len(), 1, "关闭时保持单章");
     }
 
+    #[allow(dead_code)] // TODO(审阅): 当前无调用方，待确认是接线还是删除
     fn parse_epub_toc_modes() {
         let bytes = build_test_epub();
         // 默认 spin+toc：spine 顺序，标题用 spine 的（spine 标题非空不覆盖）

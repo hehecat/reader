@@ -11,7 +11,6 @@ use crate::model::BookSource;
 use crate::parser::css_chain::css_chain;
 use crate::parser::rule::{apply, parse_rule, RuleKind};
 use crate::service::crawler;
-use crate::service::search::split_url_suffix;
 use std::collections::HashMap;
 
 /// E7（legacy BookChapterList.kt:61-67 / BookContent.kt:64-70——翻页 URL 重建

@@ -255,7 +255,7 @@ async fn run_job(
         match h.await {
             Ok(Ok((title, idx, content))) => {
                 let _ = storage
-                    .cache_chapter_content(&ns, &url, idx, &title, &content)
+                    .cache_chapter_content(&ns, url, idx, &title, &content)
                     .await;
                 cached += 1;
             }

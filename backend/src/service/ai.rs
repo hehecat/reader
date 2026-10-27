@@ -191,7 +191,7 @@ fn push_token(out: &mut Vec<String>, raw: &str) {
     let chars: Vec<char> = t.chars().collect();
     for i in 0..chars.len().saturating_sub(1) {
         let g: String = chars[i..i + 2].iter().collect();
-        if STOPWORDS.contains(&g.as_str()) || out.iter().any(|x| *x == g) {
+        if STOPWORDS.contains(&g.as_str()) || out.contains(&g) {
             continue;
         }
         out.push(g);

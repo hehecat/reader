@@ -83,6 +83,7 @@ impl RegexCache {
         self.entries.insert(key, (self.clock, re.clone()));
     }
 
+    #[allow(dead_code)] // TODO(审阅): 当前无调用方，待确认是接线还是删除
     fn len(&self) -> usize {
         self.entries.len()
     }

@@ -9807,13 +9807,12 @@ mod tests {
                 .as_deref(),
             Some("A 的正文")
         );
-        assert_eq!(
+        assert!(
             storage
                 .get_toc_cache("userA", "https://shared.com/toc", 86_400_000)
                 .await
                 .unwrap()
-                .is_some(),
-            true
+                .is_some()
         );
 
         // 他命名空间不可见（不串扰）

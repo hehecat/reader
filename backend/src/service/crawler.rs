@@ -326,6 +326,7 @@ fn build_http_client(
 }
 
 /// SSRF 校验重定向策略（fetch 与代理共享 Client 共用；逐跳校验跳转目标防 302 回内网）
+#[allow(dead_code)] // TODO(审阅): 当前无调用方，待确认是接线还是删除
 fn ssrf_redirect_policy() -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(|attempt| {
         match validate_redirect_target(attempt.url().as_str()) {
@@ -431,12 +432,11 @@ fn has_url_encoded(v: &str) -> bool {
             i += 1;
             continue;
         }
-        if c == b'%' && i + 2 < b.len() {
-            if b[i + 1].is_ascii_hexdigit() && b[i + 2].is_ascii_hexdigit() {
+        if c == b'%' && i + 2 < b.len()
+            && b[i + 1].is_ascii_hexdigit() && b[i + 2].is_ascii_hexdigit() {
                 i += 3;
                 continue;
             }
-        }
         return false;
     }
     true
@@ -1308,7 +1308,7 @@ async fn http_fetch_inner(
             }
         }
     }
-    // 浏览器优先路径同样执行 SSRF 入口校验（obscura 侧还默认禁 RFC1918 内网导航，
+    // 浏览器优先路径同样执行 SSRF 入口校验（camoufox 侧还默认禁 RFC1918 内网导航，
     // 双保险——否则默认浏览器优先会让私网书源 URL 绕过 fetch 的直连校验）
     validate_source_target(&url).await?;
     // ① 书源 cookie + 记录的 UA（FlareSolverr 返回的 UA 绑定 cookie——部分站点校验 UA 一致性）
@@ -1354,7 +1354,7 @@ async fn http_fetch_inner(
         );
     }
 
-    // ② 浏览器优先（默认开启）：GET 先经内置 obscura 导航，跳过 reqwest 直连。
+    // ② 浏览器优先（默认开启）：GET 先经内置 camoufox 导航，跳过 reqwest 直连。
     //    浏览器后端不可用时自动回退直连（不因缺浏览器而整体不可用）。
     tracing::debug!("http_fetch 直连 {method} {url}");
     let browser_first_get = (browser_first_enabled() || browser_needed(&url))
@@ -1394,7 +1394,7 @@ async fn http_fetch_inner(
                 );
                 // fake-ip/DNS 劫持环境：连接层失败 → DoH 解析真 IP 钉扎后重试一次
                 // 默认浏览器兜底（READER_BROWSER_FALLBACK_DISABLE=1 关闭）：网络层失败
-                // （超时/连接中断/TLS）时内置 obscura 浏览器重试——很多站点的反爬只对
+                // （超时/连接中断/TLS）时内置 camoufox 浏览器重试——很多站点的反爬只对
                 // 直连 reqwest 指纹生效，浏览器 stealth 指纹可正常访问
                 if browser_fallback_enabled()
                     && method.eq_ignore_ascii_case("GET")
@@ -1490,7 +1490,7 @@ async fn http_fetch_inner(
                 ))
             } else {
                 // 未配置 FLARESOLVERR_URL → 内置浏览器求解（进程内 CDP，不依赖外部容器；
-                // 带书源级代理 proxy——obscura spawn --proxy）
+                // 带书源级代理 proxy——camoufox spawn --proxy）
                 let solved = solve_cf_builtin(ns, &url, &cookie, proxy).await?;
                 if cf_browser_available() {
                     mark_browser_needed(&url);
@@ -1594,7 +1594,7 @@ fn log_solve_failure_cooled(url: &str, e: &dyn std::fmt::Display) {
 }
 
 /// 浏览器优先模式：默认开启（`READER_BROWSER_FIRST` 未设置时所有 GET 先经内置
-/// obscura 浏览器导航，最大限度减少验证码/WAF 拦截；代价是速度与资源占用）。
+/// camoufox 浏览器导航，最大限度减少验证码/WAF 拦截；代价是速度与资源占用）。
 /// 显式 `READER_BROWSER_FIRST=0`/`false`/`off` 可关闭，恢复“直连优先、反爬兜底”。
 /// 浏览器不可用或求解失败时自动降级直连，不会因缺浏览器导致抓取全部失败。
 fn browser_first_enabled() -> bool {
@@ -1638,7 +1638,7 @@ fn browser_needed(url: &str) -> bool {
     let host = host_of_url(url);
     let map = BROWSER_NEEDED.lock().unwrap_or_else(|e| e.into_inner());
     map.get(&host)
-        .map_or(false, |at| at.elapsed() < BROWSER_NEEDED_TTL)
+        .is_some_and(|at| at.elapsed() < BROWSER_NEEDED_TTL)
 }
 
 /// 直连失败是否值得浏览器兜底：仅网络层错误（超时/连接中断/TLS/DNS 解析），
@@ -2608,7 +2608,7 @@ mod tests {
         ));
         force_cf_browser_available(None);
         std::env::remove_var("READER_CAMOUFOX_DISABLE");
-        let err = r.err().expect("浏览器不可用应返回错误");
+        let err = r.expect_err("浏览器不可用应返回错误");
         assert!(
             err.to_string().contains("camoufox") || err.to_string().contains("禁用"),
             "错误应提示 camoufox 未启用: {err}"

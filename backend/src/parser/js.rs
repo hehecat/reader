@@ -137,15 +137,12 @@ fn cache_get_value(ns: &str, key: &str) -> Option<String> {
     // ① 热缓存（命中即返回；惰性清除已过期条目）
     {
         let mut m = CACHE_STORE.lock().unwrap_or_else(|e| e.into_inner());
-        match m.get(&k) {
-            Some((v, exp)) => {
-                if *exp > 0 && *exp <= cache_now_ms() {
-                    m.remove(&k);
-                } else {
-                    return Some(v.clone());
-                }
+        if let Some((v, exp)) = m.get(&k) {
+            if *exp > 0 && *exp <= cache_now_ms() {
+                m.remove(&k);
+            } else {
+                return Some(v.clone());
             }
-            None => {}
         }
     }
     // ② 读穿透 SQLite（miss 兜底：另一进程写库/手动清内存后仍可取回），
@@ -676,7 +673,7 @@ fn install_context_bindings(context: &mut Context, b: &ContextBindings) -> Resul
                 .property(
                     JsString::from("index"),
                     b.chapter_index
-                        .map(|i| JsValue::from(i))
+                        .map(JsValue::from)
                         .unwrap_or_else(JsValue::undefined),
                     Attribute::all(),
                 )
@@ -1621,11 +1618,10 @@ fn sp_clear(
     _args: &[JsValue],
     _context: &mut Context,
 ) -> JsResult<JsValue> {
-    APP_PREFS
+    if let Some(m) = APP_PREFS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .get_mut(&app_prefs_key(&inner.ns, pref))
-        .map(|m| m.clear());
+        .get_mut(&app_prefs_key(&inner.ns, pref)) { m.clear() }
     Ok(this.clone())
 }
 
@@ -1663,7 +1659,7 @@ fn json_to_js_value(value: JsonValue, _context: &mut Context) -> JsValue {
         JsonValue::String(s) => JsValue::from(JsString::from(s)),
         JsonValue::Number(n) => n
             .as_i64()
-            .map(|i| JsValue::from(i))
+            .map(JsValue::from)
             .or_else(|| n.as_f64().map(JsValue::from))
             .unwrap_or(JsValue::undefined()),
         JsonValue::Bool(b) => JsValue::from(b),
@@ -2133,7 +2129,7 @@ fn cache_num_get(inner: &JsBridgeInner, args: &[JsValue], default_val: f64) -> f
     let def = args
         .get(1)
         .and_then(|v| v.as_number())
-        .map(|n| n as f64)
+        .map(|n| n)
         .unwrap_or(default_val);
     match cache_get_value(&inner.ns, &key) {
         Some(v) => v.trim().parse::<f64>().unwrap_or(def),
@@ -3786,6 +3782,7 @@ fn java_android_id(
 }
 
 /// java.base64Encode(str)
+#[allow(dead_code)] // TODO(审阅): 当前无调用方，待确认是接线还是删除
 fn java_base64_encode(
     _inner: &JsBridgeInner,
     args: &[JsValue],
@@ -3927,7 +3924,7 @@ fn java_digest_base64_str(
 fn java_log_type(
     _inner: &JsBridgeInner,
     args: &[JsValue],
-    context: &mut Context,
+    _context: &mut Context,
 ) -> JsResult<JsValue> {
     let v = args.get_or_undefined(0);
     let t = if v.is_null() {
@@ -3950,6 +3947,7 @@ fn java_log_type(
 }
 
 /// java.base64DecodeToString(str)
+#[allow(dead_code)] // TODO(审阅): 当前无调用方，待确认是接线还是删除
 fn java_base64_decode(
     _inner: &JsBridgeInner,
     args: &[JsValue],
@@ -4056,7 +4054,7 @@ fn cbc_apply(
     block_size: usize,
     encrypt: bool,
 ) -> Result<Vec<u8>, String> {
-    if data.is_empty() || data.len() % block_size != 0 {
+    if data.is_empty() || !data.len().is_multiple_of(block_size) {
         return Err("CBC 数据长度必须为分块大小的整数倍".into());
     }
     let mut out = Vec::with_capacity(data.len());
@@ -4156,7 +4154,7 @@ fn aes_crypt(
         Ok(out)
     };
     let raw = if mode == "CBC" {
-        cbc_apply(&block_enc, &block_dec, &data, &iv_bytes, 16, encrypt)?
+        cbc_apply(block_enc, block_dec, &data, &iv_bytes, 16, encrypt)?
     } else {
         let mut out = Vec::with_capacity(data.len());
         for chunk in data.chunks(16) {
@@ -4240,7 +4238,7 @@ fn des_crypt(
         Ok(out)
     };
     let raw = if mode == "CBC" {
-        cbc_apply(&block_enc, &block_dec, &data, &iv_bytes, 8, encrypt)?
+        cbc_apply(block_enc, block_dec, &data, &iv_bytes, 8, encrypt)?
     } else {
         let mut out = Vec::with_capacity(data.len());
         for chunk in data.chunks(8) {
@@ -4323,7 +4321,7 @@ fn symmetric_data_to_bytes(v: &JsValue, context: &mut Context) -> Vec<u8> {
     }
     let s = js_value_to_string(v, context);
     let s = s.trim();
-    let is_hex = !s.is_empty() && s.len() % 2 == 0 && s.bytes().all(|b| b.is_ascii_hexdigit());
+    let is_hex = !s.is_empty() && s.len().is_multiple_of(2) && s.bytes().all(|b| b.is_ascii_hexdigit());
     if is_hex {
         return hex::decode(s).unwrap_or_default();
     }

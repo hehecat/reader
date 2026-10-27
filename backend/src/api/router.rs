@@ -872,7 +872,7 @@ async fn add_user(
     headers: HeaderMap,
     body: Option<axum::body::Bytes>,
 ) -> Json<ReturnData> {
-    let namespace = match resolve_namespace(&state, &params, &headers).await {
+    let _namespace = match resolve_namespace(&state, &params, &headers).await {
         Ok(ns) => ns,
         Err(ret) => return Json(ret),
     };
@@ -1643,6 +1643,7 @@ async fn delete_font(
     }
 }
 
+#[allow(dead_code)] // TODO(审阅): 当前无调用方，待确认是接线还是删除
 fn html_page(msg: &str, ok: bool) -> String {
     let color = if ok { "#2e7d32" } else { "#c62828" };
     format!(
@@ -3927,7 +3928,7 @@ async fn get_book_toc(
         }
     }
     // F8：目录回写目标（书架书优先按 url 参数命中，其次 toc_url 命中）
-    let shelf_for_write = {
+    let _shelf_for_write = {
         let mut found = state
             .storage
             .find_book(&namespace, &url_param)
@@ -5290,7 +5291,7 @@ async fn cancel_cache_book(
     headers: HeaderMap,
     body: Option<axum::body::Bytes>,
 ) -> Json<ReturnData> {
-    let namespace = match resolve_namespace(&state, &params, &headers).await {
+    let _namespace = match resolve_namespace(&state, &params, &headers).await {
         Ok(ns) => ns,
         Err(ret) => return Json(ret),
     };
@@ -6536,7 +6537,7 @@ fn book_json_with_group_ids(book: &crate::model::Book) -> serde_json::Value {
         let ids: Vec<i64> = serde_json::from_str(&book.group_ids).unwrap_or_else(|_| {
             // 旧数据兼容：group_ids 可能存逗号/顿号分隔文本而非 JSON 数组
             book.group_ids
-                .split(|c: char| c == ',' || c == '，' || c == '、')
+                .split([',', '，', '、'])
                 .filter_map(|s| s.trim().parse::<i64>().ok())
                 .collect()
         });
@@ -6702,7 +6703,7 @@ async fn get_users(
     body: Option<axum::body::Bytes>,
 ) -> Json<ReturnData> {
     // 需登录（legacy checkAuth）
-    let namespace = match resolve_namespace(&state, &params, &headers).await {
+    let _namespace = match resolve_namespace(&state, &params, &headers).await {
         Ok(ns) => ns,
         Err(ret) => return Json(ret),
     };
@@ -6771,7 +6772,7 @@ async fn update_user(
     headers: HeaderMap,
     body: Option<axum::body::Bytes>,
 ) -> Json<ReturnData> {
-    let namespace = match resolve_namespace(&state, &params, &headers).await {
+    let _namespace = match resolve_namespace(&state, &params, &headers).await {
         Ok(ns) => ns,
         Err(ret) => return Json(ret),
     };
@@ -6962,7 +6963,7 @@ async fn reset_user_password(
     headers: HeaderMap,
     body: Option<axum::body::Bytes>,
 ) -> Json<ReturnData> {
-    let namespace = match resolve_namespace(&state, &params, &headers).await {
+    let _namespace = match resolve_namespace(&state, &params, &headers).await {
         Ok(ns) => ns,
         Err(ret) => return Json(ret),
     };
@@ -8177,7 +8178,7 @@ async fn save_opds_settings(
     headers: HeaderMap,
     body: Option<axum::body::Bytes>,
 ) -> Json<ReturnData> {
-    let namespace = match resolve_namespace(&state, &params, &headers).await {
+    let _namespace = match resolve_namespace(&state, &params, &headers).await {
         Ok(ns) => ns,
         Err(ret) => return Json(ret),
     };
@@ -8300,8 +8301,8 @@ fn migrate_local_book_file(
     // 目标目录 {name}_{author}（路径分隔符清洗防穿越）
     let dir_name = format!(
         "{}_{}",
-        name.replace(|c: char| c == '/' || c == '\\', "_"),
-        author.replace(|c: char| c == '/' || c == '\\', "_")
+        name.replace(['/', '\\'], "_"),
+        author.replace(['/', '\\'], "_")
     );
     let target_dir = storage_dir.join("data").join(namespace).join(&dir_name);
     let filename = src.file_name()?;
@@ -18460,7 +18461,7 @@ mod tests {
             warn.is_ascii(),
             "警告头必须纯 ASCII（HeaderValue 约束）: {warn}"
         );
-        let decoded = percent_decode(&warn);
+        let decoded = percent_decode(warn);
         let json: serde_json::Value =
             serde_json::from_str(&decoded).expect("警告头应为合法 JSON: {decoded}");
         let failed = json["failedChapters"]
@@ -22358,10 +22359,10 @@ mod tests {
         let base = std::env::temp_dir().join("reader-locbook-resolve");
         let _ = std::fs::remove_dir_all(&base);
         let storage_dir = base.join("storage");
-        std::fs::create_dir_all(&storage_dir.join("data/alice")).unwrap();
+        std::fs::create_dir_all(storage_dir.join("data/alice")).unwrap();
         std::fs::write(storage_dir.join("data/alice/ok.txt"), "ok").unwrap();
         // legacy 目录式 epub（{书}.epub/ 内含 index.epub）
-        std::fs::create_dir_all(&storage_dir.join("data/alice/书.epub")).unwrap();
+        std::fs::create_dir_all(storage_dir.join("data/alice/书.epub")).unwrap();
         std::fs::write(storage_dir.join("data/alice/书.epub/index.epub"), "legacy").unwrap();
         let escape = base.join("escape.txt");
         std::fs::write(&escape, "escape").unwrap();

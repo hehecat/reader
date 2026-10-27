@@ -437,6 +437,7 @@ fn apply_body_js(
 
 /// 并发率（legado concurrentRate）：纯数字 = 每次请求前 sleep 该毫秒；
 /// `n/window`（如 20/60000）→ 每次请求间隔 window/n 毫秒
+#[allow(dead_code)] // TODO(审阅): 当前无调用方，待确认是接线还是删除
 pub(crate) fn concurrent_rate_sleep_ms(rate: Option<&str>) -> u64 {
     let Some(rate) = rate else { return 0 };
     let rate = rate.trim();
@@ -812,6 +813,7 @@ pub(crate) fn analyze_book_list_for_explore(
 }
 
 /// 解析书单（对齐 legacy BookList.analyzeBookList v1：无 JS/无变量）
+#[allow(dead_code)] // TODO(审阅): 当前无调用方，待确认是接线还是删除
 fn analyze_book_list(
     ns: &str,
     body: &str,
@@ -1120,6 +1122,7 @@ fn css_items(rule: &str, body: &str) -> Vec<String> {
 }
 
 /// URL 型字段规则（legado isUrl 语义）：展开内嵌后若是路径/URL 直接拼接，否则走规则解析
+#[allow(dead_code)] // TODO(审阅): 当前无调用方，待确认是接线还是删除
 fn field_url(context: &str, rule: Option<&str>, default: &str, base: &str) -> String {
     field_url_impl(context, rule, default, base, None)
 }
@@ -1166,7 +1169,7 @@ fn field_url_impl(
         Some(&expanded),
         default,
         None,
-        vars.as_deref_mut(),
+        vars,
         true,
     );
     if v.starts_with('/') && !v.starts_with("//") {
@@ -1177,6 +1180,7 @@ fn field_url_impl(
 }
 
 /// 展开 {{$.xxx}} 内嵌规则（legado：{{}} 内为 JSONPath/JS，v1 支持 JSONPath）
+#[allow(dead_code)] // TODO(审阅): 当前无调用方，待确认是接线还是删除
 pub(crate) fn expand_embedded(rule: &str, context: &str) -> String {
     expand_embedded_impl(rule, context, None)
 }
@@ -1233,6 +1237,7 @@ pub(crate) fn field(context: &str, rule: Option<&str>, default: &str) -> String 
 }
 
 /// 字段规则应用（带书源桥接：搜索流程共享 ns bridge，java.* 可用）
+#[allow(dead_code)] // TODO(审阅): 当前无调用方，待确认是接线还是删除
 pub(crate) fn field_with_bridge(
     context: &str,
     rule: Option<&str>,
@@ -1427,10 +1432,12 @@ fn collect_visible_text(el: scraper::ElementRef<'_>) -> String {
     s.trim().to_string()
 }
 
+#[allow(dead_code)] // TODO(审阅): 当前无调用方，待确认是接线还是删除
 pub(crate) fn opt_field(context: &str, rule: Option<&str>) -> Option<String> {
     opt_field_with_bridge(context, rule, None)
 }
 
+#[allow(dead_code)] // TODO(审阅): 当前无调用方，待确认是接线还是删除
 pub(crate) fn opt_field_with_bridge(
     context: &str,
     rule: Option<&str>,

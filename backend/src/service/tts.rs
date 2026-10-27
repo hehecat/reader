@@ -705,7 +705,7 @@ pub async fn http_tts_api_synthesize(
     text: &str,
     speed: i64,
 ) -> Result<(Vec<u8>, Option<String>)> {
-    use crate::service::search::{split_url_suffix, UrlSuffix};
+    use crate::service::search::split_url_suffix;
     if text.trim().is_empty() {
         return Err(anyhow!("合成文本不能为空"));
     }

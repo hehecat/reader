@@ -164,7 +164,7 @@ fn lib_ready(db_path: &Path, dir: &Path) -> bool {
     };
     // 原始数据比标记新 → 需要重建
     for f in raw_files(dir) {
-        if let Ok(m) = std::fs::metadata(&f) {
+        if let Ok(m) = std::fs::metadata(f) {
             if m.modified().map(|t| t > marker_time).unwrap_or(false) {
                 return false;
             }
@@ -240,7 +240,7 @@ fn build_dict(dir: &Path, db_path: &Path) -> Result<()> {
                         .execute(&mut *tx)
                         .await?;
                         n += 1;
-                        if n % 20000 == 0 {
+                        if n.is_multiple_of(20000) {
                             tx.commit().await?;
                             tx = pool.begin().await?;
                         }
@@ -298,7 +298,7 @@ fn build_dict(dir: &Path, db_path: &Path) -> Result<()> {
                 .execute(&mut *tx)
                 .await?;
                 n += 1;
-                if n % 20000 == 0 {
+                if n.is_multiple_of(20000) {
                     tx.commit().await?;
                     tx = pool.begin().await?;
                 }
