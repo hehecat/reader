@@ -10,6 +10,9 @@ Rust + Vue 3 实现，legado 语义书源规则引擎。当前主线发布 **v5.
 
 ---
 
+> ⚠️ **历史笔记（v5 时代）**：前端已从 Vue 3 换成 React 19，版本号以 `backend/Cargo.toml` 为准，
+> 内置浏览器后端已从 obscura 换成 camoufox。本文其余内容作为设计背景参考，与现状冲突时以代码和 README 为准。
+
 ## 功能特性
 
 ### 书源与抓取

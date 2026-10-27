@@ -4,7 +4,7 @@
 
 **自托管在线阅读服务 —— 多源搜索 · 书架 · 阅读器 · 换源 · 多级缓存 · TTS 朗读**
 
-Rust(warp) 后端 + React 前端, 单一仓库 · GitHub Actions 构建 · GHCR 分发
+Rust(axum) 后端 + React 前端, 单一仓库 · GitHub Actions 构建 · GHCR 分发
 legado 语义书源规则引擎
 
 </div>
@@ -159,11 +159,11 @@ compose 默认挂 `deploy/storage/`(容器内 `/storage/storage`), 内含:
 | `READER_AI_BASE_URL` | 空 | OpenAI 兼容端点(如 `http://octopus:8080/v1`); 与 KEY 同时非空才启用 AI 面板 |
 | `READER_AI_API_KEY` | 空 | 上述端点密钥 |
 | `READER_AI_MODEL` | deepseek-v4.1-flash | 模型名(支持推理模型, 思考过程不显示) |
-| `READER_AI_MAX_TOKENS` | 1500 | 单次回答上限 |
+| `READER_AI_MAX_TOKENS` | 3500 | 单次回答上限(0 = 不限制, 推理模型思考也吃预算) |
 | `READER_DICT_ONLINE` | 1 | 词典在线兜底开关(本地未命中时有道查询, 缓存 30 天) |
 | `READER_DICT_DIR` | /app/dict | 离线词典原始数据目录(ecdict.csv / word.json / ci.json / idiom.json) |
 | `READER_CAMOUFOX_URL` | - | 外置 camoufox 服务地址; 缺省容器内自 spawn |
-| `READER_BROWSER_FIRST` | 1 | 抓取优先经浏览器反检测; 0 恢复直连优先 |
+| `READER_BROWSER_FIRST` | 1 | 抓取优先经浏览器反检测; 0 恢复直连优先(compose 默认 0) |
 
 **运行时可调(无需重启/重建)**: 设置页「搜索 → 单源搜索超时」(3-60s, 即时保存, 随每次搜索请求下发)。
 

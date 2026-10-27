@@ -1,7 +1,7 @@
 # ============================================================
 # reader 统一镜像多阶段构建 (context = 仓库根)
 #   frontend/ React (vite + pnpm) → dist
-#   backend/  Rust (warp) → reader-dev 二进制, rust-embed 内嵌同一份 dist
+#   backend/  Rust (axum) → reader-dev 二进制, rust-embed 内嵌同一份 dist
 #   camoufox  验证码/登录浏览器后端 (pip 包 + Firefox 二进制, 构建期下载)
 # 构建: docker build -t reader .
 # ============================================================
