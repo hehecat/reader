@@ -221,7 +221,6 @@ src/
 ├── storage/      # SQLite（迁移/CRUD/缓存/统计）
 └── util/         # password(argon2)/regex/md5/...
 web-ui/src/       # Vue3 视图/组件/api/utils
-web-simple/       # Kindle 轻量页
 scripts/          # 审计/测试工具（api-scan/mock 站点等）
 docs/             # SECURITY/ARCHITECTURE/ROADMAP/FRONTEND
 ```

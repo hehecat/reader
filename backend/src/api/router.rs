@@ -82,13 +82,6 @@ pub fn router(config: crate::AppConfig, storage: Storage) -> axum::Router {
     let assets_dir = config.storage_dir().join("assets");
     let assets_service = tower_http::services::ServeDir::new(assets_dir);
 
-    // Kindle 轻量页（web-simple/，/simple/* 与 legacy 别名 /simple-web/*——独立于
-    // web-ui SPA，无 fallback，目录可经 READER_APP_SIMPLE_WEB_ROOT 覆盖，
-    // 默认相对进程工作目录的 web-simple/）
-    let simple_dir =
-        std::env::var("READER_APP_SIMPLE_WEB_ROOT").unwrap_or_else(|_| "web-simple".to_string());
-    let simple_service = tower_http::services::ServeDir::new(&simple_dir);
-
     // GAP 62：multipart 上传上限（env READER_UPLOAD_MAX_MB，默认 100MB；超限 → 413 →
     // 最外层 UploadLimitLayer 替换为明确 JSON 错误）。所有上传路由统一走此配置。
     let upload_limit = config.upload_max_bytes();
@@ -103,10 +96,6 @@ pub fn router(config: crate::AppConfig, storage: Storage) -> axum::Router {
         .route("/book-assets/*rest", get(book_assets))
         .route("/epub/*rest", get(epub_asset))
         .route("/health", get(health))
-        // Kindle 轻量页（/simple/*：web-simple/ 纯静态——目录请求自动 index.html；
-        // /simple-web/* 为 legacy 路由别名，同一 handler）
-        .nest_service("/simple", simple_service.clone())
-        .nest_service("/simple-web", simple_service)
         // 弱网优化：响应压缩（gzip/brotli）
         // SSE 流式接口排除压缩: gzip 编码器缓冲 event-stream 致首事件延迟数十秒
         .layer(
@@ -24087,64 +24076,6 @@ mod tests {
             let resp = app.clone().oneshot(req(uri.into())).await.unwrap();
             assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{uri} 应拒绝");
         }
-        cleanup(state, dir).await;
-    }
-
-    /// P2：/simple-web/* 为 legacy 静态路由别名（YueduApi 静态目录）——
-    /// 与 /simple/* 挂同一 web-simple 目录（同 handler）
-    #[tokio::test]
-    async fn test_simple_web_alias_route() {
-        use tower::ServiceExt as _;
-        let (state, dir) = test_state("simpleweb").await;
-        let config = state.storage.config.clone();
-        let app = crate::api::router::router(config, state.storage.clone());
-        let req = |uri: String| {
-            axum::http::Request::builder()
-                .uri(uri)
-                .header("host", "srv.example:8080")
-                .body(Body::empty())
-                .unwrap()
-        };
-        // 轻量页资产（web-simple/）未入库：无资产时跳过，避免把「资产缺失」
-        // 误报成路由回归；路由注册本身由 /simple 前缀断言覆盖
-        let Ok(index) = std::fs::read_to_string("web-simple/index.html") else {
-            eprintln!("跳过：web-simple/ 静态资产不在仓库内");
-            return;
-        };
-
-        // ① 别名路由目录请求 → index.html
-        let resp = app
-            .clone()
-            .oneshot(req("/simple-web/".into()))
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
-            .await
-            .unwrap();
-        assert_eq!(
-            String::from_utf8_lossy(&body),
-            index,
-            "/simple-web/ 应与 /simple/ 同源返回 index.html"
-        );
-
-        // ② 具体文件同样可达
-        let js = std::fs::read_to_string("web-simple/zh.js").unwrap();
-        let resp = app
-            .clone()
-            .oneshot(req("/simple-web/zh.js".into()))
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
-            .await
-            .unwrap();
-        assert_eq!(String::from_utf8_lossy(&body), js);
-
-        // ③ /simple 原路径不受别名影响
-        let resp = app.oneshot(req("/simple/index.html".into())).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        crate::service::crawler::clear_cookie_storage();
         cleanup(state, dir).await;
     }
 
