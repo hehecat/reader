@@ -3982,6 +3982,7 @@ async fn toc_from_cached_chapters(
     book_url: &str,
     toc_url: &str,
     reason: &str,
+    shelf: Option<&crate::model::book::Book>,
 ) -> Option<Vec<crate::model::book_chapter::BookChapter>> {
     let cached = state
         .storage
@@ -4011,6 +4012,18 @@ async fn toc_from_cached_chapters(
         // (book_url, user_namespace)，这里若改填书页 book_url，就会与抓取路径写入的行
         // 并存出两条同 toc_url 的记录，而 get_toc_cache 只按 toc_url 查、命中哪条不定。
         let _ = state.storage.cache_toc(ns, toc_url, toc_url, &json).await;
+    }
+    // 顺手把书架上被残缺血洗过的章数往上修（如生产里《绍宋》停在 20 章而缓存有 400 章）：
+    // 只增不减——源站可能还有缓存里没有的新章；lastCheckError/lastCheckTime 一律不动，
+    // 因为这次确实没抓到源站，诊断信息要留着。
+    if let Some(b) = shelf {
+        if (chapters.len() as i64) > b.total_chapter_num {
+            let patch = serde_json::Map::from_iter([(
+                "totalChapterNum".to_string(),
+                json!(chapters.len() as i64),
+            )]);
+            let _ = state.storage.patch_book(ns, &b.book_url, &patch).await;
+        }
     }
     Some(chapters)
 }
@@ -4235,9 +4248,15 @@ async fn get_book_toc(
                         chapters.len()
                     )
                 };
-                if let Some(cached_toc) =
-                    toc_from_cached_chapters(&state, &namespace, &cache_book_url, &toc_url, &reason)
-                        .await
+                if let Some(cached_toc) = toc_from_cached_chapters(
+                    &state,
+                    &namespace,
+                    &cache_book_url,
+                    &toc_url,
+                    &reason,
+                    shelf_for_write.as_ref(),
+                )
+                .await
                 {
                     return Json(ReturnData::ok(
                         serde_json::to_value(cached_toc).unwrap_or(serde_json::Value::Null),
@@ -4299,6 +4318,7 @@ async fn get_book_toc(
                 &cache_book_url,
                 &toc_url,
                 &format!("{e:#}"),
+                shelf_for_write.as_ref(),
             )
             .await
             {
@@ -24741,6 +24761,8 @@ mod tests {
                     book_url: book_url.into(),
                     name: "绍宋".into(),
                     origin: src_url.into(),
+                    // 生产现状：上次残缺抓取把章数写成 20，而缓存有 400 章
+                    total_chapter_num: 2,
                     ..Default::default()
                 },
             )
@@ -24818,6 +24840,43 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(rows.0, 1, "同一 toc_url 只应有一条目录缓存");
+
+        // 书架上的章数只被往上修（2 → 3），不被兜底目录缩小
+        let shelf = state
+            .storage
+            .find_book("default", book_url)
+            .await
+            .unwrap()
+            .expect("书架书");
+        assert_eq!(shelf.total_chapter_num, 3, "残缺章数应被缓存章数修正");
+        // refresh=1 绕过 toc_cache 再走一次兜底，但缓存章数(3) < 书架章数(10) 时不许下调
+        let mut patch = serde_json::Map::new();
+        patch.insert("totalChapterNum".into(), serde_json::json!(10));
+        state
+            .storage
+            .patch_book("default", book_url, &patch)
+            .await
+            .unwrap();
+        let ret = get_book_toc(
+            AxumState(state.clone()),
+            Query(HashMap::from([
+                ("url".to_string(), book_url.to_string()),
+                ("tocUrl".to_string(), dead_toc.to_string()),
+                ("bookSource".to_string(), src_url.to_string()),
+                ("refresh".to_string(), "1".to_string()),
+            ])),
+            HeaderMap::new(),
+            None,
+        )
+        .await;
+        assert!(ret.0.is_success, "refresh=1 也应兜底成功");
+        let shelf = state
+            .storage
+            .find_book("default", book_url)
+            .await
+            .unwrap()
+            .expect("书架书");
+        assert_eq!(shelf.total_chapter_num, 10, "兜底目录不许下调书架章数");
 
         cleanup(state, dir).await;
     }
