@@ -658,6 +658,39 @@ pub fn build_messages(
     msgs
 }
 
+/// 打印一次调用的 token 账本。
+/// 网关（octopus）除了标准 `prompt_tokens/completion_tokens` 还会给
+/// `prompt_cache_hit_tokens`（或 anthropic 口径的 `cache_read_input_tokens`）与 `credit`，
+/// 这两个才是判断"前缀缓存有没有生效、这次到底多贵"的依据。
+fn log_usage(cfg: &AiConfig, usage: &Value) {
+    let get = |k: &str| usage.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+    let prompt = get("prompt_tokens");
+    let cached = get("prompt_cache_hit_tokens").max(get("cache_read_input_tokens"));
+    let completion = get("completion_tokens");
+    let thinking = get("completion_thinking_tokens");
+    let credit = usage
+        .get("credit")
+        .and_then(|v| v.as_f64())
+        .map(|c| format!("{c:.4}"))
+        .unwrap_or_else(|| "-".into());
+    let hit = if prompt > 0 {
+        format!("{:.0}%", cached as f64 * 100.0 / prompt as f64)
+    } else {
+        "-".into()
+    };
+    tracing::info!(
+        target: "ai_cost",
+        model = %cfg.model,
+        prompt_tokens = prompt,
+        cached_tokens = cached,
+        cache_hit_rate = %hit,
+        completion_tokens = completion,
+        thinking_tokens = thinking,
+        credit = %credit,
+        "AI 调用账本"
+    );
+}
+
 /// 单轮流式请求：返回 (累积正文, finish_reason)；正文增量已通过 `send` 转发
 async fn stream_round<F>(
     client: &reqwest::Client,
@@ -672,6 +705,11 @@ where
         "model": cfg.model,
         "messages": messages,
         "stream": true,
+        // 问答只要结论，不要推理过程：思考 token 既贵又会挤占 max_tokens 预算
+        // （实测 max_tokens=1 时 content 为空、reasoning_content 有值，直接触发 finish=length 续写）
+        "thinking": { "type": "disabled" },
+        // 让网关在流末尾带 usage，否则永远不知道这次花了多少 token、缓存命中多少
+        "stream_options": { "include_usage": true },
     });
     if cfg.max_tokens > 0 {
         body["max_tokens"] = json!(cfg.max_tokens);
@@ -719,6 +757,10 @@ where
             let Ok(v) = serde_json::from_str::<Value>(data) else {
                 continue;
             };
+            // usage 出现在流的最后一个 chunk（choices 为空数组），务必在取 choices[0] 之前读
+            if let Some(u) = v.get("usage").filter(|u| !u.is_null()) {
+                log_usage(cfg, u);
+            }
             let delta = &v["choices"][0]["delta"];
             if let Some(r) = delta.get("reasoning_content").and_then(|x| x.as_str()) {
                 thinking_chars += r.chars().count();
@@ -832,6 +874,9 @@ pub async fn chat_once(
         "messages": messages,
         "stream": false,
         "max_tokens": max_tokens,
+        // 结构化输出（关系图 JSON）要的是结果本身：思考过程既烧 token，
+        // 又容易把 max_tokens 预算吃光导致 content 为空
+        "thinking": { "type": "disabled" },
     });
     let resp = client
         .post(format!("{}/chat/completions", cfg.base_url))
@@ -848,6 +893,9 @@ pub async fn chat_once(
         );
     }
     let v: Value = resp.json().await?;
+    if let Some(u) = v.get("usage").filter(|u| !u.is_null()) {
+        log_usage(cfg, u);
+    }
     let content = v["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or_default()
