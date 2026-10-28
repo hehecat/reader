@@ -157,6 +157,8 @@ export const aiSettingsSchema = z.object({
   baseUrl: z.string(),
   model: z.string(),
   maxTokens: z.number(),
+  /** 思考档位: off / low / medium / high（开启会更慢更贵, 也更容易被预算截断） */
+  thinking: z.string().default("off"),
   keySet: z.boolean(),
 });
 export type AiSettings = z.infer<typeof aiSettingsSchema>;
@@ -172,6 +174,8 @@ export interface AiSettingsInput {
   apiKey: string;
   model: string;
   maxTokens: number;
+  /** off / low / medium / high */
+  thinking: string;
 }
 
 /** 保存端点/密钥/模型：服务端立即生效，无需重启 */
@@ -227,4 +231,42 @@ export async function generateAiGraph(input: AiGraphInput): Promise<AiGraphData>
   // 推理模型生成结构化图较慢(实测 20-30s, 偶发更久): 单独放宽到 180s, 避免默认超时误杀
   const data = await post<unknown>("/aiGraph", input, { timeout: 180_000 });
   return aiGraphSchema.parse(data).graph;
+}
+
+/** 设置页: 判定模型（Jev / EMRank）配置——端点与 chat 端点不同, 单独存 */
+export const jevSettingsSchema = z.object({
+  enabled: z.boolean(),
+  baseUrl: z.string(),
+  model: z.string(),
+  keySet: z.boolean(),
+});
+export type JevSettings = z.infer<typeof jevSettingsSchema>;
+
+export async function getJevSettings(): Promise<JevSettings> {
+  const data = await get<unknown>("/jevSettings");
+  return jevSettingsSchema.parse(data);
+}
+
+export interface JevSettingsInput {
+  baseUrl: string;
+  /** 空串 = 保留已保存的密钥 */
+  apiKey: string;
+  model: string;
+}
+
+export async function saveJevSettings(input: JevSettingsInput): Promise<void> {
+  await post<unknown>("/jevSettings", input);
+}
+
+/** 测试连接: 后端真发一次封闭式判定（state + questions），回显答案 */
+export interface JevTestResult {
+  ok: boolean;
+  latencyMs?: number;
+  /** 每个问题的答案, 如 { dead: { noul: 0.02 }, who: { choice: "zhaojiu" } } */
+  answers?: unknown;
+}
+
+export async function testJevEndpoint(input: JevSettingsInput): Promise<JevTestResult> {
+  const data = await post<unknown>("/jevTest", input);
+  return data as JevTestResult;
 }

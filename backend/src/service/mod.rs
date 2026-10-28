@@ -15,6 +15,7 @@ pub mod fs_rate;
 pub mod health;
 pub mod image_cache;
 pub mod imaging;
+pub mod jev;
 pub mod local_book;
 pub mod local_sync;
 pub mod login;

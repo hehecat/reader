@@ -2,7 +2,18 @@ import { CircleCheck, PlugZap } from "lucide-react";
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { Button, Input, SettingCard, SettingRow, toast } from "@/components/ui";
+import {
+  Button,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  SettingCard,
+  SettingRow,
+  toast,
+} from "@/components/ui";
 import { humanizeError } from "@/lib/errors";
 import {
   getAiSettings,
@@ -10,6 +21,14 @@ import {
   testAiEndpoint,
   type AiSettingsInput,
 } from "@/services/ai";
+
+/** 思考档位: 默认关闭(更快更省), 开启后思考 token 计入 max_tokens 预算 */
+const THINKING_OPTIONS = [
+  { id: "off", label: "关闭(默认)" },
+  { id: "low", label: "低" },
+  { id: "medium", label: "中" },
+  { id: "high", label: "高" },
+] as const;
 
 /**
  * 设置页「AI 阅读助手」卡：
@@ -30,6 +49,7 @@ export function AiSettingsCard() {
   const [apiKey, setApiKey] = React.useState("");
   const [model, setModel] = React.useState("deepseek-v4.1-flash");
   const [maxTokens, setMaxTokens] = React.useState(3500);
+  const [thinking, setThinking] = React.useState("off");
   const [testResult, setTestResult] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -39,10 +59,11 @@ export function AiSettingsCard() {
     setBaseUrl(data.baseUrl);
     setModel(data.model || "deepseek-v4.1-flash");
     setMaxTokens(data.maxTokens || 3500);
+    setThinking(data.thinking || "off");
     setApiKey("");
   }, [data]);
 
-  const input: AiSettingsInput = { baseUrl, apiKey, model, maxTokens };
+  const input: AiSettingsInput = { baseUrl, apiKey, model, maxTokens, thinking };
 
   const save = useMutation({
     mutationFn: () => saveAiSettings(input),
@@ -116,6 +137,27 @@ export function AiSettingsCard() {
           placeholder="deepseek-v4.1-flash"
           onChange={(event) => setModel(event.target.value)}
         />
+      </SettingRow>
+      <SettingRow
+        label="思考"
+        value={
+          thinking === "off"
+            ? "关得更快更省; 114 题实测开思考只多答对 3 个点, 总成本约 +75%"
+            : "思考 token 也算在最大输出里, 已自动抬到至少 3000"
+        }
+      >
+        <Select value={thinking} onValueChange={setThinking}>
+          <SelectTrigger size="sm" aria-label="思考档位" className="w-36">
+            <SelectValue placeholder="思考" />
+          </SelectTrigger>
+          <SelectContent>
+            {THINKING_OPTIONS.map((option) => (
+              <SelectItem key={option.id} value={option.id}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </SettingRow>
       <SettingRow
         label="最大输出 tokens"

@@ -121,6 +121,12 @@ pub fn router(config: crate::AppConfig, storage: Storage) -> axum::Router {
         )
         .route("/reader3/aiTest", post(ai_test))
         .route("/reader3/aiGraph", post(ai_graph))
+        // 判定模型(Jev/EMRank): 端点与 chat 端点不同, 配置单独存
+        .route(
+            "/reader3/jevSettings",
+            get(jev_settings_get).post(jev_settings_save),
+        )
+        .route("/reader3/jevTest", post(jev_test))
         .route("/reader3/saveOpdsSettings", post(save_opds_settings))
         .route(
             "/reader3/uploadLocalBook",
@@ -9553,6 +9559,7 @@ async fn ai_settings_get(
         "baseUrl": cfg.as_ref().map(|c| c.base_url.clone()).unwrap_or_default(),
         "model": cfg.as_ref().map(|c| c.model.clone()).unwrap_or_default(),
         "maxTokens": cfg.as_ref().map(|c| c.max_tokens).unwrap_or(3500),
+        "thinking": cfg.as_ref().map(|c| c.thinking_mode()).unwrap_or("off"),
         "keySet": cfg.is_some(),
     })))
 }
@@ -9615,11 +9622,23 @@ async fn ai_settings_save(
     } else {
         model
     };
+    // 思考档位: 只认 off/low/medium/high, 其余(含空串)按 off
+    let thinking = match param_of(&params, body_json.as_ref(), "thinking")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "low" | "medium" | "high" => param_of(&params, body_json.as_ref(), "thinking")
+            .trim()
+            .to_ascii_lowercase(),
+        _ => String::new(),
+    };
     let cfg = crate::service::ai::AiConfig {
         base_url,
         api_key,
         model,
         max_tokens,
+        thinking,
     };
     match crate::service::ai::save(&state.storage, cfg).await {
         Ok(()) => Json(ReturnData::ok(json!({ "saved": true }))),
@@ -9693,6 +9712,155 @@ async fn ai_test(
             })))
         }
         Err(e) => Json(ReturnData::err(format!("连接失败: {e}"))),
+    }
+}
+
+/// GET /reader3/jevSettings：判定模型(Jev/EMRank)端点配置（密钥只回是否已设置）
+async fn jev_settings_get(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Json<ReturnData> {
+    if let Err(ret) = require_ai_admin(&state, &params, &headers).await {
+        return Json(ret);
+    }
+    crate::service::jev::ensure_loaded(&state.storage).await;
+    let cfg = crate::service::jev::config();
+    Json(ReturnData::ok(json!({
+        "enabled": cfg.is_some(),
+        "baseUrl": cfg
+            .as_ref()
+            .map(|c| c.base_url.clone())
+            .unwrap_or_else(|| crate::service::jev::DEFAULT_BASE_URL.to_string()),
+        "model": cfg
+            .as_ref()
+            .map(|c| c.model.clone())
+            .unwrap_or_else(|| crate::service::jev::DEFAULT_MODEL.to_string()),
+        "keySet": cfg.is_some(),
+    })))
+}
+
+/// POST /reader3/jevSettings：保存判定模型端点/密钥/模型
+/// - baseUrl 传空串 = 清除配置
+/// - apiKey 传空串 = 保留原密钥
+async fn jev_settings_save(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Option<axum::body::Bytes>,
+) -> Json<ReturnData> {
+    if let Err(ret) = require_ai_admin(&state, &params, &headers).await {
+        return Json(ret);
+    }
+    crate::service::jev::ensure_loaded(&state.storage).await;
+    let body_json = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    let base_url = param_of(&params, body_json.as_ref(), "baseUrl")
+        .trim()
+        .trim_end_matches('/')
+        .to_string();
+    let api_key_in = param_of(&params, body_json.as_ref(), "apiKey")
+        .trim()
+        .to_string();
+    let model = param_of(&params, body_json.as_ref(), "model")
+        .trim()
+        .to_string();
+
+    if base_url.is_empty() {
+        if let Err(e) = crate::service::jev::clear(&state.storage).await {
+            return Json(ReturnData::err(format!("清除配置失败: {e}")));
+        }
+        return Json(ReturnData::ok(json!({ "cleared": true })));
+    }
+    if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
+        return Json(ReturnData::err("端点需以 http:// 或 https:// 开头"));
+    }
+    let existing = crate::service::jev::config();
+    let api_key = if api_key_in.is_empty() {
+        match existing {
+            Some(cfg) => cfg.api_key,
+            None => return Json(ReturnData::err("请填写 API Key")),
+        }
+    } else {
+        api_key_in
+    };
+    let model = if model.is_empty() {
+        crate::service::jev::DEFAULT_MODEL.to_string()
+    } else {
+        model
+    };
+    let cfg = crate::service::jev::JevConfig {
+        base_url,
+        api_key,
+        model,
+    };
+    match crate::service::jev::save(&state.storage, cfg).await {
+        Ok(()) => Json(ReturnData::ok(json!({ "saved": true }))),
+        Err(e) => Json(ReturnData::err(format!("保存失败: {e}"))),
+    }
+}
+
+/// POST /reader3/jevTest：真发一次封闭式判定（state + questions），验证端点/密钥/模型
+async fn jev_test(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Option<axum::body::Bytes>,
+) -> Json<ReturnData> {
+    if let Err(ret) = require_ai_admin(&state, &params, &headers).await {
+        return Json(ret);
+    }
+    crate::service::jev::ensure_loaded(&state.storage).await;
+    let body_json = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    let saved = crate::service::jev::config();
+    let base_in = param_of(&params, body_json.as_ref(), "baseUrl")
+        .trim()
+        .trim_end_matches('/')
+        .to_string();
+    let key_in = param_of(&params, body_json.as_ref(), "apiKey")
+        .trim()
+        .to_string();
+    let model_in = param_of(&params, body_json.as_ref(), "model")
+        .trim()
+        .to_string();
+    let base_url = if base_in.is_empty() {
+        saved
+            .as_ref()
+            .map(|c| c.base_url.clone())
+            .unwrap_or_default()
+    } else {
+        base_in
+    };
+    let api_key = if key_in.is_empty() {
+        saved
+            .as_ref()
+            .map(|c| c.api_key.clone())
+            .unwrap_or_default()
+    } else {
+        key_in
+    };
+    let model = if model_in.is_empty() {
+        saved
+            .as_ref()
+            .map(|c| c.model.clone())
+            .unwrap_or_else(|| crate::service::jev::DEFAULT_MODEL.to_string())
+    } else {
+        model_in
+    };
+    if base_url.is_empty() || api_key.is_empty() {
+        return Json(ReturnData::err("请先填写端点与 API Key"));
+    }
+    let cfg = crate::service::jev::JevConfig {
+        base_url,
+        api_key,
+        model,
+    };
+    match crate::service::jev::probe(&cfg).await {
+        Ok(probe) => Json(ReturnData::ok(json!({
+            "ok": true,
+            "latencyMs": probe.latency_ms,
+            "answers": probe.answers,
+        }))),
+        Err(e) => Json(ReturnData::err(format!("测试失败: {e}"))),
     }
 }
 

@@ -56,6 +56,57 @@ pub struct AiConfig {
     pub api_key: String,
     pub model: String,
     pub max_tokens: u64,
+    /// 思考档位: ""/"off"(默认) / "low" / "medium" / "high"
+    ///
+    /// 默认关闭: 思考 token 也算在 `max_tokens` 里, 给不够时 content 会被挤成空串
+    /// (`finish=length`)。114 题 gold 实测开启只值 +3 个点的准确率、总成本 +75%,
+    /// 所以默认 off, 想要更"肯想"的答案才由用户在设置页打开。
+    #[serde(default)]
+    pub thinking: String,
+}
+
+/// 开思考时 `max_tokens` 至少要给这么多: 否则预算被思考吃光, content 为空
+pub const THINKING_MIN_TOKENS: u64 = 3000;
+
+impl AiConfig {
+    /// 归一化档位: 未知值与空串都按 off 处理
+    pub fn thinking_mode(&self) -> &'static str {
+        match self.thinking.trim().to_ascii_lowercase().as_str() {
+            "low" => "low",
+            "medium" => "medium",
+            "high" => "high",
+            _ => "off",
+        }
+    }
+
+    /// 请求里要带的 `reasoning_effort`; off 时返回 None(改用 thinking=disabled)
+    fn thinking_effort(&self) -> Option<&'static str> {
+        match self.thinking_mode() {
+            "off" => None,
+            mode => Some(mode),
+        }
+    }
+
+    /// 实际输出预算: 开思考时给思考留够空间(0 = 不限制, 保持 0)
+    pub fn output_budget(&self, max_tokens: u64) -> u64 {
+        if self.thinking_effort().is_some() && max_tokens > 0 {
+            max_tokens.max(THINKING_MIN_TOKENS)
+        } else {
+            max_tokens
+        }
+    }
+
+    /// 给请求体加思考相关字段: off 显式关闭, 否则用 `reasoning_effort` 开档
+    fn apply_thinking(&self, body: &mut Value) {
+        match self.thinking_effort() {
+            Some(effort) => {
+                body["reasoning_effort"] = json!(effort);
+            }
+            None => {
+                body["thinking"] = json!({ "type": "disabled" });
+            }
+        }
+    }
 }
 
 /// 设置页保存的配置（存 system_settings 键 `ai_settings`），进程内缓存，保存即生效
@@ -154,11 +205,16 @@ fn env_config() -> Option<AiConfig> {
         .ok()
         .and_then(|s| s.trim().parse::<u64>().ok())
         .unwrap_or(3500); // 0 = 不限制(请求里省略 max_tokens)
+    let thinking = std::env::var("READER_AI_THINKING")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default(); // 空 = 关闭思考
     Some(AiConfig {
         base_url,
         api_key,
         model,
         max_tokens,
+        thinking,
     })
 }
 
@@ -720,14 +776,15 @@ where
         "model": cfg.model,
         "messages": messages,
         "stream": true,
-        // 问答只要结论，不要推理过程：思考 token 既贵又会挤占 max_tokens 预算
-        // （实测 max_tokens=1 时 content 为空、reasoning_content 有值，直接触发 finish=length 续写）
-        "thinking": { "type": "disabled" },
         // 让网关在流末尾带 usage，否则永远不知道这次花了多少 token、缓存命中多少
         "stream_options": { "include_usage": true },
     });
-    if cfg.max_tokens > 0 {
-        body["max_tokens"] = json!(cfg.max_tokens);
+    // 思考默认关闭: 思考 token 既贵又会挤占 max_tokens 预算
+    // (实测 max_tokens=1 时 content 为空、reasoning_content 有值, 直接触发 finish=length 续写)
+    cfg.apply_thinking(&mut body);
+    let budget = cfg.output_budget(cfg.max_tokens);
+    if budget > 0 {
+        body["max_tokens"] = json!(budget);
     }
     let resp = client
         .post(format!("{}/chat/completions", cfg.base_url))
@@ -863,8 +920,8 @@ pub async fn stream_chat(
     if !saw_any {
         let message = if finish == "length" {
             format!(
-                "模型在思考阶段用尽了输出预算(当前 max_tokens={})。\n请到「设置 → AI 阅读助手」调大最大输出 tokens(建议 4000+), 或设为 0 表示不限制。",
-                cfg.max_tokens
+                "模型在思考阶段用尽了输出预算(当前 max_tokens={})。\n请到「设置 → AI 阅读助手」调大最大输出 tokens(建议 4000+), 或把思考设为关闭, 或设为 0 表示不限制。",
+                cfg.output_budget(cfg.max_tokens)
             )
         } else {
             "模型没有返回内容, 请重试, 或在设置里更换模型。".to_string()
@@ -884,15 +941,15 @@ pub async fn chat_once(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .build()?;
-    let body = json!({
+    let mut body = json!({
         "model": cfg.model,
         "messages": messages,
         "stream": false,
-        "max_tokens": max_tokens,
+        "max_tokens": cfg.output_budget(max_tokens),
         // 结构化输出（关系图 JSON）要的是结果本身：思考过程既烧 token，
-        // 又容易把 max_tokens 预算吃光导致 content 为空
-        "thinking": { "type": "disabled" },
+        // 又容易把 max_tokens 预算吃光导致 content 为空（所以开了思考也要给足预算）
     });
+    cfg.apply_thinking(&mut body);
     let resp = client
         .post(format!("{}/chat/completions", cfg.base_url))
         .bearer_auth(&cfg.api_key)
@@ -1009,5 +1066,57 @@ mod tests {
             !kws.iter().any(|(kw, _)| kw == "一章"),
             "泛词不该进关键词: {kws:?}"
         );
+    }
+
+    fn cfg_with(thinking: &str, max_tokens: u64) -> AiConfig {
+        AiConfig {
+            base_url: "http://127.0.0.1:1/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "test-model".to_string(),
+            max_tokens,
+            thinking: thinking.to_string(),
+        }
+    }
+
+    #[test]
+    fn thinking_defaults_to_off_and_sends_disabled() {
+        let cfg = cfg_with("", 1200);
+        assert_eq!(cfg.thinking_mode(), "off");
+        assert_eq!(cfg.output_budget(1200), 1200, "关思考不额外加预算");
+        let mut body = serde_json::json!({});
+        cfg.apply_thinking(&mut body);
+        assert_eq!(body["thinking"]["type"], "disabled");
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn thinking_levels_set_effort_and_raise_budget() {
+        for level in ["low", "medium", "high"] {
+            let cfg = cfg_with(level, 1200);
+            assert_eq!(cfg.thinking_mode(), level);
+            // 预算被思考吃光时 content 会是空的, 所以开思考必须抬到下限以上
+            assert_eq!(cfg.output_budget(1200), THINKING_MIN_TOKENS);
+            assert_eq!(cfg.output_budget(8000), 8000, "已经够大就不动");
+            assert_eq!(cfg.output_budget(0), 0, "0 = 不限制, 保持不限制");
+            let mut body = serde_json::json!({});
+            cfg.apply_thinking(&mut body);
+            assert_eq!(body["reasoning_effort"], level);
+            assert!(body.get("thinking").is_none());
+        }
+    }
+
+    #[test]
+    fn unknown_thinking_value_falls_back_to_off() {
+        assert_eq!(cfg_with("LOW", 0).thinking_mode(), "low", "大小写不敏感");
+        assert_eq!(cfg_with("turbo", 0).thinking_mode(), "off");
+    }
+
+    #[test]
+    fn old_settings_json_without_thinking_still_loads() {
+        // 老版本保存的 ai_settings 没有 thinking 字段, 升级后必须还能读
+        let raw = r#"{"base_url":"http://x/v1","api_key":"k","model":"m","max_tokens":1200}"#;
+        let cfg: AiConfig = serde_json::from_str(raw).expect("旧配置应能反序列化");
+        assert_eq!(cfg.thinking_mode(), "off");
+        assert_eq!(cfg.max_tokens, 1200);
     }
 }
