@@ -2285,6 +2285,42 @@ impl Storage {
         Ok(rows)
     }
 
+    /// 已缓存章节的「下标 + 标题」（不带正文）——P0 按命名空间隔离。
+    /// 用途：目录离线兜底（源站不可达时用已缓存章节合成目录给阅读器）。
+    pub async fn list_cached_chapter_headers(
+        &self,
+        ns: &str,
+        book_url: &str,
+    ) -> Result<Vec<(i64, String)>> {
+        let rows = sqlx::query_as::<_, (i64, String)>(
+            "SELECT chapter_index, title FROM book_chapters WHERE book_url = ?1 AND user_namespace = ?2 ORDER BY chapter_index",
+        )
+        .bind(book_url)
+        .bind(ns)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// 形如 `{prefix}*` 的候选 URL（= book_vars_cache 的键）——目录离线兜底的 URL 复原用。
+    /// 书源书的 `book_chapters.chapter_index` 是 chapterUrl 的 md5 哈希（不可逆），只有 URL
+    /// 原文能重算哈希；而 analyze_toc/analyze_content 都会按章节 URL 写一行变量缓存，
+    /// 所以这是全库唯一存着章节 URL 原文的地方。prefix 中的 LIKE 通配符按字面量转义。
+    pub async fn list_urls_under_prefix(&self, ns: &str, prefix: &str) -> Result<Vec<String>> {
+        let escaped = prefix
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let rows = sqlx::query_scalar::<_, String>(
+            "SELECT url FROM book_vars_cache WHERE user_namespace = ?1 AND url LIKE ?2 ESCAPE '\\'",
+        )
+        .bind(ns)
+        .bind(format!("{escaped}%"))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// 命名空间内某书章节行数（saveBookProgress 越界校验用——ns 安全）
     pub async fn count_book_chapters(&self, ns: &str, book_url: &str) -> Result<i64> {
         let r: (i64,) = sqlx::query_as(

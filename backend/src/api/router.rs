@@ -3874,6 +3874,145 @@ async fn get_book_info(
     }
 }
 
+/// 目录离线兜底：已缓存章节 → 目录数组（纯函数，无 IO）
+///
+/// `cached`：(chapter_index, title) 来自 `book_chapters`——书源书的 chapter_index 是
+/// chapterUrl 的 md5 哈希（[`crate::util::md5::chapter_url_hash`]），顺序信息为零；
+/// `candidate_urls`：本书候选章节 URL（`book_vars_cache` 的键）。哈希不可逆，只能靠
+/// URL 原文重算，命中即复原 url——有 url 前端才能让 getBookContent 命中正文缓存
+/// （正文缓存同样按 md5(chapterUrl) 建键），否则目录能看却打不开正文。
+///
+/// 排序：优先按 URL 末段数字 id（正文页 id 单调递增 = 阅读顺序，还能把「卷末总结」
+/// 这类无章号条目排回正确位置）；id 缺失、或与章号顺序冲突（别的源 id 不单调）时
+/// 退回「第N章 升序，无章号置尾」。`index` 统一重编号为 0..n（目录 0 基，
+/// 前端进度/未读按此计算）。
+fn synthesize_toc_from_cache(
+    cached: &[(i64, String)],
+    candidate_urls: &[String],
+) -> Vec<crate::model::book_chapter::BookChapter> {
+    struct Row {
+        hash: i64,
+        title: String,
+        url: String,
+        /// 「第N章」里的 N（无章号的卷末总结等为 None）
+        num: Option<i64>,
+        /// URL 末段数字 id（阅读顺序的候选依据）
+        id: Option<i64>,
+    }
+    if cached.is_empty() {
+        return Vec::new();
+    }
+    let url_by_hash: HashMap<i64, &str> = candidate_urls
+        .iter()
+        .map(|u| (crate::util::md5::chapter_url_hash(u), u.as_str()))
+        .collect();
+    let mut rows: Vec<Row> = cached
+        .iter()
+        .map(|(hash, title)| {
+            let url = url_by_hash
+                .get(hash)
+                .map(|u| (*u).to_string())
+                .unwrap_or_default();
+            Row {
+                hash: *hash,
+                num: chapter_num_of(title),
+                id: url_tail_id(&url),
+                url,
+                title: title.clone(),
+            }
+        })
+        .collect();
+    // URL id 序可信的条件：全部都能取出 id，且按 id 排序后章号不倒退
+    let id_order_usable = rows.iter().all(|r| r.id.is_some()) && {
+        let mut by_id: Vec<&Row> = rows.iter().collect();
+        by_id.sort_by_key(|r| r.id);
+        by_id
+            .iter()
+            .filter_map(|r| r.num)
+            .collect::<Vec<i64>>()
+            .windows(2)
+            .all(|w| w[0] <= w[1])
+    };
+    if id_order_usable {
+        rows.sort_by(|a, b| a.id.cmp(&b.id).then(a.hash.cmp(&b.hash)));
+    } else {
+        rows.sort_by(|a, b| {
+            a.num
+                .unwrap_or(i64::MAX)
+                .cmp(&b.num.unwrap_or(i64::MAX))
+                .then(a.hash.cmp(&b.hash))
+        });
+    }
+    rows.into_iter()
+        .enumerate()
+        .map(|(i, r)| crate::model::book_chapter::BookChapter {
+            title: r.title,
+            url: r.url,
+            tag: None,
+            is_volume: false,
+            index: i as i64,
+        })
+        .collect()
+}
+
+/// 「第123章 xxx」→ 123；无阿拉伯数字章号 → None（中文数字与卷末总结一律不猜）
+fn chapter_num_of(title: &str) -> Option<i64> {
+    let rest = title.trim_start().strip_prefix('第')?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
+/// URL 末段纯数字 id（`.../14763102.html` → 14763102）；非纯数字/取不到 → None
+fn url_tail_id(url: &str) -> Option<i64> {
+    let path = url.split(['?', '#']).next().unwrap_or("");
+    let seg = path.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+    let stem = seg.split('.').next().unwrap_or("");
+    if stem.is_empty() || !stem.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    stem.parse().ok()
+}
+
+/// 抓取失败 / 空目录 / 质量门判残缺时的本地兜底：用 book_chapters 已缓存章节合成目录，
+/// 并写入 toc_cache（下次打开不再重复等抓取超时，也省掉一次 CF 质询等待）。
+/// 返回 None = 本地没有可用缓存章节——调用方保留原有错误语义（不吞异常）。
+async fn toc_from_cached_chapters(
+    state: &AppState,
+    ns: &str,
+    book_url: &str,
+    toc_url: &str,
+    reason: &str,
+) -> Option<Vec<crate::model::book_chapter::BookChapter>> {
+    let cached = state
+        .storage
+        .list_cached_chapter_headers(ns, book_url)
+        .await
+        .ok()?;
+    if cached.is_empty() {
+        return None;
+    }
+    // 正文缓存键是 md5(chapterUrl)，URL 原文只能从变量缓存捞（见 list_urls_under_prefix）
+    let urls = state
+        .storage
+        .list_urls_under_prefix(ns, book_url)
+        .await
+        .unwrap_or_default();
+    let chapters = synthesize_toc_from_cache(&cached, &urls);
+    if chapters.is_empty() {
+        return None;
+    }
+    let with_url = chapters.iter().filter(|c| !c.url.is_empty()).count();
+    tracing::warn!(
+        "目录抓取失败({reason})，回落到 {} 章本地缓存（{with_url} 章复原了章节 URL）[{book_url}]",
+        chapters.len()
+    );
+    if let Ok(json) = serde_json::to_string(&chapters) {
+        // book_url 也写进 toc_cache 的行键，书架刷新按 book_url 失效时能命中
+        let _ = state.storage.cache_toc(ns, book_url, toc_url, &json).await;
+    }
+    Some(chapters)
+}
+
 /// POST/GET /reader3/getBookToc（= /reader3/getChapterList）：章节目录（ruleToc）
 /// 错误文案对齐 legacy getChapterList：请输入书籍链接 / 未配置书源 / 本地书籍源文件不存在
 async fn get_book_toc(
@@ -4035,6 +4174,14 @@ async fn get_book_toc(
         .await
         .ok()
         .flatten();
+    // 目录离线兜底的缓存键：书架 book_url 就是 book_chapters 的键
+    // （正文缓存由 getBookContent 用客户端 bookUrl = 书架 book_url 写入）
+    let cache_book_url = shelf_for_write
+        .as_ref()
+        .map(|b| b.book_url.clone())
+        .filter(|u| !u.is_empty())
+        .or_else(|| (!url_param.is_empty()).then(|| url_param.clone()))
+        .unwrap_or_else(|| toc_url.clone());
     match crate::service::book::analyze_toc(
         &namespace,
         &toc_url,
@@ -4073,6 +4220,27 @@ async fn get_book_toc(
                     "目录疑似残缺({} 章 vs 书架 {prev_total} / 已缓存 {cached_chapters}), 跳过缓存与章数回写 [{toc_url}]",
                     chapters.len(),
                 );
+            }
+            // 空目录 / 质量门判残缺 → 本地缓存目录兜底：
+            // 源站被 CF 拦或翻页提前终止时，book_chapters 里的已缓存章节往往比这次抓到的
+            // 更完整；此时返回合成的完整目录，也别用残缺结果覆盖缓存与章数。
+            if chapters.is_empty() || looks_partial {
+                let reason = if chapters.is_empty() {
+                    "空目录".to_string()
+                } else {
+                    format!(
+                        "残缺 {} 章 vs 书架 {prev_total} / 已缓存 {cached_chapters}",
+                        chapters.len()
+                    )
+                };
+                if let Some(cached_toc) =
+                    toc_from_cached_chapters(&state, &namespace, &cache_book_url, &toc_url, &reason)
+                        .await
+                {
+                    return Json(ReturnData::ok(
+                        serde_json::to_value(cached_toc).unwrap_or(serde_json::Value::Null),
+                    ));
+                }
             }
             // F-10：抓取成功后缓存目录（book_url 未知时以 toc_url 为键）;
             // 空目录不缓存——源瞬时故障的空结果若入库(默认 24h TTL)会毒化阅读器直到手动刷新
@@ -4121,6 +4289,21 @@ async fn get_book_toc(
                     .await;
             }
             tracing::error!("getBookToc 失败 [{toc_url}]: {e}");
+            // 离线兜底：源站不可达（超时 / CF 质询解不出）时用已缓存正文合成目录，
+            // 否则阅读页只能死等抓取预算再拿到一个错误，连目录都打不开。
+            if let Some(cached_toc) = toc_from_cached_chapters(
+                &state,
+                &namespace,
+                &cache_book_url,
+                &toc_url,
+                &format!("{e:#}"),
+            )
+            .await
+            {
+                return Json(ReturnData::ok(
+                    serde_json::to_value(cached_toc).unwrap_or(serde_json::Value::Null),
+                ));
+            }
             Json(ReturnData::err("获取目录失败"))
         }
     }
@@ -24451,5 +24634,181 @@ mod tests {
         // find_ascii_ci：大小写不敏感且偏移正确
         assert_eq!(find_ascii_ci("ab</Body>cd", "</body>"), Some(2));
         assert_eq!(find_ascii_ci("abc", "xyz"), None);
+    }
+
+    /// 目录离线兜底：已缓存章节合成目录（纯函数——顺序 / url 复原 / 空缓存不合成）
+    #[test]
+    fn test_synthesize_toc_from_cache() {
+        let u = |id: i64| format!("https://s.com/book/1/{id}.html");
+        // 生产形态：chapter_index = md5(chapterUrl) 哈希（无序），标题带「第N章」
+        let rows = vec![
+            (
+                crate::util::md5::chapter_url_hash(&u(30)),
+                "第2章 乙".to_string(),
+            ),
+            (
+                crate::util::md5::chapter_url_hash(&u(10)),
+                "第1章 甲".to_string(),
+            ),
+            (
+                crate::util::md5::chapter_url_hash(&u(20)),
+                "第一卷总结".to_string(),
+            ),
+            (
+                crate::util::md5::chapter_url_hash(&u(40)),
+                "第3章 丙".to_string(),
+            ),
+        ];
+        let urls: Vec<String> = [10, 20, 30, 40].iter().map(|i| u(*i)).collect();
+
+        // 有 url：按 URL 末段 id 排（= 阅读顺序，含无章号的卷末总结）
+        let toc = synthesize_toc_from_cache(&rows, &urls);
+        let titles: Vec<&str> = toc.iter().map(|c| c.title.as_str()).collect();
+        assert_eq!(titles, ["第1章 甲", "第一卷总结", "第2章 乙", "第3章 丙"]);
+        // index 重编号为 0 基连续
+        let indexes: Vec<i64> = toc.iter().map(|c| c.index).collect();
+        assert_eq!(indexes, [0, 1, 2, 3]);
+        // url 复原（前端据此命中 md5 键的正文缓存），非卷标题
+        assert_eq!(toc[0].url, u(10));
+        assert_eq!(toc[3].url, u(40));
+        assert!(toc.iter().all(|c| !c.is_volume));
+
+        // 无 url：退回章号序 + 无章号置尾（不知道位置就不猜位置），url 留空
+        let toc = synthesize_toc_from_cache(&rows, &[]);
+        let titles: Vec<&str> = toc.iter().map(|c| c.title.as_str()).collect();
+        assert_eq!(titles, ["第1章 甲", "第2章 乙", "第3章 丙", "第一卷总结"]);
+        assert!(toc.iter().all(|c| c.url.is_empty()));
+
+        // url id 与章号顺序冲突（别的源 id 非单调）→ 不信任 id 序，退回章号序
+        let rows = vec![
+            (
+                crate::util::md5::chapter_url_hash(&u(100)),
+                "第2章 乙".to_string(),
+            ),
+            (
+                crate::util::md5::chapter_url_hash(&u(200)),
+                "第1章 甲".to_string(),
+            ),
+        ];
+        let toc = synthesize_toc_from_cache(&rows, &[u(100), u(200)]);
+        let titles: Vec<&str> = toc.iter().map(|c| c.title.as_str()).collect();
+        assert_eq!(titles, ["第1章 甲", "第2章 乙"]);
+        assert_eq!(toc[0].url, u(200));
+
+        // 无缓存章节 → 空目录（调用方据此保留错误语义，不吞异常）
+        assert!(synthesize_toc_from_cache(&[], &urls).is_empty());
+
+        // 章号/N 解析边界：「第N章」仅认阿拉伯数字，「第 12 章」这类带空格与中文数字不猜
+        assert_eq!(chapter_num_of("第12章 风起"), Some(12));
+        assert_eq!(chapter_num_of("  第7章 丙"), Some(7));
+        assert_eq!(chapter_num_of("第二卷总结"), None);
+        assert_eq!(chapter_num_of("正文 第3章"), None);
+        assert_eq!(
+            url_tail_id("https://s.com/book/1/14763102.html"),
+            Some(14763102)
+        );
+        assert_eq!(url_tail_id("https://s.com/book/1/chapter-3.html"), None);
+        assert_eq!(url_tail_id(""), None);
+    }
+
+    /// 目录离线兜底端到端：源站不可达 + 有缓存章节 → 合成目录并落 toc_cache；
+    /// 无缓存 → 仍然报错（不吞异常）
+    #[tokio::test]
+    async fn test_get_book_toc_offline_fallback() {
+        let (state, dir) = test_state("tocfallback").await;
+        let book_url = "https://dead.src/book/1/";
+        let src_url = "https://dead.src";
+        state
+            .storage
+            .save_book_source(
+                "default",
+                &crate::model::BookSource {
+                    book_source_url: src_url.into(),
+                    book_source_name: "死源".into(),
+                    rule_toc: Some(serde_json::json!({ "chapterList": "ul li a@href" })),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        state
+            .storage
+            .upsert_book(
+                "default",
+                &crate::model::book::Book {
+                    book_url: book_url.into(),
+                    name: "绍宋".into(),
+                    origin: src_url.into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        // 已缓存 3 章正文 + 变量缓存里的章节 URL（正文缓存键 = md5(chapterUrl)）
+        let url = |id: i64| format!("{book_url}{id}.html");
+        for (id, title) in [(10, "第1章 甲"), (20, "第2章 乙"), (40, "第3章 丙")] {
+            let u = url(id);
+            state
+                .storage
+                .cache_chapter_content(
+                    "default",
+                    book_url,
+                    crate::util::md5::chapter_url_hash(&u),
+                    title,
+                    "正文",
+                )
+                .await
+                .unwrap();
+            state
+                .storage
+                .put_book_vars_cache("default", src_url, &u, "{}")
+                .await
+                .unwrap();
+        }
+        // 目录端点不可达（127.0.0.1:1 连接被拒 → analyze_toc 立刻失败）
+        let dead_toc = "http://127.0.0.1:1/toc";
+        let q = |book: &str| {
+            Query(HashMap::from([
+                ("url".to_string(), book.to_string()),
+                ("tocUrl".to_string(), dead_toc.to_string()),
+                ("bookSource".to_string(), src_url.to_string()),
+            ]))
+        };
+        // 前置断言：无缓存的书仍然按原语义报错（兜底不吞异常）
+        let ret = get_book_toc(
+            AxumState(state.clone()),
+            q("https://dead.src/book/2/"),
+            HeaderMap::new(),
+            None,
+        )
+        .await;
+        assert!(!ret.0.is_success, "无缓存章节应保持报错语义");
+
+        // 有缓存 → 合成目录（顺序/url 正确）
+        let ret = get_book_toc(
+            AxumState(state.clone()),
+            q(book_url),
+            HeaderMap::new(),
+            None,
+        )
+        .await;
+        assert!(ret.0.is_success, "有缓存应兜底成功: {}", ret.0.error_msg);
+        let arr = ret.0.data.as_array().expect("章节数组");
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0]["title"], serde_json::json!("第1章 甲"));
+        assert_eq!(arr[0]["index"], serde_json::json!(0));
+        assert_eq!(arr[1]["url"], serde_json::json!(url(20)), "url 应复原");
+        assert_eq!(arr[2]["title"], serde_json::json!("第3章 丙"));
+
+        // 合成目录写入 toc_cache：下次打开直接命中，不再等抓取超时
+        let cached = state
+            .storage
+            .get_toc_cache("default", dead_toc, toc_cache_ttl_ms())
+            .await
+            .unwrap();
+        let cached = cached.expect("兜底目录应写入 toc_cache");
+        assert!(cached.contains("第2章 乙"));
+
+        cleanup(state, dir).await;
     }
 }
