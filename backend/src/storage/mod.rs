@@ -5293,7 +5293,7 @@ fn write_zip_entry(
 /// 「prev 有 400 章、这次只解析出 50 章」会被 `parsed >= 0` 放行。
 /// `prev = 0` 的新书没有已知总数，先信任解析结果（交给缓存与阅读器的下界去纠正），
 /// 但 `parsed = 0` 永远不可信。
-fn plausible_chapter_total(parsed: i64, prev: i64, cached: i64) -> bool {
+pub(crate) fn plausible_chapter_total(parsed: i64, prev: i64, cached: i64) -> bool {
     parsed > 0 && (parsed >= prev || (cached > 0 && parsed >= cached))
 }
 

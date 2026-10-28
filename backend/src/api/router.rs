@@ -4053,12 +4053,25 @@ async fn get_book_toc(
             // 质量门：残缺目录（章数少于已知总数）既不入缓存也不回写章数。
             // 多页目录若翻页提前终止（末页 next 解析为空/源站结构变化）会少若干章，
             // 一旦入库(24h TTL)就会永久毒化阅读器, 表现为"读到倒数第二章即提示已是最后一章"。
-            let looks_partial = prev_total > 0 && (chapters.len() as i64) < prev_total;
+            // 与夜间书架更新共用同一判据（storage::plausible_chapter_total）：
+            // 只看 prev 会漏掉"prev 已被残缺血洗过"的情况，这里把已缓存章数也当下界。
+            let cached_chapters = match shelf_for_write.as_ref() {
+                Some(b) => state
+                    .storage
+                    .count_book_chapters(&namespace, &b.book_url)
+                    .await
+                    .unwrap_or(0),
+                None => 0,
+            };
+            let looks_partial = !crate::storage::plausible_chapter_total(
+                chapters.len() as i64,
+                prev_total,
+                cached_chapters,
+            );
             if looks_partial {
                 tracing::warn!(
-                    "目录疑似残缺({}/{}), 跳过缓存与章数回写 [{toc_url}]",
+                    "目录疑似残缺({} 章 vs 书架 {prev_total} / 已缓存 {cached_chapters}), 跳过缓存与章数回写 [{toc_url}]",
                     chapters.len(),
-                    prev_total
                 );
             }
             // F-10：抓取成功后缓存目录（book_url 未知时以 toc_url 为键）;
