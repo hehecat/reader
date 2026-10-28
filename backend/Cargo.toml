@@ -89,6 +89,7 @@ serde_stacker = "0.1"
 tao = { version = "0.30", optional = true }
 wry = { version = "0.46", optional = true }
 tray-icon = { version = "0.19", optional = true }
+jieba-rs = "0.11"
 
 [features]
 gui = ["dep:tao", "dep:wry", "dep:tray-icon"]

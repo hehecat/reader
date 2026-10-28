@@ -9570,12 +9570,35 @@ async fn ai_chat(
                 .collect()
         })
         .unwrap_or_default();
+    // 读者进度进 system：追问（"他为什么这么做"）没有这个锚点就只能靠猜
+    let total_chapters = titles.len();
+    let reading = if current_title.trim().is_empty() {
+        None
+    } else {
+        let pos = titles
+            .iter()
+            .position(|t| t == &current_title)
+            .map(|i| i + 1);
+        let mut line = format!("读者进度：正在读「{current_title}」");
+        if let Some(p) = pos {
+            if total_chapters > 0 {
+                line.push_str(&format!("（全书第 {p}/{total_chapters} 章）"));
+            }
+        }
+        line.push_str(&format!(
+            "，本书已缓存 {} 章正文。",
+            retrieval.cached_chapters
+        ));
+        Some(line)
+    };
     let messages = crate::service::ai::build_messages(
         &book_name,
         &question,
         &snippets,
         retrieval.cached_chapters,
         &history,
+        reading.as_deref(),
+        total_chapters,
     );
 
     let (tx, rx) =
