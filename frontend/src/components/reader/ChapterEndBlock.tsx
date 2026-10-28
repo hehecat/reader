@@ -1,8 +1,8 @@
-import { ChevronLeft, ChevronRight, RotateCw } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import * as React from "react";
 import { useSearchParams } from "react-router-dom";
 
-import { Button, Switch, toast } from "@/components/ui";
+import { Button, toast } from "@/components/ui";
 import { startCacheBookStream } from "@/services/cache";
 import { useSettingsStore } from "@/stores/settings-store";
 
@@ -18,10 +18,6 @@ export interface ChapterEndBlockProps {
   nextTitle: string | null;
   onPrevChapter: () => void;
   onNextChapter: () => void;
-  /** 绕过服务端正文缓存重新抓取本章 (可选: 未接时章末不显示入口) */
-  onReload?: () => void;
-  /** 重新抓取进行中 */
-  isReloading?: boolean;
 }
 
 /**
@@ -50,9 +46,10 @@ function ChapterEndMarker({ nextTitle }: { nextTitle: string | null }) {
 }
 
 /**
- * 章末块 (滚动模式的正文末尾 / 翻页模式的最后一页): 章末标记 → 上一章/下一章导航 → 章末自动预热开关.
- * 预热开启时章末块滚入视口即静默启动一次整书后台缓存 (cacheBookSSE, 按书去重),
- * 进度可在目录抽屉附着查看; 本地书没有缓存语义, 不显示开关.
+ * 章末块 (滚动模式的正文末尾 / 翻页模式的最后一页): 章末标记 → 上一章/下一章导航.
+ * 章末滚入视口且设置里开着「章末自动预热」时静默启动一次整书后台缓存 (cacheBookSSE, 按书去重),
+ * 进度可在目录抽屉附着查看; 开关只在设置页, 章末不再重复放一个开关.
+ * 「重新拉取本章」入口在目录抽屉底部, 章末只留最朴素的分隔与翻页.
  */
 export function ChapterEndBlock({
   index,
@@ -60,19 +57,13 @@ export function ChapterEndBlock({
   nextTitle,
   onPrevChapter,
   onNextChapter,
-  onReload,
-  isReloading = false,
 }: ChapterEndBlockProps) {
   // 书链接取自阅读页路由参数 (章末块由 Virtuoso context 透传, 不走 props 链)
   const [searchParams] = useSearchParams();
   const bookUrl = searchParams.get("url") ?? "";
   const isLocal = bookUrl === "" || bookUrl.startsWith("local://");
 
-  const preheat = useSettingsStore((state) => state.preheatOnChapterEnd);
-  const setPreheat = useSettingsStore((state) => state.setPreheatOnChapterEnd);
-
   const footerRef = React.useRef<HTMLElement | null>(null);
-  const visibleRef = React.useRef(false);
   const closeStreamRef = React.useRef<(() => void) | null>(null);
 
   const tryPreheat = React.useCallback(() => {
@@ -104,9 +95,10 @@ export function ChapterEndBlock({
     }
     const observer = new IntersectionObserver(
       (entries) => {
-        visibleRef.current = entries.some((entry) => entry.isIntersecting);
-        if (visibleRef.current && useSettingsStore.getState().preheatOnChapterEnd) {
-          tryPreheat();
+        if (entries.some((entry) => entry.isIntersecting)) {
+          if (useSettingsStore.getState().preheatOnChapterEnd) {
+            tryPreheat();
+          }
         }
       },
       { threshold: 0.1 },
@@ -117,17 +109,6 @@ export function ChapterEndBlock({
 
   // 卸载 (切章/离开阅读页) 只断本地进度流, 服务端缓存任务继续
   React.useEffect(() => () => closeStreamRef.current?.(), []);
-
-  const handlePreheatChange = React.useCallback(
-    (on: boolean) => {
-      setPreheat(on);
-      // 已经停在章末时打开开关: 立即可见即触发, 不等下一次滚动
-      if (on && visibleRef.current) {
-        tryPreheat();
-      }
-    },
-    [setPreheat, tryPreheat],
-  );
 
   return (
     <footer ref={footerRef} className="break-inside-avoid px-5 pt-10 pb-16">
@@ -159,38 +140,6 @@ export function ChapterEndBlock({
         </Button>
       </nav>
 
-      {/* 不抢眼的兜底入口: 章末已显示正文时也能绕过缓存重新抓取 (缓存了防盗页/源站修正) */}
-      {onReload === undefined ? null : (
-        <div className="mt-3 flex justify-center">
-          <Button
-            variant="ghost"
-            size="sm"
-            loading={isReloading}
-            onClick={onReload}
-            className="text-xs text-muted-foreground"
-          >
-            <RotateCw aria-hidden />
-            重新拉取本章
-          </Button>
-        </div>
-      )}
-
-      {isLocal ? null : (
-        <div className="mt-6 flex items-center justify-between gap-3 rounded-xl border border-border bg-surface px-4 py-3">
-          <div className="min-w-0">
-            <p className="text-sm font-medium">章末自动预热</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              读到章末自动后台缓存后续章节, 源站失效后仍可读
-            </p>
-          </div>
-          <Switch
-            className="shrink-0"
-            checked={preheat}
-            onCheckedChange={handlePreheatChange}
-            aria-label="章末自动预热"
-          />
-        </div>
-      )}
     </footer>
   );
 }

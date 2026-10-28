@@ -14,6 +14,7 @@ import {
   DrawerHeader,
   DrawerTitle,
   Input,
+  Spinner,
   Switch,
   cn,
   toast,
@@ -97,6 +98,10 @@ export interface TocDrawerProps {
   onRefreshToc?: () => void;
   /** 目录重取进行中 */
   refreshingToc?: boolean;
+  /** 重新拉取当前章正文(跳过服务端永久缓存); 传了才显示「重新拉取本章」 */
+  onReloadChapter?: () => void;
+  /** 重新拉取进行中 */
+  reloadingChapter?: boolean;
   /** 打开换源面板(本地书不传): 本章出问题时从目录直接换源 */
   onSwitchSource?: () => void;
 }
@@ -116,6 +121,8 @@ export function TocDrawer({
   totalChapterNum,
   onRefreshToc,
   refreshingToc = false,
+  onReloadChapter,
+  reloadingChapter = false,
 }: TocDrawerProps) {
   const ordered = React.useMemo(
     () => (reversed ? [...chapters].reverse() : chapters),
@@ -441,28 +448,59 @@ export function TocDrawer({
             </div>
           )}
         </DrawerBody>
-        <DrawerFooter className="justify-between">
-          {onRefreshToc !== undefined ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              loading={refreshingToc}
-              onClick={onRefreshToc}
-              aria-label="刷新目录"
-            >
-              <RotateCw aria-hidden />
-              刷新目录
-            </Button>
-          ) : null}
-          {onSwitchSource !== undefined && !isLocal ? (
-            <Button size="sm" variant="ghost" onClick={onSwitchSource} aria-label="换源">
-              <ArrowLeftRight aria-hidden />
-              换源
-            </Button>
-          ) : (
-            <span className="text-sm text-muted-foreground">倒序目录</span>
-          )}
-          <Switch checked={reversed} onCheckedChange={onToggleReversed} aria-label="倒序目录" />
+        <DrawerFooter className="flex-col items-stretch gap-2">
+          {/* 章级操作靠左挤一行, 目录/正文缓存出问题都在这里救; 倒序是全局偏好, 单独一行 */}
+          <div className="flex flex-wrap items-center gap-1">
+            {onReloadChapter !== undefined ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={reloadingChapter}
+                aria-busy={reloadingChapter || undefined}
+                onClick={onReloadChapter}
+                aria-label="重新拉取本章"
+                className="px-2 text-xs whitespace-nowrap"
+              >
+                {/* 加载态原地换成转圈: 不用 Button 的 loading(它会另插一个 spinner, 图标变两个把这一行挤断) */}
+                {reloadingChapter ? (
+                  <Spinner size="sm" className="size-4" />
+                ) : (
+                  <RotateCw aria-hidden />
+                )}
+                重新拉取本章
+              </Button>
+            ) : null}
+            {onRefreshToc !== undefined ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={refreshingToc}
+                aria-busy={refreshingToc || undefined}
+                onClick={onRefreshToc}
+                aria-label="刷新目录"
+                className="px-2 text-xs whitespace-nowrap"
+              >
+                {refreshingToc ? <Spinner size="sm" className="size-4" /> : <RotateCw aria-hidden />}
+                刷新目录
+              </Button>
+            ) : null}
+            {onSwitchSource !== undefined && !isLocal ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={onSwitchSource}
+                aria-label="换源"
+                className="px-2 text-xs whitespace-nowrap"
+              >
+                <ArrowLeftRight aria-hidden />
+                换源
+              </Button>
+            ) : null}
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-muted-foreground">倒序目录</span>
+            <Switch checked={reversed} onCheckedChange={onToggleReversed} aria-label="倒序目录" />
+          </div>
         </DrawerFooter>
       </DrawerContent>
     </Drawer>

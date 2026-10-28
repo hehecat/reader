@@ -479,16 +479,12 @@ export default function ReaderPage() {
       nextTitle: chapters[progress.index + 1]?.title ?? null,
       onPrevChapter: handlePrevChapter,
       onNextChapter: handleNextChapter,
-      onReload: handleReloadChapter,
-      isReloading: content.isReloading,
     }),
     [
       progress.index,
       chapters,
       handlePrevChapter,
       handleNextChapter,
-      handleReloadChapter,
-      content.isReloading,
     ],
   );
 
@@ -734,6 +730,8 @@ export default function ReaderPage() {
         chapters={chapters}
         currentIndex={progress.index}
         totalChapterNum={shelfBook?.totalChapterNum ?? book?.totalChapterNum}
+        onReloadChapter={handleReloadChapter}
+        reloadingChapter={content.isReloading}
         refreshingToc={tocRefreshing}
         onRefreshToc={() => {
           void refreshChapters();
