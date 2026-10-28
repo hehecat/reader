@@ -99,6 +99,10 @@ export interface TocDrawerProps {
   onRefreshToc?: () => void;
   /** 目录重取进行中 */
   refreshingToc?: boolean;
+  /** 目录加载/刷新失败的**原始**错误文案: 有值时列表位置换成错误态 + 「重试」, 不留死界面 */
+  tocError?: string;
+  /** 目录首次加载中 (列表还没数据): 显示「目录加载中」而不是空列表 */
+  tocLoading?: boolean;
   /** 重新拉取当前章正文(跳过服务端永久缓存); 传了才显示「重新拉取本章」 */
   onReloadChapter?: () => void;
   /** 重新拉取进行中 */
@@ -122,6 +126,8 @@ export function TocDrawer({
   totalChapterNum,
   onRefreshToc,
   refreshingToc = false,
+  tocError = "",
+  tocLoading = false,
   onReloadChapter,
   reloadingChapter = false,
 }: TocDrawerProps) {
@@ -341,8 +347,11 @@ export function TocDrawer({
             {bookName}
           </DrawerTitle>
           <DrawerDescription className="mt-0.5 text-xs">
-            {bookAuthor} · 共 {chapters.length} 章 · 当前第{" "}
-            {Math.min(currentIndex + 1, chapters.length)} 章
+            {bookAuthor} · 共 {chapters.length} 章
+            {/* 目录还没到时不要显示"当前第 0 章" */}
+            {chapters.length > 0
+              ? ` · 当前第 ${Math.min(currentIndex + 1, chapters.length)} 章`
+              : ""}
           </DrawerDescription>
           {isLocal ? null : (
             <div className="mt-3 flex items-center gap-2">
@@ -378,7 +387,35 @@ export function TocDrawer({
           ) : null}
         </DrawerHeader>
         <DrawerBody className="overflow-hidden p-2">
-          {query.trim() === "" ? (
+          {query.trim() === "" && tocLoading ? (
+            /* 目录首次加载中: 列表位置给转圈, 而不是一个"什么都没有"的空抽屉 */
+            <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
+              <Spinner size="md" label="目录加载中" />
+              <p aria-hidden className="text-sm text-muted-foreground">
+                目录加载中…
+              </p>
+            </div>
+          ) : query.trim() === "" && tocError !== "" ? (
+            /* 目录加载失败: 原文 + 重试, 否则抽屉是个点不动的死界面 */
+            <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
+              <p className="text-sm font-medium text-foreground">目录加载失败</p>
+              <p className="text-xs leading-5 break-words text-muted-foreground">{tocError}</p>
+              {onRefreshToc !== undefined ? (
+                <Button size="sm" loading={refreshingToc} onClick={onRefreshToc} className="mt-1">
+                  重试
+                </Button>
+              ) : null}
+            </div>
+          ) : query.trim() === "" && ordered.length === 0 ? (
+            <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
+              <p className="text-sm text-muted-foreground">目录暂无章节</p>
+              {onRefreshToc !== undefined ? (
+                <Button size="sm" loading={refreshingToc} onClick={onRefreshToc}>
+                  刷新目录
+                </Button>
+              ) : null}
+            </div>
+          ) : query.trim() === "" ? (
             <Virtuoso
             data={ordered}
             initialTopMostItemIndex={initialTop}

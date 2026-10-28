@@ -1,4 +1,4 @@
-import { CircleAlert, LibraryBig, Link2Off } from "lucide-react";
+import { ArrowLeft, CircleAlert, LibraryBig, Link2Off } from "lucide-react";
 import * as React from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
@@ -13,7 +13,8 @@ import {
 } from "@/components/reader/BookmarksDrawer";
 import type { ChapterEndBlockProps } from "@/components/reader/ChapterEndBlock";
 import type { Book } from "@/types/api";
-import { ContentView, ReaderLoading, type FocusRequest } from "@/components/reader/ContentView";
+import { ContentView, type FocusRequest } from "@/components/reader/ContentView";
+import { ReaderLoadingStatus, ReaderStateCard } from "@/components/reader/ReaderStatus";
 import { ReaderChapterBar, ReaderTopBar } from "@/components/reader/ReaderToolbar";
 import { SelectionToolbar } from "@/components/reader/SelectionToolbar";
 import { SettingsPanel } from "@/components/reader/SettingsPanel";
@@ -74,6 +75,21 @@ function isMissingBookSource(raw: string): boolean {
 }
 
 /**
+ * 后端原始错误文案: 目录/正文失败的**具体原因**(「目录抓取超时(预算 30s, 已抓 2 页)…」
+ * 这类)必须原样交给用户, 不能被人话映射抹平成「网络或服务器异常」—— 那样用户既不知道
+ * 等多久、也不知道该重试还是该换源。人话版只在新增一条 hint 时并存, 不替换原文。
+ */
+function rawErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error) {
+    const text = error.message.trim();
+    if (text !== "") {
+      return text;
+    }
+  }
+  return fallback;
+}
+
+/**
  * 阅读器页面 (沉浸式, 不进 AppShell):
  * 常显顶栏 (返回/书签/书架/批注/朗读/自动滚动/沉浸/目录/设置 + 本章进度条) + 正文 + 常显底栏 (切章/书签/日夜)
  * + 目录/书签/批注抽屉 + 设置浮动面板 + 划选批注工具条 + 朗读浮动条.
@@ -103,6 +119,8 @@ export default function ReaderPage() {
     refreshChapters,
   } = useBookData(bookUrl, bookSourceHint);
   const [tocRefreshing, setTocRefreshing] = React.useState(false);
+  /** 手动刷新目录的失败原文: 抽屉/错误卡都要能看到「为什么还是拿不到目录」 */
+  const [tocError, setTocError] = React.useState("");
   const chapterTitles = React.useMemo(() => chapters.map((chapter) => chapter.title), [chapters]);
 
   /** 换源面板直接打开: 未入架书在面板里给显式「加入书架」入口, 不再静默入架 */
@@ -465,6 +483,23 @@ export default function ReaderPage() {
   }, [navigate]);
 
   const handleGoToSources = React.useCallback(() => navigate("/sources"), [navigate]);
+  /** 回书架 (根路由就是书架): 错误态里的「返回书架」用它, 语义比「后退」明确 */
+  const handleBackToShelf = React.useCallback(() => navigate("/"), [navigate]);
+
+  /**
+   * 目录重取 (抽屉「刷新目录」+ 错误卡「重试」共用): 走 refreshChapters 绕开服务端目录缓存,
+   * 成功直接写回查询缓存, 失败把后端原文留在 tocError —— 否则 .catch 缺失会变成
+   * 「点了没反应 + console 一个 unhandled rejection」。
+   */
+  const handleRefreshToc = React.useCallback(() => {
+    setTocError("");
+    setTocRefreshing(true);
+    refreshChapters()
+      .catch((error: unknown) => {
+        setTocError(rawErrorMessage(error, "刷新目录失败"));
+      })
+      .finally(() => setTocRefreshing(false));
+  }, [refreshChapters]);
 
   const handleOpenToc = React.useCallback(() => setTocOpen(true), [setTocOpen]);
   const handleOpenSettings = React.useCallback(() => setSettingsOpen(true), [setSettingsOpen]);
@@ -524,79 +559,62 @@ export default function ReaderPage() {
     );
   }
 
-  if (bookQuery.isLoading || chaptersQuery.isLoading) {
-    return (
-      <ReaderFrame centered>
-        <ReaderLoading label="正在加载章节…" />
-      </ReaderFrame>
-    );
-  }
+  // 后端原始错误: 「目录抓取超时(预算 30s, 已抓 2 页)」这类具体原因原样展示,
+  // 人话版只作为补充 hint 并存, 不替换原文 (否则用户不知道该等/该重试/该换源)
+  const bookError = bookQuery.isError ? rawErrorMessage(bookQuery.error, "书籍信息缺失") : "";
+  const chaptersError = chaptersQuery.isError
+    ? rawErrorMessage(chaptersQuery.error, "目录加载失败")
+    : "";
+  /** 目录失败的人话版: 只在和原文不同时作为补充 hint 出现 */
+  const chaptersHint = humanizeError(chaptersError, "");
 
-  if (book === undefined || bookQuery.isError || chaptersQuery.isError) {
-    const failed = bookQuery.isError ? bookQuery.error : chaptersQuery.error;
-    const raw = failed?.message ?? "";
-    const missingSource = isMissingBookSource(raw);
-    const message = failed === null ? "书籍信息缺失" : humanizeError(raw, "网络或服务器异常");
+  if (book === undefined) {
+    // 书籍信息未就绪 (含书架列表未就绪 → 查询还没发起): 全屏加载/错误态,
+    // 左上角恒有返回, 失败给重试 + 返回书架 —— 原来这里是一个没有任何出口的死转圈
+    const bootError = bookError !== "" ? bookError : chaptersError;
+    const bootHint = humanizeError(bootError, "");
+    const missingSource = isMissingBookSource(bootError);
     return (
       <ReaderFrame centered>
-        <EmptyState
-          icon={<CircleAlert />}
-          title="书籍加载失败"
-          description={message}
-          action={
-            <>
-              {missingSource ? (
-                <Button onClick={handleGoToSources}>
-                  <LibraryBig aria-hidden />
-                  去书源页
+        <div className="absolute left-3 top-3">
+          <Button variant="ghost" onClick={handleBack}>
+            <ArrowLeft aria-hidden />
+            返回
+          </Button>
+        </div>
+        {bootError === "" ? (
+          <ReaderLoadingStatus label="正在加载书籍信息…" />
+        ) : (
+          <ReaderStateCard
+            icon={<CircleAlert />}
+            title="书籍加载失败"
+            message={bootError}
+            hint={bootHint === bootError ? undefined : bootHint}
+            actions={
+              <>
+                {missingSource ? (
+                  <Button onClick={handleGoToSources}>
+                    <LibraryBig aria-hidden />
+                    去书源页
+                  </Button>
+                ) : null}
+                <Button
+                  variant={missingSource ? "secondary" : "primary"}
+                  loading={bookQuery.isFetching || chaptersQuery.isFetching}
+                  onClick={() => {
+                    void bookQuery.refetch();
+                    void chaptersQuery.refetch();
+                  }}
+                >
+                  重试
                 </Button>
-              ) : null}
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  void bookQuery.refetch();
-                  void chaptersQuery.refetch();
-                }}
-              >
-                重试
-              </Button>
-              <Button variant={missingSource ? "ghost" : "primary"} onClick={handleBack}>
-                返回
-              </Button>
-            </>
-          }
-        />
-      </ReaderFrame>
-    );
-  }
-
-  if (chapters.length === 0) {
-    return (
-      <ReaderFrame centered>
-        <EmptyState
-          icon={<CircleAlert />}
-          title="章节列表为空"
-          description="本书暂时没有可阅读的章节, 可以刷新目录重试."
-          action={
-            <>
-              <Button
-                loading={tocRefreshing}
-                onClick={() => {
-                  setTocRefreshing(true);
-                  void refreshChapters().finally(() => setTocRefreshing(false));
-                }}
-              >
-                刷新目录
-              </Button>
-              <Button variant="secondary" onClick={openSwitchSource}>
-                换源
-              </Button>
-              <Button variant="secondary" onClick={handleBack}>
-                返回
-              </Button>
-            </>
-          }
-        />
+                <Button variant="secondary" onClick={handleBackToShelf}>
+                  返回书架
+                </Button>
+              </>
+            }
+          />
+        )}
       </ReaderFrame>
     );
   }
@@ -663,6 +681,58 @@ export default function ReaderPage() {
 
         {/* 正文容器: 加入书签时扫描其中带 data-pos 的段落取可视区首段作摘要; 划选工具条也只认这个容器内的选区 */}
         <div ref={contentRef} className="min-h-0 flex-1">
+          {/* 目录未就绪时不再整页返回一个死转圈: 留在阅读框架内(顶栏「返回」始终可用),
+              加载超过 8s 解释原因, 失败/空目录给原文 + 重试/换源/返回书架 */}
+          {chaptersQuery.isLoading ? (
+            <div className="flex h-full items-center justify-center">
+              <ReaderLoadingStatus />
+            </div>
+          ) : chaptersError !== "" ? (
+            <div className="flex h-full items-center justify-center px-6">
+              <ReaderStateCard
+                icon={<CircleAlert />}
+                title="目录加载失败"
+                message={tocError !== "" ? tocError : chaptersError}
+                hint={chaptersHint === chaptersError ? undefined : chaptersHint}
+                actions={
+                  <>
+                    <Button loading={tocRefreshing} onClick={handleRefreshToc}>
+                      重试
+                    </Button>
+                    <Button variant="secondary" onClick={openSwitchSource}>
+                      换源
+                    </Button>
+                    <Button variant="secondary" onClick={handleBackToShelf}>
+                      返回书架
+                    </Button>
+                  </>
+                }
+              />
+            </div>
+          ) : chapters.length === 0 ? (
+            <div className="flex h-full items-center justify-center px-6">
+              <ReaderStateCard
+                icon={<CircleAlert />}
+                title="章节列表为空"
+                message={
+                  tocError !== "" ? tocError : "本书暂时没有可阅读的章节, 可以刷新目录重试."
+                }
+                actions={
+                  <>
+                    <Button loading={tocRefreshing} onClick={handleRefreshToc}>
+                      刷新目录
+                    </Button>
+                    <Button variant="secondary" onClick={openSwitchSource}>
+                      换源
+                    </Button>
+                    <Button variant="secondary" onClick={handleBackToShelf}>
+                      返回书架
+                    </Button>
+                  </>
+                }
+              />
+            </div>
+          ) : (
           <ContentView
             key={progress.index}
             items={content.items}
@@ -695,6 +765,7 @@ export default function ReaderPage() {
             }
             onToggleChrome={handleToggleChrome}
           />
+          )}
         </div>
 
         <ReaderChapterBar
@@ -733,9 +804,9 @@ export default function ReaderPage() {
         onReloadChapter={handleReloadChapter}
         reloadingChapter={content.isReloading}
         refreshingToc={tocRefreshing}
-        onRefreshToc={() => {
-          void refreshChapters();
-        }}
+        tocError={chaptersError !== "" ? chaptersError : tocError}
+        tocLoading={chaptersQuery.isLoading}
+        onRefreshToc={handleRefreshToc}
         onSwitchSource={() => {
           toc.setTocOpen(false);
           setSwitchOpen(true);
