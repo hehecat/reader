@@ -13,3 +13,5 @@ backend/web-ui/dist/
 deploy/web-dist.old/
 # 运行时 sqlite（含 WAL/SHM）不入库：容器首次启动自动建库+迁移
 deploy/storage/
+# 本地临时产物：实验脚本、python venv、临时 cargo home、验证截图
+.tmp/

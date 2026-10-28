@@ -25,6 +25,8 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
+    // 关系图谱 demo 的 cytoscape 内核 + 布局扩展本身就有 ~1MB(解压后), 单独成 chunk 属预期
+    chunkSizeWarningLimit: 1200,
     // 后端 /assets 是 legacy storage 封面路由(nest_service), 前端产物必须避开
     assetsDir: "static",
     rollupOptions: {
@@ -46,6 +48,14 @@ export default defineConfig({
           // Radix 无头组件(仅部分页面用到, 独立缓存)
           if (/node_modules[\\/]@radix-ui[\\/]/.test(id)) {
             return "vendor-radix";
+          }
+          // 关系图谱 demo 重依赖: cytoscape 内核 + klay/fcose 布局引擎(只有 /graph-demo 用到)
+          if (
+            /node_modules[\\/](cytoscape|cytoscape-klay|cytoscape-fcose|cytoscape-dagre|cytoscape-node-html-label|klayjs|cose-base|layout-base)[\\/]/.test(
+              id,
+            )
+          ) {
+            return "vendor-graph";
           }
           // 阅读器重依赖: 虚拟列表 + HTML 消毒
           if (/node_modules[\\/](react-virtuoso|dompurify)[\\/]/.test(id)) {

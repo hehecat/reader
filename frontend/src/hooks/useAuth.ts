@@ -14,6 +14,9 @@ export interface UseAuthResult {
   logout: () => Promise<void>;
 }
 
+/** 无需登录即可访问的公开页面: 全局 unauthorized 兜底不把访客从这里踢去 /login */
+const PUBLIC_PATHS = new Set<string>(["/graph-demo"]);
+
 /** 构造 `/login?redirect={原路径}` 跳转地址(守卫与 unauthorized 监听共用, 保持格式一致) */
 export function loginRedirect(pathname: string, search: string): string {
   return `/login?redirect=${encodeURIComponent(pathname + search)}`;
@@ -43,7 +46,9 @@ export function useAuth(): UseAuthResult {
     const onUnauthorized = (): void => {
       useAuthStore.getState().logout();
       const { pathname, search } = window.location;
-      if (pathname !== "/login") {
+      // 公开页面(如 /graph-demo 这类不读登录态的 demo)不踢去登录页:
+      // 应用根的 useCustomFonts 会打一次 /reader3 字体接口, 未登录时 401 不该把访客弹走
+      if (pathname !== "/login" && !PUBLIC_PATHS.has(pathname)) {
         void navigate(loginRedirect(pathname, search), { replace: true });
       }
     };

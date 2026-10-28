@@ -21,6 +21,7 @@ const SettingsPage = lazyPage(() => import("@/pages/SettingsPage"));
 const MePage = lazyPage(() => import("@/pages/MePage"));
 const UsersPage = lazyPage(() => import("@/pages/UsersPage"));
 const ReaderPage = lazyPage(() => import("@/pages/ReaderPage"));
+const GraphDemoPage = lazyPage(() => import("@/pages/GraphDemoPage"));
 
 export default function App() {
   useCustomFonts();
@@ -70,6 +71,8 @@ export default function App() {
             </RequireAuth>
           }
         />
+        {/* 关系图谱 demo: 壳外整页, 只读一个静态 JSON, 不需要登录 */}
+        <Route path="/graph-demo" element={<GraphDemoPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       {/* toast 视口挂 App 根: /login 与 /reader(壳外)也能弹, 且全局仅一份 */}

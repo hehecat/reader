@@ -1,0 +1,5671 @@
+{
+ "meta": {
+  "book": "绍宋",
+  "totalChapters": 395,
+  "sampledChapters": 395,
+  "generatedAt": "2026-10-28T21:40:24+08:00",
+  "schema": "graph-demo-v1"
+ },
+ "characters": [
+  {
+   "id": "c1",
+   "name": "赵玖",
+   "aliases": [
+    "九哥",
+    "副帅",
+    "可达鸭",
+    "圣天子",
+    "大元帅",
+    "大宋皇帝",
+    "天子",
+    "宋国新皇帝",
+    "宋国皇帝",
+    "官家赵玖",
+    "康王",
+    "建炎天子",
+    "沧州赵玖",
+    "赵九",
+    "赵宋官家",
+    "赵宋新官家",
+    "赵官家",
+    "赵玖先生",
+    "官家",
+    "大家",
+    "陛下",
+    "赵老九"
+   ],
+   "gender": "男",
+   "role": "宋廷皇帝",
+   "faction": "f1",
+   "generation": 1,
+   "firstSeen": 1,
+   "lastSeen": 393,
+   "conflict": false
+  },
+  {
+   "id": "c2",
+   "name": "杨沂中",
+   "aliases": [
+    "杨卿",
+    "杨大郎",
+    "杨德甫",
+    "杨正甫",
+    "杨祗候",
+    "杨统制",
+    "杨统领",
+    "杨舍人",
+    "正甫"
+   ],
+   "gender": "男",
+   "role": "御前班直统制",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 1,
+   "lastSeen": 381,
+   "conflict": false
+  },
+  {
+   "id": "c3",
+   "name": "黄潜善",
+   "aliases": [
+    "黄相公"
+   ],
+   "gender": "男",
+   "role": "宋廷宰相",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 1,
+   "lastSeen": 365,
+   "conflict": false
+  },
+  {
+   "id": "c4",
+   "name": "汪伯彦",
+   "aliases": [
+    "枢相汪伯彦",
+    "汪叔詹",
+    "汪枢相",
+    "汪相公"
+   ],
+   "gender": "男",
+   "role": "同知枢密院事",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 1,
+   "lastSeen": 379,
+   "conflict": false
+  },
+  {
+   "id": "c5",
+   "name": "康履",
+   "aliases": [
+    "康大官",
+    "康押班"
+   ],
+   "gender": "男",
+   "role": "内侍省大押班",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 1,
+   "lastSeen": 360,
+   "conflict": false
+  },
+  {
+   "id": "c6",
+   "name": "王渊",
+   "aliases": [
+    "御营都统制",
+    "王卿",
+    "王枢相",
+    "王爹爹",
+    "王都统制"
+   ],
+   "gender": "男",
+   "role": "御营都统制",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 1,
+   "lastSeen": 346,
+   "conflict": false
+  },
+  {
+   "id": "c7",
+   "name": "潘贤妃",
+   "aliases": [
+    "潘妃",
+    "潘娘子",
+    "潘氏",
+    "潘贵妃"
+   ],
+   "gender": "女",
+   "role": "宋廷贵妃",
+   "faction": "f1",
+   "generation": 1,
+   "firstSeen": 1,
+   "lastSeen": 357,
+   "conflict": false
+  },
+  {
+   "id": "c8",
+   "name": "完颜兀术",
+   "aliases": [
+    "兀术",
+    "四太子",
+    "完颜宗弼",
+    "金兀术",
+    "魏王"
+   ],
+   "gender": "男",
+   "role": "金国东路军先锋",
+   "faction": "f2",
+   "generation": 1,
+   "firstSeen": 1,
+   "lastSeen": 395,
+   "conflict": false
+  },
+  {
+   "id": "c9",
+   "name": "刘晏",
+   "aliases": [
+    "刘副统制",
+    "刘平甫",
+    "刘统制",
+    "刘营头",
+    "平甫",
+    "通直郎",
+    "通直郎刘晏"
+   ],
+   "gender": "男",
+   "role": "御前班直副统制",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 2,
+   "lastSeen": 390,
+   "conflict": false
+  },
+  {
+   "id": "c10",
+   "name": "岳飞",
+   "aliases": [
+    "大小眼",
+    "小岳将军",
+    "岳卿",
+    "岳太尉",
+    "岳字大旗主人",
+    "岳统制",
+    "岳节帅",
+    "岳节度",
+    "岳都统",
+    "岳镇抚",
+    "岳鹏举",
+    "鹏举"
+   ],
+   "gender": "男",
+   "role": "御营前军都统制",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 2,
+   "lastSeen": 395,
+   "conflict": false
+  },
+  {
+   "id": "c11",
+   "name": "宗泽",
+   "aliases": [
+    "东京留守",
+    "宗副元帅",
+    "宗忠武",
+    "宗枢相",
+    "宗汝霖",
+    "宗爷爷",
+    "宗留守",
+    "宗相公",
+    "铁柱子",
+    "汝霖"
+   ],
+   "gender": "男",
+   "role": "东京留守",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 2,
+   "lastSeen": 389,
+   "conflict": false
+  },
+  {
+   "id": "c12",
+   "name": "完颜阿骨打",
+   "aliases": [
+    "金太祖"
+   ],
+   "gender": "男",
+   "role": "金国太祖",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 2,
+   "lastSeen": 372,
+   "conflict": false
+  },
+  {
+   "id": "c13",
+   "name": "郭药师",
+   "aliases": [],
+   "gender": "男",
+   "role": "常胜军总将",
+   "faction": "f8",
+   "generation": 0,
+   "firstSeen": 2,
+   "lastSeen": 362,
+   "conflict": false
+  },
+  {
+   "id": "c14",
+   "name": "李纲",
+   "aliases": [
+    "李伯纪",
+    "李公",
+    "李公相",
+    "李相",
+    "李相公",
+    "伯纪"
+   ],
+   "gender": "男",
+   "role": "宋廷宰相",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 3,
+   "lastSeen": 374,
+   "conflict": false
+  },
+  {
+   "id": "c15",
+   "name": "韩世忠",
+   "aliases": [
+    "延安郡王",
+    "御营左军统制",
+    "泼韩五",
+    "良臣",
+    "韩五",
+    "韩元帅",
+    "韩卿",
+    "韩太尉",
+    "韩统制",
+    "韩良臣",
+    "韩节度",
+    "韩郡王"
+   ],
+   "gender": "男",
+   "role": "御营左军都统制",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 3,
+   "lastSeen": 392,
+   "conflict": false
+  },
+  {
+   "id": "c16",
+   "name": "完颜娄室",
+   "aliases": [
+    "娄室",
+    "斡里衍"
+   ],
+   "gender": "男",
+   "role": "金国西路军主帅",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 3,
+   "lastSeen": 383,
+   "conflict": false
+  },
+  {
+   "id": "c17",
+   "name": "陈东",
+   "aliases": [],
+   "gender": "男",
+   "role": "太学生",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 3,
+   "lastSeen": 360,
+   "conflict": false
+  },
+  {
+   "id": "c18",
+   "name": "张俊",
+   "aliases": [
+    "张七",
+    "张七哥",
+    "张七郎",
+    "张永珍",
+    "张统制",
+    "御营右军都统",
+    "御营后军统制",
+    "陇西张七"
+   ],
+   "gender": "男",
+   "role": "御营右军都统制",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 4,
+   "lastSeen": 394,
+   "conflict": false
+  },
+  {
+   "id": "c19",
+   "name": "赵鼎",
+   "aliases": [
+    "元镇",
+    "寿州知州",
+    "赵元镇",
+    "赵大牧",
+    "赵御史",
+    "赵相公",
+    "赵知州",
+    "都省相公",
+    "首相"
+   ],
+   "gender": "男",
+   "role": "都省相公",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 4,
+   "lastSeen": 391,
+   "conflict": false
+  },
+  {
+   "id": "c20",
+   "name": "林景默",
+   "aliases": [
+    "小林学士",
+    "林学士",
+    "林尚书",
+    "林杞",
+    "林知州",
+    "林茂南",
+    "林静默",
+    "玉堂学士"
+   ],
+   "gender": "男",
+   "role": "翰林学士",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 4,
+   "lastSeen": 384,
+   "conflict": false
+  },
+  {
+   "id": "c21",
+   "name": "吕好问",
+   "aliases": [
+    "东府相公",
+    "吕相",
+    "吕都省",
+    "尚书右丞",
+    "尚书左丞",
+    "申王",
+    "资政殿学士"
+   ],
+   "gender": "男",
+   "role": "宋廷宰相",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 6,
+   "lastSeen": 384,
+   "conflict": false
+  },
+  {
+   "id": "c22",
+   "name": "张浚",
+   "aliases": [
+    "张中丞",
+    "张宪台",
+    "张德远",
+    "张运使",
+    "御史中丞",
+    "德远",
+    "枢密使"
+   ],
+   "gender": "男",
+   "role": "御史中丞",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 6,
+   "lastSeen": 392,
+   "conflict": false
+  },
+  {
+   "id": "c23",
+   "name": "胡安国",
+   "aliases": [
+    "道学名家",
+    "青山先生"
+   ],
+   "gender": "男",
+   "role": "道学名家",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 6,
+   "lastSeen": 360,
+   "conflict": false
+  },
+  {
+   "id": "c24",
+   "name": "张邦昌",
+   "aliases": [
+    "伪帝",
+    "大楚皇帝"
+   ],
+   "gender": "男",
+   "role": "原北宋宰相、伪楚皇帝",
+   "faction": null,
+   "generation": 0,
+   "firstSeen": 6,
+   "lastSeen": 360,
+   "conflict": false
+  },
+  {
+   "id": "c25",
+   "name": "靖恭夫人",
+   "aliases": [],
+   "gender": "女",
+   "role": "原道君太上皇帝宫人",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 6,
+   "lastSeen": 6,
+   "conflict": false
+  },
+  {
+   "id": "c26",
+   "name": "范宗尹",
+   "aliases": [
+    "范舍人"
+   ],
+   "gender": "男",
+   "role": "中书舍人",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 8,
+   "lastSeen": 380,
+   "conflict": false
+  },
+  {
+   "id": "c27",
+   "name": "胡寅",
+   "aliases": [
+    "中丞",
+    "中书舍人",
+    "御史中丞胡寅",
+    "明仲",
+    "胡中丞",
+    "胡侍郎",
+    "胡参军",
+    "胡安国之子",
+    "胡宪台",
+    "胡御史",
+    "胡明仲",
+    "胡经略",
+    "胡舍人"
+   ],
+   "gender": "男",
+   "role": "御史中丞",
+   "faction": "f1",
+   "generation": 1,
+   "firstSeen": 9,
+   "lastSeen": 393,
+   "conflict": false
+  },
+  {
+   "id": "c28",
+   "name": "完颜挞懒",
+   "aliases": [
+    "右副元帅",
+    "完颜昌",
+    "左监军",
+    "挞懒",
+    "金军右副元帅",
+    "鲁王"
+   ],
+   "gender": "男",
+   "role": "金国东路军监军副帅",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 9,
+   "lastSeen": 395,
+   "conflict": false
+  },
+  {
+   "id": "c29",
+   "name": "完颜粘罕",
+   "aliases": [
+    "国相",
+    "国论勃极烈",
+    "完颜宗翰",
+    "粘罕",
+    "都元帅"
+   ],
+   "gender": "男",
+   "role": "金国都元帅",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 9,
+   "lastSeen": 395,
+   "conflict": false
+  },
+  {
+   "id": "c30",
+   "name": "田师中",
+   "aliases": [
+    "中军大将",
+    "小田",
+    "田副都统",
+    "田统领",
+    "田都统"
+   ],
+   "gender": "男",
+   "role": "御营右军副都统制",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 9,
+   "lastSeen": 394,
+   "conflict": false
+  },
+  {
+   "id": "c31",
+   "name": "王彦",
+   "aliases": [
+    "八字军",
+    "八字军统帅",
+    "王子才",
+    "王总统"
+   ],
+   "gender": "男",
+   "role": "御营都统制",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 10,
+   "lastSeen": 386,
+   "conflict": false
+  },
+  {
+   "id": "c32",
+   "name": "张所",
+   "aliases": [
+    "张制置",
+    "张所张龙图",
+    "张资政",
+    "张龙图"
+   ],
+   "gender": "男",
+   "role": "河北西路招抚使",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 10,
+   "lastSeen": 378,
+   "conflict": false
+  },
+  {
+   "id": "c33",
+   "name": "完颜吴乞买",
+   "aliases": [
+    "吴乞买",
+    "完颜晟",
+    "金国皇帝"
+   ],
+   "gender": "男",
+   "role": "金国皇帝",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 10,
+   "lastSeen": 394,
+   "conflict": false
+  },
+  {
+   "id": "c34",
+   "name": "张显",
+   "aliases": [],
+   "gender": "男",
+   "role": "岳飞部将",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 11,
+   "lastSeen": 125,
+   "conflict": false
+  },
+  {
+   "id": "c35",
+   "name": "汤怀",
+   "aliases": [],
+   "gender": "男",
+   "role": "岳飞部将",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 11,
+   "lastSeen": 394,
+   "conflict": false
+  },
+  {
+   "id": "c36",
+   "name": "王贵",
+   "aliases": [],
+   "gender": "男",
+   "role": "岳飞部将",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 11,
+   "lastSeen": 394,
+   "conflict": false
+  },
+  {
+   "id": "c37",
+   "name": "周同",
+   "aliases": [
+    "恩师周同"
+   ],
+   "gender": "男",
+   "role": "岳飞师父",
+   "faction": null,
+   "generation": 0,
+   "firstSeen": 11,
+   "lastSeen": 11,
+   "conflict": false
+  },
+  {
+   "id": "c38",
+   "name": "岳云",
+   "aliases": [],
+   "gender": "男",
+   "role": "岳飞长子",
+   "faction": "f1",
+   "generation": 1,
+   "firstSeen": 11,
+   "lastSeen": 394,
+   "conflict": false
+  },
+  {
+   "id": "c39",
+   "name": "刘韐",
+   "aliases": [],
+   "gender": "男",
+   "role": "前观文殿大学士",
+   "faction": null,
+   "generation": 0,
+   "firstSeen": 11,
+   "lastSeen": 378,
+   "conflict": false
+  },
+  {
+   "id": "c40",
+   "name": "刘光世",
+   "aliases": [],
+   "gender": "男",
+   "role": "御营统制",
+   "faction": "f1",
+   "generation": 1,
+   "firstSeen": 12,
+   "lastSeen": 391,
+   "conflict": false
+  },
+  {
+   "id": "c41",
+   "name": "宇文虚中",
+   "aliases": [
+    "宇文学士",
+    "宇文枢密",
+    "宇文相公",
+    "资政殿大学士"
+   ],
+   "gender": "男",
+   "role": "资政殿大学士",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 12,
+   "lastSeen": 373,
+   "conflict": false
+  },
+  {
+   "id": "c42",
+   "name": "刘錡",
+   "aliases": [
+    "刘二",
+    "刘经略"
+   ],
+   "gender": "男",
+   "role": "利州路经略使",
+   "faction": "f1",
+   "generation": 1,
+   "firstSeen": 12,
+   "lastSeen": 378,
+   "conflict": false
+  },
+  {
+   "id": "c43",
+   "name": "完颜斡本",
+   "aliases": [
+    "大太子",
+    "斡本",
+    "辽王"
+   ],
+   "gender": "男",
+   "role": "金国大太子、辽王，留守燕京",
+   "faction": "f2",
+   "generation": 1,
+   "firstSeen": 15,
+   "lastSeen": 368,
+   "conflict": false
+  },
+  {
+   "id": "c44",
+   "name": "完颜讹里朵",
+   "aliases": [
+    "三哥",
+    "三太子",
+    "兀室",
+    "元帅右都监",
+    "完颜希尹",
+    "完颜谷神",
+    "希尹",
+    "讹里朵",
+    "谷神"
+   ],
+   "gender": "男",
+   "role": "金国元帅右都监",
+   "faction": "f2",
+   "generation": 1,
+   "firstSeen": 15,
+   "lastSeen": 395,
+   "conflict": false
+  },
+  {
+   "id": "c45",
+   "name": "梁夫人",
+   "aliases": [
+    "梁氏",
+    "韩世忠夫人"
+   ],
+   "gender": "女",
+   "role": "韩世忠之妻",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 17,
+   "lastSeen": 306,
+   "conflict": false
+  },
+  {
+   "id": "c46",
+   "name": "辛兴宗",
+   "aliases": [
+    "大辛",
+    "辛防御"
+   ],
+   "gender": "男",
+   "role": "御营中军统制",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 18,
+   "lastSeen": 246,
+   "conflict": false
+  },
+  {
+   "id": "c47",
+   "name": "刘豫",
+   "aliases": [
+    "伪齐皇帝",
+    "刘皇帝",
+    "刘贼",
+    "刘逆",
+    "济南知府",
+    "知济南府刘豫"
+   ],
+   "gender": "男",
+   "role": "伪齐皇帝",
+   "faction": "f6",
+   "generation": 0,
+   "firstSeen": 20,
+   "lastSeen": 371,
+   "conflict": false
+  },
+  {
+   "id": "c48",
+   "name": "赵明诚",
+   "aliases": [],
+   "gender": "男",
+   "role": "淄州知州",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 20,
+   "lastSeen": 394,
+   "conflict": false
+  },
+  {
+   "id": "c49",
+   "name": "李清照",
+   "aliases": [
+    "易安居士"
+   ],
+   "gender": "女",
+   "role": "词人",
+   "faction": null,
+   "generation": 0,
+   "firstSeen": 20,
+   "lastSeen": 365,
+   "conflict": false
+  },
+  {
+   "id": "c50",
+   "name": "张悫",
+   "aliases": [],
+   "gender": "男",
+   "role": "同知枢密院事",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 22,
+   "lastSeen": 360,
+   "conflict": false
+  },
+  {
+   "id": "c51",
+   "name": "许景衡",
+   "aliases": [
+    "许参政",
+    "许大参",
+    "许相公"
+   ],
+   "gender": "男",
+   "role": "宰相",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 22,
+   "lastSeen": 367,
+   "conflict": false
+  },
+  {
+   "id": "c52",
+   "name": "刘延庆",
+   "aliases": [],
+   "gender": "男",
+   "role": "刘光世之父",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 23,
+   "lastSeen": 361,
+   "conflict": false
+  },
+  {
+   "id": "c53",
+   "name": "杜充",
+   "aliases": [
+    "杜副留守",
+    "杜留守"
+   ],
+   "gender": "男",
+   "role": "东京副留守",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 25,
+   "lastSeen": 394,
+   "conflict": false
+  },
+  {
+   "id": "c54",
+   "name": "傅庆",
+   "aliases": [],
+   "gender": "男",
+   "role": "宋廷摧偏军统制",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 29,
+   "lastSeen": 378,
+   "conflict": false
+  },
+  {
+   "id": "c55",
+   "name": "王德",
+   "aliases": [],
+   "gender": "男",
+   "role": "御营中军副都统制",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 30,
+   "lastSeen": 383,
+   "conflict": false
+  },
+  {
+   "id": "c56",
+   "name": "范琼",
+   "aliases": [
+    "范太尉",
+    "范宝臣"
+   ],
+   "gender": "男",
+   "role": "叛将",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 31,
+   "lastSeen": 391,
+   "conflict": false
+  },
+  {
+   "id": "c57",
+   "name": "吴夫人",
+   "aliases": [
+    "吴妃",
+    "吴娘子",
+    "吴氏",
+    "吴瑜",
+    "吴贵妃"
+   ],
+   "gender": "女",
+   "role": "宋廷贵妃",
+   "faction": "f1",
+   "generation": 1,
+   "firstSeen": 31,
+   "lastSeen": 357,
+   "conflict": false
+  },
+  {
+   "id": "c58",
+   "name": "曲端",
+   "aliases": [
+    "曲副都统",
+    "曲大",
+    "曲师尹",
+    "曲都统"
+   ],
+   "gender": "男",
+   "role": "御营骑军都统制",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 31,
+   "lastSeen": 391,
+   "conflict": false
+  },
+  {
+   "id": "c59",
+   "name": "讹鲁补",
+   "aliases": [
+    "完颜讹鲁补"
+   ],
+   "gender": "男",
+   "role": "金国万夫长",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 37,
+   "lastSeen": 395,
+   "conflict": false
+  },
+  {
+   "id": "c60",
+   "name": "阿里",
+   "aliases": [
+    "阿里喜",
+    "阿里将军"
+   ],
+   "gender": "男",
+   "role": "金军万夫长",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 37,
+   "lastSeen": 395,
+   "conflict": false
+  },
+  {
+   "id": "c61",
+   "name": "蒲卢浑",
+   "aliases": [],
+   "gender": "男",
+   "role": "金国猛安",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 37,
+   "lastSeen": 140,
+   "conflict": false
+  },
+  {
+   "id": "c62",
+   "name": "赵球",
+   "aliases": [
+    "老赵"
+   ],
+   "gender": "男",
+   "role": "金军猛安副手",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 39,
+   "lastSeen": 394,
+   "conflict": false
+  },
+  {
+   "id": "c63",
+   "name": "李彦仙",
+   "aliases": [
+    "李太尉",
+    "李学士",
+    "李少严",
+    "李节度",
+    "陕州镇抚使"
+   ],
+   "gender": "男",
+   "role": "陕州守将",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 55,
+   "lastSeen": 383,
+   "conflict": false
+  },
+  {
+   "id": "c64",
+   "name": "钟相",
+   "aliases": [
+    "大圣爷爷"
+   ],
+   "gender": "男",
+   "role": "洞庭湖叛军首领",
+   "faction": null,
+   "generation": 0,
+   "firstSeen": 55,
+   "lastSeen": 364,
+   "conflict": false
+  },
+  {
+   "id": "c65",
+   "name": "马伸",
+   "aliases": [
+    "马御史"
+   ],
+   "gender": "男",
+   "role": "刑部尚书",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 55,
+   "lastSeen": 357,
+   "conflict": false
+  },
+  {
+   "id": "c66",
+   "name": "马扩",
+   "aliases": [
+    "马公子",
+    "马子充",
+    "马家官人",
+    "马总管"
+   ],
+   "gender": "男",
+   "role": "北道总管",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 57,
+   "lastSeen": 383,
+   "conflict": false
+  },
+  {
+   "id": "c67",
+   "name": "宗颍",
+   "aliases": [],
+   "gender": "男",
+   "role": "宗泽之子",
+   "faction": "f1",
+   "generation": 1,
+   "firstSeen": 57,
+   "lastSeen": 367,
+   "conflict": false
+  },
+  {
+   "id": "c68",
+   "name": "张荣",
+   "aliases": [
+    "张大头领",
+    "张大帅",
+    "张头领",
+    "张荣统制",
+    "张镇抚",
+    "张首领",
+    "梁山泊大头领"
+   ],
+   "gender": "男",
+   "role": "御营水军都统",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 61,
+   "lastSeen": 393,
+   "conflict": false
+  },
+  {
+   "id": "c69",
+   "name": "李成",
+   "aliases": [
+    "主公",
+    "双刀李成",
+    "李都督"
+   ],
+   "gender": "男",
+   "role": "伪齐大都督",
+   "faction": "f6",
+   "generation": 0,
+   "firstSeen": 61,
+   "lastSeen": 391,
+   "conflict": false
+  },
+  {
+   "id": "c70",
+   "name": "完颜塞里",
+   "aliases": [
+    "塞里",
+    "完颜宗里",
+    "完颜撒八",
+    "完颜里",
+    "宗里",
+    "赛里"
+   ],
+   "gender": "男",
+   "role": "金国万户",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 63,
+   "lastSeen": 345,
+   "conflict": false
+  },
+  {
+   "id": "c71",
+   "name": "大挞不野",
+   "aliases": [],
+   "gender": "男",
+   "role": "金国渤海猛安",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 63,
+   "lastSeen": 395,
+   "conflict": false
+  },
+  {
+   "id": "c72",
+   "name": "刘麟",
+   "aliases": [
+    "伪太子",
+    "刘公子",
+    "刘太子",
+    "齐国太子",
+    "齐国太子刘麟"
+   ],
+   "gender": "男",
+   "role": "伪齐太子",
+   "faction": "f6",
+   "generation": 1,
+   "firstSeen": 64,
+   "lastSeen": 233,
+   "conflict": false
+  },
+  {
+   "id": "c73",
+   "name": "辛道宗",
+   "aliases": [
+    "三辛"
+   ],
+   "gender": "男",
+   "role": "辛氏兄弟老三",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 68,
+   "lastSeen": 378,
+   "conflict": false
+  },
+  {
+   "id": "c74",
+   "name": "张宪",
+   "aliases": [
+    "张四",
+    "张将军"
+   ],
+   "gender": "男",
+   "role": "岳飞部将",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 73,
+   "lastSeen": 394,
+   "conflict": false
+  },
+  {
+   "id": "c75",
+   "name": "李光",
+   "aliases": [
+    "御史中丞李光",
+    "李中丞",
+    "李泰发",
+    "泰发"
+   ],
+   "gender": "男",
+   "role": "御史中丞",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 76,
+   "lastSeen": 357,
+   "conflict": false
+  },
+  {
+   "id": "c76",
+   "name": "王胜",
+   "aliases": [
+    "王黑龙",
+    "黑龙"
+   ],
+   "gender": "男",
+   "role": "韩世忠部将",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 76,
+   "lastSeen": 394,
+   "conflict": false
+  },
+  {
+   "id": "c77",
+   "name": "解元",
+   "aliases": [
+    "解善良",
+    "解善长"
+   ],
+   "gender": "男",
+   "role": "御营左军副都统",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 80,
+   "lastSeen": 382,
+   "conflict": false
+  },
+  {
+   "id": "c78",
+   "name": "刘子羽",
+   "aliases": [
+    "刘参军",
+    "刘彦修",
+    "子羽",
+    "彦修",
+    "彦修兄"
+   ],
+   "gender": "男",
+   "role": "枢密院都承旨",
+   "faction": "f1",
+   "generation": 1,
+   "firstSeen": 87,
+   "lastSeen": 384,
+   "conflict": false
+  },
+  {
+   "id": "c79",
+   "name": "完颜银术可",
+   "aliases": [
+    "尼楚赫",
+    "燕京留守",
+    "银术可"
+   ],
+   "gender": "男",
+   "role": "金国太原留守",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 89,
+   "lastSeen": 383,
+   "conflict": false
+  },
+  {
+   "id": "c80",
+   "name": "翟兴",
+   "aliases": [
+    "大翟"
+   ],
+   "gender": "男",
+   "role": "洛阳守将",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 89,
+   "lastSeen": 379,
+   "conflict": false
+  },
+  {
+   "id": "c81",
+   "name": "完颜拔离速",
+   "aliases": [
+    "完颜拔里速",
+    "拔离速"
+   ],
+   "gender": "男",
+   "role": "金国万户",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 90,
+   "lastSeen": 395,
+   "conflict": false
+  },
+  {
+   "id": "c82",
+   "name": "耶律马五",
+   "aliases": [
+    "马五"
+   ],
+   "gender": "男",
+   "role": "金国契丹将领",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 94,
+   "lastSeen": 395,
+   "conflict": false
+  },
+  {
+   "id": "c83",
+   "name": "吕颐浩",
+   "aliases": [
+    "东南使相",
+    "吕大相公",
+    "吕枢相",
+    "吕经略"
+   ],
+   "gender": "男",
+   "role": "宋廷枢密使",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 98,
+   "lastSeen": 384,
+   "conflict": false
+  },
+  {
+   "id": "c84",
+   "name": "陈规",
+   "aliases": [
+    "枢密副使",
+    "陈卿",
+    "陈尚书",
+    "陈枢密",
+    "陈枢相"
+   ],
+   "gender": "男",
+   "role": "兵部尚书",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 99,
+   "lastSeen": 391,
+   "conflict": false
+  },
+  {
+   "id": "c85",
+   "name": "吕本中",
+   "aliases": [
+    "吕舍人",
+    "小东莱先生"
+   ],
+   "gender": "男",
+   "role": "中书舍人",
+   "faction": "f1",
+   "generation": 1,
+   "firstSeen": 101,
+   "lastSeen": 367,
+   "conflict": false
+  },
+  {
+   "id": "c86",
+   "name": "辛企宗",
+   "aliases": [
+    "二辛"
+   ],
+   "gender": "男",
+   "role": "御营中军统制",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 101,
+   "lastSeen": 246,
+   "conflict": false
+  },
+  {
+   "id": "c87",
+   "name": "范秀娘",
+   "aliases": [
+    "秀娘"
+   ],
+   "gender": "女",
+   "role": "范琼之女",
+   "faction": null,
+   "generation": 1,
+   "firstSeen": 103,
+   "lastSeen": 107,
+   "conflict": false
+  },
+  {
+   "id": "c88",
+   "name": "辛永宗",
+   "aliases": [
+    "小辛",
+    "小辛统制"
+   ],
+   "gender": "男",
+   "role": "御营中军统制",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 105,
+   "lastSeen": 246,
+   "conflict": false
+  },
+  {
+   "id": "c89",
+   "name": "刘锡",
+   "aliases": [
+    "刘都统"
+   ],
+   "gender": "男",
+   "role": "熙河路都统",
+   "faction": "f1",
+   "generation": 1,
+   "firstSeen": 112,
+   "lastSeen": 306,
+   "conflict": false
+  },
+  {
+   "id": "c90",
+   "name": "耶律余睹",
+   "aliases": [
+    "余睹"
+   ],
+   "gender": "男",
+   "role": "契丹降金大将，失势西逃",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 112,
+   "lastSeen": 395,
+   "conflict": false
+  },
+  {
+   "id": "c91",
+   "name": "朱胜非",
+   "aliases": [],
+   "gender": "男",
+   "role": "礼部尚书",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 114,
+   "lastSeen": 363,
+   "conflict": false
+  },
+  {
+   "id": "c92",
+   "name": "万俟卨",
+   "aliases": [
+    "万俟元忠",
+    "万俟卿",
+    "万俟参军",
+    "万俟御史"
+   ],
+   "gender": "男",
+   "role": "殿中侍御史",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 117,
+   "lastSeen": 386,
+   "conflict": false
+  },
+  {
+   "id": "c93",
+   "name": "吴玠",
+   "aliases": [
+    "吴大",
+    "吴太尉",
+    "吴晋卿",
+    "大吴"
+   ],
+   "gender": "男",
+   "role": "御营后军都统制",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 117,
+   "lastSeen": 393,
+   "conflict": false
+  },
+  {
+   "id": "c94",
+   "name": "耶律大石",
+   "aliases": [
+    "大石林牙"
+   ],
+   "gender": "男",
+   "role": "契丹首领",
+   "faction": null,
+   "generation": 0,
+   "firstSeen": 117,
+   "lastSeen": 364,
+   "conflict": false
+  },
+  {
+   "id": "c95",
+   "name": "李经",
+   "aliases": [
+    "李叔易",
+    "李御史"
+   ],
+   "gender": "男",
+   "role": "监察御史",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 121,
+   "lastSeen": 339,
+   "conflict": false
+  },
+  {
+   "id": "c96",
+   "name": "孔彦舟",
+   "aliases": [
+    "孔元帅",
+    "孔大元帅",
+    "孔流子",
+    "小岳飞"
+   ],
+   "gender": "男",
+   "role": "伪齐元帅",
+   "faction": "f6",
+   "generation": 0,
+   "firstSeen": 122,
+   "lastSeen": 285,
+   "conflict": false
+  },
+  {
+   "id": "c97",
+   "name": "李逵",
+   "aliases": [],
+   "gender": "男",
+   "role": "岳飞部统领",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 123,
+   "lastSeen": 393,
+   "conflict": false
+  },
+  {
+   "id": "c98",
+   "name": "岳翻",
+   "aliases": [],
+   "gender": "男",
+   "role": "岳飞之弟",
+   "faction": "f4",
+   "generation": 0,
+   "firstSeen": 125,
+   "lastSeen": 125,
+   "conflict": false
+  },
+  {
+   "id": "c99",
+   "name": "完颜活女",
+   "aliases": [
+    "活女"
+   ],
+   "gender": "男",
+   "role": "金国万户，娄室之子",
+   "faction": "f2",
+   "generation": 1,
+   "firstSeen": 128,
+   "lastSeen": 395,
+   "conflict": false
+  },
+  {
+   "id": "c100",
+   "name": "高景山",
+   "aliases": [
+    "高将军",
+    "高都统"
+   ],
+   "gender": "男",
+   "role": "金国大名府行军司都统",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 130,
+   "lastSeen": 395,
+   "conflict": false
+  },
+  {
+   "id": "c101",
+   "name": "乌林答泰欲",
+   "aliases": [],
+   "gender": "男",
+   "role": "金军万户",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 130,
+   "lastSeen": 382,
+   "conflict": false
+  },
+  {
+   "id": "c102",
+   "name": "蒲察鹘拔鲁",
+   "aliases": [
+    "鹘拔鲁"
+   ],
+   "gender": "男",
+   "role": "挞懒女婿，金将",
+   "faction": "f2",
+   "generation": 1,
+   "firstSeen": 130,
+   "lastSeen": 159,
+   "conflict": false
+  },
+  {
+   "id": "c103",
+   "name": "张遇",
+   "aliases": [
+    "一窝蜂",
+    "一窝蜂张遇"
+   ],
+   "gender": "男",
+   "role": "金国河南都监",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 130,
+   "lastSeen": 337,
+   "conflict": false
+  },
+  {
+   "id": "c104",
+   "name": "完颜彀英",
+   "aliases": [
+    "小挞懒"
+   ],
+   "gender": "男",
+   "role": "金军最年轻猛安",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 132,
+   "lastSeen": 133,
+   "conflict": false
+  },
+  {
+   "id": "c105",
+   "name": "杜岩",
+   "aliases": [],
+   "gender": "男",
+   "role": "杜充之子、勾当机宜文字",
+   "faction": "f1",
+   "generation": 1,
+   "firstSeen": 141,
+   "lastSeen": 159,
+   "conflict": false
+  },
+  {
+   "id": "c106",
+   "name": "郦琼",
+   "aliases": [],
+   "gender": "男",
+   "role": "御营中军右副都统",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 146,
+   "lastSeen": 383,
+   "conflict": false
+  },
+  {
+   "id": "c107",
+   "name": "合不勒",
+   "aliases": [
+    "合不勒汗",
+    "完颜合不勒"
+   ],
+   "gender": "男",
+   "role": "蒙兀部长",
+   "faction": null,
+   "generation": 0,
+   "firstSeen": 170,
+   "lastSeen": 384,
+   "conflict": false
+  },
+  {
+   "id": "c108",
+   "name": "吴璘",
+   "aliases": [
+    "二吴"
+   ],
+   "gender": "男",
+   "role": "吴玠之弟",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 176,
+   "lastSeen": 381,
+   "conflict": false
+  },
+  {
+   "id": "c109",
+   "name": "吴近",
+   "aliases": [
+    "吴国丈"
+   ],
+   "gender": "男",
+   "role": "外戚、珍珠吴氏当家人",
+   "faction": null,
+   "generation": 0,
+   "firstSeen": 182,
+   "lastSeen": 295,
+   "conflict": false
+  },
+  {
+   "id": "c110",
+   "name": "赵神佑",
+   "aliases": [],
+   "gender": "女",
+   "role": "宋廷公主",
+   "faction": "f1",
+   "generation": 2,
+   "firstSeen": 183,
+   "lastSeen": 183,
+   "conflict": false
+  },
+  {
+   "id": "c111",
+   "name": "赵佛佑",
+   "aliases": [],
+   "gender": "女",
+   "role": "宋廷公主",
+   "faction": "f1",
+   "generation": 2,
+   "firstSeen": 183,
+   "lastSeen": 183,
+   "conflict": false
+  },
+  {
+   "id": "c112",
+   "name": "胡铨",
+   "aliases": [
+    "胡编修",
+    "邦衡"
+   ],
+   "gender": "男",
+   "role": "枢密院编修、邸报主管",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 197,
+   "lastSeen": 371,
+   "conflict": false
+  },
+  {
+   "id": "c113",
+   "name": "胡宏",
+   "aliases": [],
+   "gender": "男",
+   "role": "胡寅义弟",
+   "faction": null,
+   "generation": 1,
+   "firstSeen": 197,
+   "lastSeen": 384,
+   "conflict": false
+  },
+  {
+   "id": "c114",
+   "name": "完颜谋衍",
+   "aliases": [
+    "娄室次子",
+    "谋衍"
+   ],
+   "gender": "男",
+   "role": "金国西路军将领",
+   "faction": "f2",
+   "generation": 1,
+   "firstSeen": 216,
+   "lastSeen": 304,
+   "conflict": false
+  },
+  {
+   "id": "c115",
+   "name": "翟琮",
+   "aliases": [],
+   "gender": "男",
+   "role": "宋廷统制官",
+   "faction": "f1",
+   "generation": 1,
+   "firstSeen": 225,
+   "lastSeen": 382,
+   "conflict": false
+  },
+  {
+   "id": "c116",
+   "name": "刘仲武",
+   "aliases": [],
+   "gender": "男",
+   "role": "刘锡之父",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 225,
+   "lastSeen": 241,
+   "conflict": false
+  },
+  {
+   "id": "c117",
+   "name": "突合速",
+   "aliases": [],
+   "gender": "男",
+   "role": "金国万户，号步战第一",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 226,
+   "lastSeen": 394,
+   "conflict": false
+  },
+  {
+   "id": "c118",
+   "name": "李乾顺",
+   "aliases": [
+    "西夏国主"
+   ],
+   "gender": "男",
+   "role": "西夏国主",
+   "faction": "f5",
+   "generation": 0,
+   "firstSeen": 232,
+   "lastSeen": 327,
+   "conflict": false
+  },
+  {
+   "id": "c119",
+   "name": "郑亿年",
+   "aliases": [],
+   "gender": "男",
+   "role": "前宰执郑居中之子",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 248,
+   "lastSeen": 368,
+   "conflict": false
+  },
+  {
+   "id": "c120",
+   "name": "郑修年",
+   "aliases": [],
+   "gender": "男",
+   "role": "郑亿年之兄、旧日权贵",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 249,
+   "lastSeen": 383,
+   "conflict": false
+  },
+  {
+   "id": "c121",
+   "name": "赵汾",
+   "aliases": [],
+   "gender": "男",
+   "role": "赵鼎之子",
+   "faction": "f1",
+   "generation": 1,
+   "firstSeen": 253,
+   "lastSeen": 384,
+   "conflict": false
+  },
+  {
+   "id": "c122",
+   "name": "杨时",
+   "aliases": [
+    "龟山先生"
+   ],
+   "gender": "男",
+   "role": "大儒",
+   "faction": null,
+   "generation": 0,
+   "firstSeen": 258,
+   "lastSeen": 360,
+   "conflict": false
+  },
+  {
+   "id": "c123",
+   "name": "罗丛彦",
+   "aliases": [
+    "豫章先生"
+   ],
+   "gender": "男",
+   "role": "杨时弟子",
+   "faction": null,
+   "generation": 0,
+   "firstSeen": 258,
+   "lastSeen": 258,
+   "conflict": false
+  },
+  {
+   "id": "c124",
+   "name": "乌林答赞谟",
+   "aliases": [
+    "乌林答卿",
+    "乌林答尚书"
+   ],
+   "gender": "男",
+   "role": "金国使臣",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 265,
+   "lastSeen": 344,
+   "conflict": false
+  },
+  {
+   "id": "c125",
+   "name": "完颜合剌",
+   "aliases": [],
+   "gender": "男",
+   "role": "金国国主",
+   "faction": "f2",
+   "generation": 1,
+   "firstSeen": 270,
+   "lastSeen": 368,
+   "conflict": false
+  },
+  {
+   "id": "c126",
+   "name": "郑太后",
+   "aliases": [],
+   "gender": "女",
+   "role": "宋廷太后",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 277,
+   "lastSeen": 350,
+   "conflict": false
+  },
+  {
+   "id": "c127",
+   "name": "韦太后",
+   "aliases": [],
+   "gender": "女",
+   "role": "宋廷太后",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 277,
+   "lastSeen": 350,
+   "conflict": false
+  },
+  {
+   "id": "c128",
+   "name": "王伯龙",
+   "aliases": [],
+   "gender": "男",
+   "role": "金国万户",
+   "faction": "f2",
+   "generation": 0,
+   "firstSeen": 285,
+   "lastSeen": 395,
+   "conflict": false
+  },
+  {
+   "id": "c129",
+   "name": "孔端友",
+   "aliases": [
+    "衍圣公"
+   ],
+   "gender": "男",
+   "role": "孔圣第四十七代嫡长孙",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 291,
+   "lastSeen": 296,
+   "conflict": false
+  },
+  {
+   "id": "c130",
+   "name": "孔端操",
+   "aliases": [],
+   "gender": "男",
+   "role": "衍圣公之弟",
+   "faction": "f1",
+   "generation": 0,
+   "firstSeen": 291,
+   "lastSeen": 291,
+   "conflict": false
+  },
+  {
+   "id": "c131",
+   "name": "薛元礼",
+   "aliases": [],
+   "gender": "男",
+   "role": "西夏国相",
+   "faction": "f5",
+   "generation": 0,
+   "firstSeen": 298,
+   "lastSeen": 320,
+   "conflict": false
+  },
+  {
+   "id": "c132",
+   "name": "高守义",
+   "aliases": [],
+   "gender": "男",
+   "role": "西夏高氏衙内",
+   "faction": "f5",
+   "generation": 1,
+   "firstSeen": 298,
+   "lastSeen": 305,
+   "conflict": false
+  },
+  {
+   "id": "c133",
+   "name": "赵原佐",
+   "aliases": [
+    "原佐"
+   ],
+   "gender": "男",
+   "role": "宋廷皇长子",
+   "faction": "f1",
+   "generation": 2,
+   "firstSeen": 304,
+   "lastSeen": 351,
+   "conflict": false
+  },
+  {
+   "id": "c134",
+   "name": "赵德佐",
+   "aliases": [
+    "德佐"
+   ],
+   "gender": "男",
+   "role": "宋廷皇子",
+   "faction": "f1",
+   "generation": 2,
+   "firstSeen": 304,
+   "lastSeen": 351,
+   "conflict": false
+  },
+  {
+   "id": "c135",
+   "name": "嵬名察哥",
+   "aliases": [
+    "察哥"
+   ],
+   "gender": "男",
+   "role": "西夏晋王",
+   "faction": "f5",
+   "generation": 0,
+   "firstSeen": 304,
+   "lastSeen": 325,
+   "conflict": false
+  },
+  {
+   "id": "c136",
+   "name": "嵬名仁忠",
+   "aliases": [
+    "仁忠",
+    "濮王"
+   ],
+   "gender": "男",
+   "role": "西夏濮王，留守灵州",
+   "faction": "f5",
+   "generation": 0,
+   "firstSeen": 304,
+   "lastSeen": 321,
+   "conflict": false
+  },
+  {
+   "id": "c137",
+   "name": "嵬名仁礼",
+   "aliases": [
+    "仁礼"
+   ],
+   "gender": "男",
+   "role": "西夏监军",
+   "faction": "f5",
+   "generation": 0,
+   "firstSeen": 316,
+   "lastSeen": 321,
+   "conflict": false
+  },
+  {
+   "id": "c138",
+   "name": "完颜蒲鲁虎",
+   "aliases": [],
+   "gender": "男",
+   "role": "金国代王",
+   "faction": "f2",
+   "generation": 1,
+   "firstSeen": 343,
+   "lastSeen": 345,
+   "conflict": false
+  }
+ ],
+ "factions": [
+  {
+   "id": "f1",
+   "name": "宋廷",
+   "kind": "势力",
+   "leader": "c1",
+   "members": [
+    "c1",
+    "c10",
+    "c15",
+    "c14",
+    "c21",
+    "c22",
+    "c18",
+    "c4",
+    "c11",
+    "c83",
+    "c27",
+    "c75",
+    "c2",
+    "c31",
+    "c19",
+    "c30",
+    "c92",
+    "c6",
+    "c40",
+    "c55",
+    "c51",
+    "c68",
+    "c63",
+    "c93",
+    "c5",
+    "c78",
+    "c3",
+    "c20",
+    "c56",
+    "c95",
+    "c58",
+    "c35",
+    "c36",
+    "c7",
+    "c66",
+    "c46",
+    "c53",
+    "c106",
+    "c74",
+    "c57",
+    "c112",
+    "c89",
+    "c9",
+    "c34",
+    "c32",
+    "c54",
+    "c97",
+    "c84",
+    "c77",
+    "c91",
+    "c42",
+    "c65",
+    "c38",
+    "c52",
+    "c41",
+    "c45",
+    "c50",
+    "c88",
+    "c73",
+    "c67",
+    "c26",
+    "c108",
+    "c23",
+    "c119",
+    "c85",
+    "c129",
+    "c130",
+    "c115",
+    "c80",
+    "c133",
+    "c134",
+    "c121",
+    "c116",
+    "c105",
+    "c86",
+    "c25",
+    "c17",
+    "c48",
+    "c76",
+    "c110",
+    "c111",
+    "c126",
+    "c127"
+   ]
+  },
+  {
+   "id": "f2",
+   "name": "金国",
+   "kind": "势力",
+   "leader": "c33",
+   "members": [
+    "c8",
+    "c16",
+    "c44",
+    "c81",
+    "c29",
+    "c33",
+    "c12",
+    "c43",
+    "c61",
+    "c70",
+    "c100",
+    "c117",
+    "c103",
+    "c28",
+    "c99",
+    "c128",
+    "c104",
+    "c79",
+    "c59",
+    "c60",
+    "c82",
+    "c90",
+    "c62",
+    "c101",
+    "c114",
+    "c124",
+    "c120",
+    "c102",
+    "c125",
+    "c71",
+    "c138"
+   ]
+  },
+  {
+   "id": "f3",
+   "name": "御营",
+   "kind": "组织",
+   "leader": "c31",
+   "members": [
+    "c1",
+    "c10",
+    "c15",
+    "c18",
+    "c31",
+    "c30",
+    "c6",
+    "c40",
+    "c55",
+    "c68",
+    "c93",
+    "c58",
+    "c46",
+    "c106",
+    "c77",
+    "c88",
+    "c86"
+   ]
+  },
+  {
+   "id": "f4",
+   "name": "岳家军",
+   "kind": "组织",
+   "leader": "c10",
+   "members": [
+    "c10",
+    "c35",
+    "c36",
+    "c74",
+    "c34",
+    "c97",
+    "c38",
+    "c98"
+   ]
+  },
+  {
+   "id": "f5",
+   "name": "西夏",
+   "kind": "势力",
+   "leader": "c118",
+   "members": [
+    "c118",
+    "c131",
+    "c135",
+    "c132",
+    "c137",
+    "c136"
+   ]
+  },
+  {
+   "id": "f6",
+   "name": "伪齐",
+   "kind": "势力",
+   "leader": "c47",
+   "members": [
+    "c72",
+    "c96",
+    "c103",
+    "c47",
+    "c69"
+   ]
+  },
+  {
+   "id": "f7",
+   "name": "八字军",
+   "kind": "组织",
+   "leader": "c31",
+   "members": [
+    "c31"
+   ]
+  },
+  {
+   "id": "f8",
+   "name": "常胜军",
+   "kind": "组织",
+   "leader": "c13",
+   "members": [
+    "c13"
+   ]
+  },
+  {
+   "id": "f9",
+   "name": "梁山泊",
+   "kind": "组织",
+   "leader": "c68",
+   "members": [
+    "c68"
+   ]
+  },
+  {
+   "id": "f10",
+   "name": "赤心队",
+   "kind": "组织",
+   "leader": "c9",
+   "members": [
+    "c9"
+   ]
+  }
+ ],
+ "memberships": [
+  {
+   "character": "c1",
+   "faction": "f1",
+   "from": 1,
+   "to": null
+  },
+  {
+   "character": "c1",
+   "faction": "f3",
+   "from": 1,
+   "to": null
+  },
+  {
+   "character": "c2",
+   "faction": "f1",
+   "from": 1,
+   "to": null
+  },
+  {
+   "character": "c3",
+   "faction": "f1",
+   "from": 1,
+   "to": 365
+  },
+  {
+   "character": "c4",
+   "faction": "f1",
+   "from": 1,
+   "to": null
+  },
+  {
+   "character": "c5",
+   "faction": "f1",
+   "from": 1,
+   "to": 360
+  },
+  {
+   "character": "c6",
+   "faction": "f1",
+   "from": 1,
+   "to": 346
+  },
+  {
+   "character": "c6",
+   "faction": "f3",
+   "from": 1,
+   "to": 346
+  },
+  {
+   "character": "c7",
+   "faction": "f1",
+   "from": 1,
+   "to": 357
+  },
+  {
+   "character": "c8",
+   "faction": "f2",
+   "from": 1,
+   "to": null
+  },
+  {
+   "character": "c9",
+   "faction": "f1",
+   "from": 2,
+   "to": null
+  },
+  {
+   "character": "c9",
+   "faction": "f10",
+   "from": 2,
+   "to": null
+  },
+  {
+   "character": "c10",
+   "faction": "f1",
+   "from": 2,
+   "to": null
+  },
+  {
+   "character": "c10",
+   "faction": "f3",
+   "from": 2,
+   "to": null
+  },
+  {
+   "character": "c10",
+   "faction": "f4",
+   "from": 2,
+   "to": null
+  },
+  {
+   "character": "c11",
+   "faction": "f1",
+   "from": 2,
+   "to": null
+  },
+  {
+   "character": "c12",
+   "faction": "f2",
+   "from": 2,
+   "to": 372
+  },
+  {
+   "character": "c13",
+   "faction": "f8",
+   "from": 2,
+   "to": 362
+  },
+  {
+   "character": "c14",
+   "faction": "f1",
+   "from": 3,
+   "to": 374
+  },
+  {
+   "character": "c15",
+   "faction": "f1",
+   "from": 3,
+   "to": null
+  },
+  {
+   "character": "c15",
+   "faction": "f3",
+   "from": 3,
+   "to": null
+  },
+  {
+   "character": "c16",
+   "faction": "f2",
+   "from": 3,
+   "to": null
+  },
+  {
+   "character": "c17",
+   "faction": "f1",
+   "from": 3,
+   "to": 360
+  },
+  {
+   "character": "c18",
+   "faction": "f1",
+   "from": 4,
+   "to": null
+  },
+  {
+   "character": "c18",
+   "faction": "f3",
+   "from": 4,
+   "to": null
+  },
+  {
+   "character": "c19",
+   "faction": "f1",
+   "from": 4,
+   "to": null
+  },
+  {
+   "character": "c20",
+   "faction": "f1",
+   "from": 4,
+   "to": null
+  },
+  {
+   "character": "c21",
+   "faction": "f1",
+   "from": 6,
+   "to": null
+  },
+  {
+   "character": "c22",
+   "faction": "f1",
+   "from": 6,
+   "to": null
+  },
+  {
+   "character": "c23",
+   "faction": "f1",
+   "from": 6,
+   "to": 360
+  },
+  {
+   "character": "c25",
+   "faction": "f1",
+   "from": 6,
+   "to": 6
+  },
+  {
+   "character": "c26",
+   "faction": "f1",
+   "from": 8,
+   "to": null
+  },
+  {
+   "character": "c27",
+   "faction": "f1",
+   "from": 9,
+   "to": null
+  },
+  {
+   "character": "c28",
+   "faction": "f2",
+   "from": 9,
+   "to": null
+  },
+  {
+   "character": "c29",
+   "faction": "f2",
+   "from": 9,
+   "to": null
+  },
+  {
+   "character": "c30",
+   "faction": "f1",
+   "from": 9,
+   "to": null
+  },
+  {
+   "character": "c30",
+   "faction": "f3",
+   "from": 9,
+   "to": null
+  },
+  {
+   "character": "c31",
+   "faction": "f1",
+   "from": 10,
+   "to": null
+  },
+  {
+   "character": "c31",
+   "faction": "f3",
+   "from": 10,
+   "to": null
+  },
+  {
+   "character": "c31",
+   "faction": "f7",
+   "from": 10,
+   "to": null
+  },
+  {
+   "character": "c32",
+   "faction": "f1",
+   "from": 10,
+   "to": null
+  },
+  {
+   "character": "c33",
+   "faction": "f2",
+   "from": 10,
+   "to": null
+  },
+  {
+   "character": "c34",
+   "faction": "f1",
+   "from": 11,
+   "to": 125
+  },
+  {
+   "character": "c34",
+   "faction": "f4",
+   "from": 11,
+   "to": 125
+  },
+  {
+   "character": "c35",
+   "faction": "f1",
+   "from": 11,
+   "to": null
+  },
+  {
+   "character": "c35",
+   "faction": "f4",
+   "from": 11,
+   "to": null
+  },
+  {
+   "character": "c36",
+   "faction": "f1",
+   "from": 11,
+   "to": null
+  },
+  {
+   "character": "c36",
+   "faction": "f4",
+   "from": 11,
+   "to": null
+  },
+  {
+   "character": "c38",
+   "faction": "f1",
+   "from": 11,
+   "to": null
+  },
+  {
+   "character": "c38",
+   "faction": "f4",
+   "from": 11,
+   "to": null
+  },
+  {
+   "character": "c40",
+   "faction": "f1",
+   "from": 12,
+   "to": null
+  },
+  {
+   "character": "c40",
+   "faction": "f3",
+   "from": 12,
+   "to": null
+  },
+  {
+   "character": "c41",
+   "faction": "f1",
+   "from": 12,
+   "to": 373
+  },
+  {
+   "character": "c42",
+   "faction": "f1",
+   "from": 12,
+   "to": null
+  },
+  {
+   "character": "c43",
+   "faction": "f2",
+   "from": 15,
+   "to": 368
+  },
+  {
+   "character": "c44",
+   "faction": "f2",
+   "from": 15,
+   "to": null
+  },
+  {
+   "character": "c45",
+   "faction": "f1",
+   "from": 17,
+   "to": 306
+  },
+  {
+   "character": "c46",
+   "faction": "f1",
+   "from": 18,
+   "to": 246
+  },
+  {
+   "character": "c46",
+   "faction": "f3",
+   "from": 18,
+   "to": 246
+  },
+  {
+   "character": "c47",
+   "faction": "f6",
+   "from": 20,
+   "to": 371
+  },
+  {
+   "character": "c48",
+   "faction": "f1",
+   "from": 20,
+   "to": null
+  },
+  {
+   "character": "c50",
+   "faction": "f1",
+   "from": 22,
+   "to": 360
+  },
+  {
+   "character": "c51",
+   "faction": "f1",
+   "from": 22,
+   "to": 367
+  },
+  {
+   "character": "c52",
+   "faction": "f1",
+   "from": 23,
+   "to": 361
+  },
+  {
+   "character": "c53",
+   "faction": "f1",
+   "from": 25,
+   "to": null
+  },
+  {
+   "character": "c54",
+   "faction": "f1",
+   "from": 29,
+   "to": null
+  },
+  {
+   "character": "c55",
+   "faction": "f1",
+   "from": 30,
+   "to": null
+  },
+  {
+   "character": "c55",
+   "faction": "f3",
+   "from": 30,
+   "to": null
+  },
+  {
+   "character": "c56",
+   "faction": "f1",
+   "from": 31,
+   "to": null
+  },
+  {
+   "character": "c57",
+   "faction": "f1",
+   "from": 31,
+   "to": 357
+  },
+  {
+   "character": "c58",
+   "faction": "f1",
+   "from": 31,
+   "to": null
+  },
+  {
+   "character": "c58",
+   "faction": "f3",
+   "from": 31,
+   "to": null
+  },
+  {
+   "character": "c59",
+   "faction": "f2",
+   "from": 37,
+   "to": null
+  },
+  {
+   "character": "c60",
+   "faction": "f2",
+   "from": 37,
+   "to": null
+  },
+  {
+   "character": "c61",
+   "faction": "f2",
+   "from": 37,
+   "to": 140
+  },
+  {
+   "character": "c62",
+   "faction": "f2",
+   "from": 39,
+   "to": null
+  },
+  {
+   "character": "c63",
+   "faction": "f1",
+   "from": 55,
+   "to": null
+  },
+  {
+   "character": "c65",
+   "faction": "f1",
+   "from": 55,
+   "to": 357
+  },
+  {
+   "character": "c66",
+   "faction": "f1",
+   "from": 57,
+   "to": null
+  },
+  {
+   "character": "c67",
+   "faction": "f1",
+   "from": 57,
+   "to": 367
+  },
+  {
+   "character": "c68",
+   "faction": "f1",
+   "from": 61,
+   "to": null
+  },
+  {
+   "character": "c68",
+   "faction": "f3",
+   "from": 61,
+   "to": null
+  },
+  {
+   "character": "c68",
+   "faction": "f9",
+   "from": 61,
+   "to": null
+  },
+  {
+   "character": "c69",
+   "faction": "f6",
+   "from": 61,
+   "to": null
+  },
+  {
+   "character": "c70",
+   "faction": "f2",
+   "from": 63,
+   "to": 345
+  },
+  {
+   "character": "c71",
+   "faction": "f2",
+   "from": 63,
+   "to": null
+  },
+  {
+   "character": "c72",
+   "faction": "f6",
+   "from": 64,
+   "to": 233
+  },
+  {
+   "character": "c73",
+   "faction": "f1",
+   "from": 68,
+   "to": null
+  },
+  {
+   "character": "c74",
+   "faction": "f1",
+   "from": 73,
+   "to": null
+  },
+  {
+   "character": "c74",
+   "faction": "f4",
+   "from": 73,
+   "to": null
+  },
+  {
+   "character": "c75",
+   "faction": "f1",
+   "from": 76,
+   "to": 357
+  },
+  {
+   "character": "c76",
+   "faction": "f1",
+   "from": 76,
+   "to": null
+  },
+  {
+   "character": "c77",
+   "faction": "f1",
+   "from": 80,
+   "to": null
+  },
+  {
+   "character": "c77",
+   "faction": "f3",
+   "from": 80,
+   "to": null
+  },
+  {
+   "character": "c78",
+   "faction": "f1",
+   "from": 87,
+   "to": null
+  },
+  {
+   "character": "c79",
+   "faction": "f2",
+   "from": 89,
+   "to": null
+  },
+  {
+   "character": "c80",
+   "faction": "f1",
+   "from": 89,
+   "to": null
+  },
+  {
+   "character": "c81",
+   "faction": "f2",
+   "from": 90,
+   "to": null
+  },
+  {
+   "character": "c82",
+   "faction": "f2",
+   "from": 94,
+   "to": null
+  },
+  {
+   "character": "c83",
+   "faction": "f1",
+   "from": 98,
+   "to": null
+  },
+  {
+   "character": "c84",
+   "faction": "f1",
+   "from": 99,
+   "to": null
+  },
+  {
+   "character": "c85",
+   "faction": "f1",
+   "from": 101,
+   "to": 367
+  },
+  {
+   "character": "c86",
+   "faction": "f1",
+   "from": 101,
+   "to": 246
+  },
+  {
+   "character": "c86",
+   "faction": "f3",
+   "from": 101,
+   "to": 246
+  },
+  {
+   "character": "c88",
+   "faction": "f1",
+   "from": 105,
+   "to": 246
+  },
+  {
+   "character": "c88",
+   "faction": "f3",
+   "from": 105,
+   "to": 246
+  },
+  {
+   "character": "c89",
+   "faction": "f1",
+   "from": 112,
+   "to": 306
+  },
+  {
+   "character": "c90",
+   "faction": "f2",
+   "from": 112,
+   "to": null
+  },
+  {
+   "character": "c91",
+   "faction": "f1",
+   "from": 114,
+   "to": 363
+  },
+  {
+   "character": "c92",
+   "faction": "f1",
+   "from": 117,
+   "to": null
+  },
+  {
+   "character": "c93",
+   "faction": "f1",
+   "from": 117,
+   "to": null
+  },
+  {
+   "character": "c93",
+   "faction": "f3",
+   "from": 117,
+   "to": null
+  },
+  {
+   "character": "c95",
+   "faction": "f1",
+   "from": 121,
+   "to": 339
+  },
+  {
+   "character": "c96",
+   "faction": "f6",
+   "from": 122,
+   "to": 285
+  },
+  {
+   "character": "c97",
+   "faction": "f1",
+   "from": 123,
+   "to": null
+  },
+  {
+   "character": "c97",
+   "faction": "f4",
+   "from": 123,
+   "to": null
+  },
+  {
+   "character": "c98",
+   "faction": "f4",
+   "from": 125,
+   "to": 125
+  },
+  {
+   "character": "c99",
+   "faction": "f2",
+   "from": 128,
+   "to": null
+  },
+  {
+   "character": "c100",
+   "faction": "f2",
+   "from": 130,
+   "to": null
+  },
+  {
+   "character": "c101",
+   "faction": "f2",
+   "from": 130,
+   "to": null
+  },
+  {
+   "character": "c102",
+   "faction": "f2",
+   "from": 130,
+   "to": 159
+  },
+  {
+   "character": "c103",
+   "faction": "f2",
+   "from": 130,
+   "to": 337
+  },
+  {
+   "character": "c103",
+   "faction": "f6",
+   "from": 130,
+   "to": 337
+  },
+  {
+   "character": "c104",
+   "faction": "f2",
+   "from": 132,
+   "to": 133
+  },
+  {
+   "character": "c105",
+   "faction": "f1",
+   "from": 141,
+   "to": 159
+  },
+  {
+   "character": "c106",
+   "faction": "f1",
+   "from": 146,
+   "to": null
+  },
+  {
+   "character": "c106",
+   "faction": "f3",
+   "from": 146,
+   "to": null
+  },
+  {
+   "character": "c108",
+   "faction": "f1",
+   "from": 176,
+   "to": null
+  },
+  {
+   "character": "c110",
+   "faction": "f1",
+   "from": 183,
+   "to": 183
+  },
+  {
+   "character": "c111",
+   "faction": "f1",
+   "from": 183,
+   "to": 183
+  },
+  {
+   "character": "c112",
+   "faction": "f1",
+   "from": 197,
+   "to": 371
+  },
+  {
+   "character": "c114",
+   "faction": "f2",
+   "from": 216,
+   "to": 304
+  },
+  {
+   "character": "c115",
+   "faction": "f1",
+   "from": 225,
+   "to": null
+  },
+  {
+   "character": "c116",
+   "faction": "f1",
+   "from": 225,
+   "to": 241
+  },
+  {
+   "character": "c117",
+   "faction": "f2",
+   "from": 226,
+   "to": null
+  },
+  {
+   "character": "c118",
+   "faction": "f5",
+   "from": 232,
+   "to": 327
+  },
+  {
+   "character": "c119",
+   "faction": "f1",
+   "from": 248,
+   "to": 368
+  },
+  {
+   "character": "c120",
+   "faction": "f2",
+   "from": 249,
+   "to": null
+  },
+  {
+   "character": "c121",
+   "faction": "f1",
+   "from": 253,
+   "to": null
+  },
+  {
+   "character": "c124",
+   "faction": "f2",
+   "from": 265,
+   "to": 344
+  },
+  {
+   "character": "c125",
+   "faction": "f2",
+   "from": 270,
+   "to": 368
+  },
+  {
+   "character": "c126",
+   "faction": "f1",
+   "from": 277,
+   "to": 350
+  },
+  {
+   "character": "c127",
+   "faction": "f1",
+   "from": 277,
+   "to": 350
+  },
+  {
+   "character": "c128",
+   "faction": "f2",
+   "from": 285,
+   "to": null
+  },
+  {
+   "character": "c129",
+   "faction": "f1",
+   "from": 291,
+   "to": 296
+  },
+  {
+   "character": "c130",
+   "faction": "f1",
+   "from": 291,
+   "to": 291
+  },
+  {
+   "character": "c131",
+   "faction": "f5",
+   "from": 298,
+   "to": 320
+  },
+  {
+   "character": "c132",
+   "faction": "f5",
+   "from": 298,
+   "to": 305
+  },
+  {
+   "character": "c133",
+   "faction": "f1",
+   "from": 304,
+   "to": 351
+  },
+  {
+   "character": "c134",
+   "faction": "f1",
+   "from": 304,
+   "to": 351
+  },
+  {
+   "character": "c135",
+   "faction": "f5",
+   "from": 304,
+   "to": 325
+  },
+  {
+   "character": "c136",
+   "faction": "f5",
+   "from": 304,
+   "to": 321
+  },
+  {
+   "character": "c137",
+   "faction": "f5",
+   "from": 316,
+   "to": 321
+  },
+  {
+   "character": "c138",
+   "faction": "f2",
+   "from": 343,
+   "to": 345
+  }
+ ],
+ "relations": [
+  {
+   "from": "c9",
+   "to": "c13",
+   "type": "other",
+   "label": "其他",
+   "from_chapter": 2,
+   "to_chapter": null,
+   "quote": "常胜军总将则是著名的郭药师"
+  },
+  {
+   "from": "c11",
+   "to": "c10",
+   "type": "other",
+   "label": "其他",
+   "from_chapter": 2,
+   "to_chapter": null,
+   "quote": "跟宗泽、就是你们说的宗副元帅一起打过仗的"
+  },
+  {
+   "from": "c1",
+   "to": "c3",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 5,
+   "to_chapter": null,
+   "quote": "黄潜善半日都说不出一句囫囵话来"
+  },
+  {
+   "from": "c3",
+   "to": "c14",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 5,
+   "to_chapter": 374,
+   "quote": "本朝并无此成例"
+  },
+  {
+   "from": "c4",
+   "to": "c11",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 5,
+   "to_chapter": null,
+   "quote": "焉能使至尊再陷绝地"
+  },
+  {
+   "from": "c5",
+   "to": "c14",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 5,
+   "to_chapter": 374,
+   "quote": "此人跋扈无状，擅威擅福"
+  },
+  {
+   "from": "c5",
+   "to": "c11",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 5,
+   "to_chapter": null,
+   "quote": "那老头比李纲还臭还硬"
+  },
+  {
+   "from": "c11",
+   "to": "c14",
+   "type": "other",
+   "label": "其他",
+   "from_chapter": 5,
+   "to_chapter": null,
+   "quote": "宗泽表面上和他们一样出身大元帅府"
+  },
+  {
+   "from": "c1",
+   "to": "c24",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 6,
+   "to_chapter": null,
+   "quote": "张邦昌可杀，但事到如今杀之无益"
+  },
+  {
+   "from": "c1",
+   "to": "c14",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 6,
+   "to_chapter": null,
+   "quote": "此人孩视陛下，意图借此揽权"
+  },
+  {
+   "from": "c14",
+   "to": "c24",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 6,
+   "to_chapter": 374,
+   "quote": "最想杀张邦昌的，不是别人，正是李相公"
+  },
+  {
+   "from": "c24",
+   "to": "c25",
+   "type": "spouse",
+   "label": "夫妻",
+   "from_chapter": 6,
+   "to_chapter": 360,
+   "quote": "金人将靖恭夫人赐予他为后"
+  },
+  {
+   "from": "c17",
+   "to": "c1",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 6,
+   "to_chapter": null,
+   "quote": "陈东是因为说这个才死的"
+  },
+  {
+   "from": "c5",
+   "to": "c21",
+   "type": "other",
+   "label": "其他",
+   "from_chapter": 7,
+   "to_chapter": null,
+   "quote": "康履放心推荐此人来见自己"
+  },
+  {
+   "from": "c22",
+   "to": "c3",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 8,
+   "to_chapter": null,
+   "quote": "将黄相公、康大官隔绝内外的罪名先认定了"
+  },
+  {
+   "from": "c22",
+   "to": "c14",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 8,
+   "to_chapter": null,
+   "quote": "臣第一次弹劾李纲"
+  },
+  {
+   "from": "c22",
+   "to": "c5",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 8,
+   "to_chapter": null,
+   "quote": "隔绝内外这种罪过"
+  },
+  {
+   "from": "c3",
+   "to": "c5",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 9,
+   "to_chapter": 365,
+   "quote": "黄潜善、康履这个毫无根基"
+  },
+  {
+   "from": "c34",
+   "to": "c10",
+   "type": "sibling",
+   "label": "结义兄弟",
+   "from_chapter": 11,
+   "to_chapter": null,
+   "quote": "说是左膀右臂，其实根本就是兄弟"
+  },
+  {
+   "from": "c35",
+   "to": "c10",
+   "type": "sibling",
+   "label": "结义兄弟",
+   "from_chapter": 11,
+   "to_chapter": null,
+   "quote": "说是左膀右臂，其实根本就是兄弟"
+  },
+  {
+   "from": "c36",
+   "to": "c10",
+   "type": "sibling",
+   "label": "结义兄弟",
+   "from_chapter": 11,
+   "to_chapter": null,
+   "quote": "说是左膀右臂，其实根本就是兄弟"
+  },
+  {
+   "from": "c37",
+   "to": "c10",
+   "type": "master",
+   "label": "师徒",
+   "from_chapter": 11,
+   "to_chapter": null,
+   "quote": "年少时一起在恩师周同那里学骑射武艺"
+  },
+  {
+   "from": "c37",
+   "to": "c34",
+   "type": "master",
+   "label": "师徒",
+   "from_chapter": 11,
+   "to_chapter": 125,
+   "quote": "年少时一起在恩师周同那里学骑射武艺"
+  },
+  {
+   "from": "c37",
+   "to": "c35",
+   "type": "master",
+   "label": "师徒",
+   "from_chapter": 11,
+   "to_chapter": null,
+   "quote": "年少时一起在恩师周同那里学骑射武艺"
+  },
+  {
+   "from": "c37",
+   "to": "c36",
+   "type": "master",
+   "label": "师徒",
+   "from_chapter": 11,
+   "to_chapter": null,
+   "quote": "年少时一起在恩师周同那里学骑射武艺"
+  },
+  {
+   "from": "c14",
+   "to": "c4",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 12,
+   "to_chapter": null,
+   "quote": "汪伯彦现在恨不得李纲看不到他"
+  },
+  {
+   "from": "c14",
+   "to": "c41",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 15,
+   "to_chapter": 374,
+   "quote": "宇文虚中便和其他人一起被李纲逐出了后殿"
+  },
+  {
+   "from": "c19",
+   "to": "c15",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 19,
+   "to_chapter": null,
+   "quote": "弹劾御营左军统制、定国军承宣使韩世忠治军"
+  },
+  {
+   "from": "c18",
+   "to": "c2",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 23,
+   "to_chapter": null,
+   "quote": "张俊旧部杨沂中"
+  },
+  {
+   "from": "c52",
+   "to": "c40",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 23,
+   "to_chapter": null,
+   "quote": "刘光世的爹就是著名的刘延庆"
+  },
+  {
+   "from": "c50",
+   "to": "c21",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 23,
+   "to_chapter": null,
+   "quote": "刚刚回归核心圈子的同知枢密院事张悫却梗着"
+  },
+  {
+   "from": "c15",
+   "to": "c18",
+   "type": "other",
+   "label": "其他",
+   "from_chapter": 27,
+   "to_chapter": null,
+   "quote": "张俊张太尉麾下中军大将田师中"
+  },
+  {
+   "from": "c30",
+   "to": "c18",
+   "type": "other",
+   "label": "其他",
+   "from_chapter": 27,
+   "to_chapter": null,
+   "quote": "张俊张太尉麾下中军大将田师中"
+  },
+  {
+   "from": "c40",
+   "to": "c6",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 30,
+   "to_chapter": null,
+   "quote": "王太尉有私心"
+  },
+  {
+   "from": "c40",
+   "to": "c18",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 30,
+   "to_chapter": null,
+   "quote": "张俊给的"
+  },
+  {
+   "from": "c1",
+   "to": "c56",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 31,
+   "to_chapter": null,
+   "quote": "有极大黑历史的范琼"
+  },
+  {
+   "from": "c55",
+   "to": "c40",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 31,
+   "to_chapter": null,
+   "quote": "王德和傅庆算是被赵官家亲自拿捏住反了水"
+  },
+  {
+   "from": "c54",
+   "to": "c40",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 31,
+   "to_chapter": null,
+   "quote": "王德和傅庆算是被赵官家亲自拿捏住反了水"
+  },
+  {
+   "from": "c8",
+   "to": "c18",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 37,
+   "to_chapter": null,
+   "quote": "逼迫这什么张俊降了"
+  },
+  {
+   "from": "c1",
+   "to": "c40",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 38,
+   "to_chapter": null,
+   "quote": "朕让王德按住他左手，傅庆按住他右手"
+  },
+  {
+   "from": "c48",
+   "to": "c49",
+   "type": "spouse",
+   "label": "夫妻",
+   "from_chapter": 40,
+   "to_chapter": null,
+   "quote": "赵明诚和他那闻名天下的妻子，易安"
+  },
+  {
+   "from": "c18",
+   "to": "c62",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 41,
+   "to_chapter": null,
+   "quote": "田师中直接一刀自他后颈奋力插入"
+  },
+  {
+   "from": "c30",
+   "to": "c62",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 41,
+   "to_chapter": null,
+   "quote": "将他整个人钉死在了满是酒菜的桌案上"
+  },
+  {
+   "from": "c1",
+   "to": "c6",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 45,
+   "to_chapter": null,
+   "quote": "王渊也一时惊吓"
+  },
+  {
+   "from": "c18",
+   "to": "c30",
+   "type": "other",
+   "label": "其他",
+   "from_chapter": 48,
+   "to_chapter": null,
+   "quote": "田师中几乎是脱口而出"
+  },
+  {
+   "from": "c60",
+   "to": "c8",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 49,
+   "to_chapter": null,
+   "quote": "一直对金兀术的猖狂之态不屑一顾"
+  },
+  {
+   "from": "c18",
+   "to": "c61",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 50,
+   "to_chapter": null,
+   "quote": "蒲卢浑彻底大怒"
+  },
+  {
+   "from": "c15",
+   "to": "c8",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 52,
+   "to_chapter": null,
+   "quote": "韩世忠自东面鼓风而来，虽然吓退了金兀术"
+  },
+  {
+   "from": "c11",
+   "to": "c67",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 59,
+   "to_chapter": null,
+   "quote": "想伸手扶着自家爹爹回去的"
+  },
+  {
+   "from": "c10",
+   "to": "c71",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 65,
+   "to_chapter": null,
+   "quote": "几乎是随手便弄死了这厮"
+  },
+  {
+   "from": "c70",
+   "to": "c10",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 65,
+   "to_chapter": null,
+   "quote": "完颜塞里依旧保持了一定的谨慎"
+  },
+  {
+   "from": "c10",
+   "to": "c72",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 66,
+   "to_chapter": null,
+   "quote": "你今日将我们五千金国大军引到此处"
+  },
+  {
+   "from": "c68",
+   "to": "c70",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 66,
+   "to_chapter": null,
+   "quote": "宋军必然联络了水泊里的水匪"
+  },
+  {
+   "from": "c72",
+   "to": "c70",
+   "type": "other",
+   "label": "其他",
+   "from_chapter": 66,
+   "to_chapter": 345,
+   "quote": "来向完颜宗里汇报"
+  },
+  {
+   "from": "c10",
+   "to": "c68",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 67,
+   "to_chapter": null,
+   "quote": "上得大船来的岳飞见到了换了身皮甲的张荣"
+  },
+  {
+   "from": "c70",
+   "to": "c72",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 67,
+   "to_chapter": 345,
+   "quote": "一旁早已经哭过的刘麟沉默以对"
+  },
+  {
+   "from": "c4",
+   "to": "c6",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 68,
+   "to_chapter": null,
+   "quote": "汪伯彦、王渊这些人，所谓的投降派"
+  },
+  {
+   "from": "c32",
+   "to": "c10",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 69,
+   "to_chapter": null,
+   "quote": "张所与岳飞的关系也才正是他留着张所在身后"
+  },
+  {
+   "from": "c18",
+   "to": "c30",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 70,
+   "to_chapter": null,
+   "quote": "张俊的女婿兼中军大将"
+  },
+  {
+   "from": "c22",
+   "to": "c18",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 73,
+   "to_chapter": null,
+   "quote": "张俊见到是御史中丞，心下先惧了三分"
+  },
+  {
+   "from": "c22",
+   "to": "c15",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 73,
+   "to_chapter": null,
+   "quote": "好教官家知道，韩统制这是怕了"
+  },
+  {
+   "from": "c8",
+   "to": "c61",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 74,
+   "to_chapter": null,
+   "quote": "蒲卢浑从了几十年的军，是俺麾下最亲近信重"
+  },
+  {
+   "from": "c22",
+   "to": "c19",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 77,
+   "to_chapter": null,
+   "quote": "面对如此情形，便是赵鼎赵元镇也颇显犹豫"
+  },
+  {
+   "from": "c2",
+   "to": "c15",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 79,
+   "to_chapter": null,
+   "quote": "杨沂中终于等到了更东面韩世忠的将旗举起"
+  },
+  {
+   "from": "c61",
+   "to": "c76",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 79,
+   "to_chapter": null,
+   "quote": "将自己狠狠凿入了绰号黑龙的王胜部"
+  },
+  {
+   "from": "c77",
+   "to": "c61",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 80,
+   "to_chapter": null,
+   "quote": "灭掉这股胆大包天的宋军"
+  },
+  {
+   "from": "c77",
+   "to": "c15",
+   "type": "other",
+   "label": "其他",
+   "from_chapter": 80,
+   "to_chapter": null,
+   "quote": "韩世忠最信重的心腹"
+  },
+  {
+   "from": "c39",
+   "to": "c78",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 91,
+   "to_chapter": null,
+   "quote": "其父刘韐"
+  },
+  {
+   "from": "c79",
+   "to": "c81",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 97,
+   "to_chapter": null,
+   "quote": "银术可应该是要汇合他的弟弟完颜拔离速"
+  },
+  {
+   "from": "c15",
+   "to": "c56",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 98,
+   "to_chapter": null,
+   "quote": "限期十日，必然生擒范琼"
+  },
+  {
+   "from": "c2",
+   "to": "c51",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 99,
+   "to_chapter": null,
+   "quote": "杨沂中该斩"
+  },
+  {
+   "from": "c56",
+   "to": "c87",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 103,
+   "to_chapter": null,
+   "quote": "待看到是自己亲女秀娘捧着一盏油灯走来"
+  },
+  {
+   "from": "c46",
+   "to": "c88",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 105,
+   "to_chapter": 246,
+   "quote": "辛氏兄弟四人"
+  },
+  {
+   "from": "c46",
+   "to": "c86",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 105,
+   "to_chapter": 246,
+   "quote": "辛氏兄弟四人"
+  },
+  {
+   "from": "c46",
+   "to": "c73",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 105,
+   "to_chapter": null,
+   "quote": "辛氏兄弟四人"
+  },
+  {
+   "from": "c1",
+   "to": "c55",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 106,
+   "to_chapter": null,
+   "quote": "精神抖擞的赵玖盯着身前的王德"
+  },
+  {
+   "from": "c6",
+   "to": "c78",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 106,
+   "to_chapter": null,
+   "quote": "自有王渊、刘子羽以御营都统和枢密院职方司"
+  },
+  {
+   "from": "c20",
+   "to": "c56",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 107,
+   "to_chapter": null,
+   "quote": "范琼那贼厮又渐渐失措"
+  },
+  {
+   "from": "c2",
+   "to": "c9",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 111,
+   "to_chapter": null,
+   "quote": "此处此时只有杨沂中与刘晏引班直随侍而已"
+  },
+  {
+   "from": "c4",
+   "to": "c22",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 114,
+   "to_chapter": null,
+   "quote": "张相公与我素来不合"
+  },
+  {
+   "from": "c19",
+   "to": "c4",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 115,
+   "to_chapter": null,
+   "quote": "汪伯彦在旁插嘴道"
+  },
+  {
+   "from": "c1",
+   "to": "c51",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 116,
+   "to_chapter": null,
+   "quote": "许景衡也彻底站不住了"
+  },
+  {
+   "from": "c21",
+   "to": "c51",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 116,
+   "to_chapter": null,
+   "quote": "吕好问和许景衡对视一眼"
+  },
+  {
+   "from": "c12",
+   "to": "c43",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 117,
+   "to_chapter": 372,
+   "quote": "完颜阿骨打长子完颜"
+  },
+  {
+   "from": "c8",
+   "to": "c29",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 118,
+   "to_chapter": null,
+   "quote": "为了一个屁股上的仇，值得吗"
+  },
+  {
+   "from": "c83",
+   "to": "c20",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 120,
+   "to_chapter": null,
+   "quote": "吕颐浩呵斥的对象乃是户部尚书林杞"
+  },
+  {
+   "from": "c12",
+   "to": "c8",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 122,
+   "to_chapter": null,
+   "quote": "咱爹爹就扭头对粘罕说"
+  },
+  {
+   "from": "c44",
+   "to": "c66",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 122,
+   "to_chapter": null,
+   "quote": "俺本想着，真要是战场上见着了马家官人"
+  },
+  {
+   "from": "c47",
+   "to": "c72",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 123,
+   "to_chapter": 371,
+   "quote": "刘豫的长子刘麟亲自在阵前做遮掩"
+  },
+  {
+   "from": "c32",
+   "to": "c22",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 124,
+   "to_chapter": null,
+   "quote": "来一个黑虎掏心，上来便废掉南京（商丘）的"
+  },
+  {
+   "from": "c10",
+   "to": "c98",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 125,
+   "to_chapter": null,
+   "quote": "弟弟岳翻年纪不大，只是少年姿态"
+  },
+  {
+   "from": "c83",
+   "to": "c84",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 126,
+   "to_chapter": null,
+   "quote": "陈规差点被气笑"
+  },
+  {
+   "from": "c16",
+   "to": "c99",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 128,
+   "to_chapter": null,
+   "quote": "完颜娄室攻破延安后，分兵两万让其子完颜"
+  },
+  {
+   "from": "c1",
+   "to": "c4",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 131,
+   "to_chapter": null,
+   "quote": "汪伯彦因为支持撤往襄阳，被赵官家遣送到襄"
+  },
+  {
+   "from": "c8",
+   "to": "c1",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 131,
+   "to_chapter": null,
+   "quote": "各自决心在南阳继续自己与对方的恩怨"
+  },
+  {
+   "from": "c84",
+   "to": "c103",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 133,
+   "to_chapter": null,
+   "quote": "南阳城防确实有些门道"
+  },
+  {
+   "from": "c81",
+   "to": "c104",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 133,
+   "to_chapter": null,
+   "quote": "完颜拔离速回去怎么跟自己哥哥交代"
+  },
+  {
+   "from": "c103",
+   "to": "c1",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 133,
+   "to_chapter": null,
+   "quote": "生擒那个沧州赵玖"
+  },
+  {
+   "from": "c104",
+   "to": "c103",
+   "type": "other",
+   "label": "其他",
+   "from_chapter": 133,
+   "to_chapter": 337,
+   "quote": "有一名明显是张遇部下的"
+  },
+  {
+   "from": "c104",
+   "to": "c1",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 133,
+   "to_chapter": null,
+   "quote": "生擒那个沧州赵玖"
+  },
+  {
+   "from": "c20",
+   "to": "c27",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 135,
+   "to_chapter": null,
+   "quote": "城上就数胡寅、陈规、林景默三人政治地位最"
+  },
+  {
+   "from": "c4",
+   "to": "c92",
+   "type": "other",
+   "label": "其他",
+   "from_chapter": 136,
+   "to_chapter": null,
+   "quote": "他本该是汪伯彦汪枢相的心腹才对"
+  },
+  {
+   "from": "c92",
+   "to": "c14",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 136,
+   "to_chapter": null,
+   "quote": "李纲再次验证了他只要不打仗就是第一可倚重"
+  },
+  {
+   "from": "c92",
+   "to": "c4",
+   "type": "other",
+   "label": "其他",
+   "from_chapter": 136,
+   "to_chapter": null,
+   "quote": "本该是汪伯彦汪枢相的心腹"
+  },
+  {
+   "from": "c8",
+   "to": "c81",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 138,
+   "to_chapter": null,
+   "quote": "拔离速忽然主动开口"
+  },
+  {
+   "from": "c21",
+   "to": "c1",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 139,
+   "to_chapter": null,
+   "quote": "若金军真坐视羊马墙修葺完毕"
+  },
+  {
+   "from": "c21",
+   "to": "c27",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 139,
+   "to_chapter": null,
+   "quote": "这让吕相公有点慌乱了起来"
+  },
+  {
+   "from": "c53",
+   "to": "c105",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 142,
+   "to_chapter": null,
+   "quote": "一面召来杜充次子杜岩发出旨意"
+  },
+  {
+   "from": "c11",
+   "to": "c53",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 143,
+   "to_chapter": null,
+   "quote": "杜充是以东京留守司成员的身份上过札子"
+  },
+  {
+   "from": "c14",
+   "to": "c63",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 144,
+   "to_chapter": null,
+   "quote": "跟李彦仙这个前线最出色大将有最直接的矛盾"
+  },
+  {
+   "from": "c14",
+   "to": "c11",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 144,
+   "to_chapter": null,
+   "quote": "李纲被贬斥，宗泽不发一语就是明证"
+  },
+  {
+   "from": "c78",
+   "to": "c66",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 144,
+   "to_chapter": null,
+   "quote": "马扩入狱的时间点就是刘子羽父子实际主持镇"
+  },
+  {
+   "from": "c92",
+   "to": "c78",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 144,
+   "to_chapter": null,
+   "quote": "万俟卨肯定不知道的是，他这番操作，反而在"
+  },
+  {
+   "from": "c103",
+   "to": "c55",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 145,
+   "to_chapter": null,
+   "quote": "王德引二十个骑士"
+  },
+  {
+   "from": "c31",
+   "to": "c74",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 146,
+   "to_chapter": null,
+   "quote": "这厮是羞辱你"
+  },
+  {
+   "from": "c47",
+   "to": "c28",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 146,
+   "to_chapter": null,
+   "quote": "刘豫的靠山是完颜挞懒"
+  },
+  {
+   "from": "c55",
+   "to": "c15",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 146,
+   "to_chapter": null,
+   "quote": "王德就曾经不服韩世忠当领导"
+  },
+  {
+   "from": "c100",
+   "to": "c31",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 146,
+   "to_chapter": null,
+   "quote": "高景山明明握有五千刚刚从滑州战场轮换下来"
+  },
+  {
+   "from": "c1",
+   "to": "c75",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 148,
+   "to_chapter": null,
+   "quote": "李光本能向前，且言语恳切"
+  },
+  {
+   "from": "c27",
+   "to": "c83",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 148,
+   "to_chapter": null,
+   "quote": "李光本能向前"
+  },
+  {
+   "from": "c53",
+   "to": "c10",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 148,
+   "to_chapter": null,
+   "quote": "杜充畏战到极致"
+  },
+  {
+   "from": "c26",
+   "to": "c78",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 148,
+   "to_chapter": null,
+   "quote": "此事难道与你刻意忽略五马山义军无关吗"
+  },
+  {
+   "from": "c10",
+   "to": "c106",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 150,
+   "to_chapter": null,
+   "quote": "他很懂得杜充的需求，所以才会与岳飞不合"
+  },
+  {
+   "from": "c11",
+   "to": "c106",
+   "type": "master",
+   "label": "师徒",
+   "from_chapter": 150,
+   "to_chapter": null,
+   "quote": "郦琼天然就可以自称是宗泽的弟子"
+  },
+  {
+   "from": "c106",
+   "to": "c11",
+   "type": "disciple",
+   "label": "师徒",
+   "from_chapter": 150,
+   "to_chapter": null,
+   "quote": "郦琼天然就可以自称是宗泽的弟子"
+  },
+  {
+   "from": "c20",
+   "to": "c92",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 151,
+   "to_chapter": null,
+   "quote": "隔壁小林学士与枢密院副承旨万俟卨早已经起"
+  },
+  {
+   "from": "c28",
+   "to": "c102",
+   "type": "other",
+   "label": "女婿",
+   "from_chapter": 152,
+   "to_chapter": null,
+   "quote": "女婿、也就是腾出手的蒲察鹘拔鲁"
+  },
+  {
+   "from": "c97",
+   "to": "c68",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 152,
+   "to_chapter": null,
+   "quote": "张荣自有一帮水泊兄弟，容不下俺"
+  },
+  {
+   "from": "c97",
+   "to": "c10",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 152,
+   "to_chapter": null,
+   "quote": "更是担忧那岳飞拿捏俺"
+  },
+  {
+   "from": "c10",
+   "to": "c96",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 154,
+   "to_chapter": null,
+   "quote": "一旦岳飞这先行渡河的一万人被当面击溃"
+  },
+  {
+   "from": "c28",
+   "to": "c15",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 154,
+   "to_chapter": null,
+   "quote": "确保完颜挞懒分心"
+  },
+  {
+   "from": "c10",
+   "to": "c8",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 162,
+   "to_chapter": null,
+   "quote": "岳飞教科书式的迟滞与引诱"
+  },
+  {
+   "from": "c15",
+   "to": "c45",
+   "type": "spouse",
+   "label": "夫妻",
+   "from_chapter": 165,
+   "to_chapter": null,
+   "quote": "邀请韩太尉家中的梁夫人过来舞一曲"
+  },
+  {
+   "from": "c83",
+   "to": "c4",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 167,
+   "to_chapter": null,
+   "quote": "汪伯彦这个枢密副使也被顺势架空"
+  },
+  {
+   "from": "c75",
+   "to": "c92",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 167,
+   "to_chapter": null,
+   "quote": "我便与他断了往来"
+  },
+  {
+   "from": "c21",
+   "to": "c14",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 168,
+   "to_chapter": null,
+   "quote": "全都表态要治罪李纲"
+  },
+  {
+   "from": "c51",
+   "to": "c14",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 168,
+   "to_chapter": 374,
+   "quote": "许景衡也严肃出列相对"
+  },
+  {
+   "from": "c12",
+   "to": "c107",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 170,
+   "to_chapter": null,
+   "quote": "孛儿只斤氏与完颜氏"
+  },
+  {
+   "from": "c107",
+   "to": "c33",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 170,
+   "to_chapter": null,
+   "quote": "合不勒明智的选择了与金人进行外交斡旋"
+  },
+  {
+   "from": "c1",
+   "to": "c47",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 171,
+   "to_chapter": null,
+   "quote": "刘豫一个正经进士、大宋文臣精英做了逆贼"
+  },
+  {
+   "from": "c93",
+   "to": "c92",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 175,
+   "to_chapter": null,
+   "quote": "曲端提前打探好了他们的行程"
+  },
+  {
+   "from": "c27",
+   "to": "c58",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 177,
+   "to_chapter": null,
+   "quote": "天下哪有下属软禁、驱除上司"
+  },
+  {
+   "from": "c21",
+   "to": "c7",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 178,
+   "to_chapter": null,
+   "quote": "力劝刚刚登基的官家不要立潘贤妃为后"
+  },
+  {
+   "from": "c1",
+   "to": "c58",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 179,
+   "to_chapter": null,
+   "quote": "曲端进得殿内，便直接望见御座上有一年轻红"
+  },
+  {
+   "from": "c15",
+   "to": "c18",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 179,
+   "to_chapter": null,
+   "quote": "张俊也丝毫不怵，却是顺势挖苦了对方一句"
+  },
+  {
+   "from": "c10",
+   "to": "c69",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 179,
+   "to_chapter": null,
+   "quote": "李成武艺与鹏举不相上下"
+  },
+  {
+   "from": "c18",
+   "to": "c6",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 180,
+   "to_chapter": null,
+   "quote": "张俊张太尉也难得与许久未见的干爹王渊说了"
+  },
+  {
+   "from": "c15",
+   "to": "c21",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 180,
+   "to_chapter": null,
+   "quote": "韩世忠主动拽住了吕好问"
+  },
+  {
+   "from": "c31",
+   "to": "c51",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 180,
+   "to_chapter": null,
+   "quote": "王彦则主动随许景衡许相公往许府而走"
+  },
+  {
+   "from": "c109",
+   "to": "c57",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 182,
+   "to_chapter": 357,
+   "quote": "吴氏岳父吴近"
+  },
+  {
+   "from": "c1",
+   "to": "c110",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 183,
+   "to_chapter": null,
+   "quote": "赵神佑、赵佛佑两个小公主"
+  },
+  {
+   "from": "c1",
+   "to": "c111",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 183,
+   "to_chapter": null,
+   "quote": "赵神佑、赵佛佑两个小公主"
+  },
+  {
+   "from": "c10",
+   "to": "c15",
+   "type": "other",
+   "label": "其他",
+   "from_chapter": 184,
+   "to_chapter": null,
+   "quote": "岳飞妻子南下，早早嫁给了韩世忠部军士"
+  },
+  {
+   "from": "c2",
+   "to": "c68",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 186,
+   "to_chapter": null,
+   "quote": "城中守备之人，乃是梁山泊张荣所任"
+  },
+  {
+   "from": "c68",
+   "to": "c96",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 187,
+   "to_chapter": null,
+   "quote": "伪齐元帅孔彦舟率一万多兖州兵"
+  },
+  {
+   "from": "c68",
+   "to": "c72",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 187,
+   "to_chapter": null,
+   "quote": "刘豫长子刘麟率两万余济南兵"
+  },
+  {
+   "from": "c72",
+   "to": "c96",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 187,
+   "to_chapter": 285,
+   "quote": "刘麟率两万余济南兵、伪齐元帅孔彦舟率一万"
+  },
+  {
+   "from": "c69",
+   "to": "c2",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 190,
+   "to_chapter": null,
+   "quote": "胜了李成的，乃是御前统制官"
+  },
+  {
+   "from": "c95",
+   "to": "c10",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 191,
+   "to_chapter": null,
+   "quote": "岳飞何以无能误国"
+  },
+  {
+   "from": "c1",
+   "to": "c7",
+   "type": "spouse",
+   "label": "夫妻",
+   "from_chapter": 194,
+   "to_chapter": null,
+   "quote": "潘贤妃和俩小公主送过去了，大的这个赵官"
+  },
+  {
+   "from": "c96",
+   "to": "c74",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 194,
+   "to_chapter": null,
+   "quote": "孔流子！你这厮也能落入爷爷手中"
+  },
+  {
+   "from": "c112",
+   "to": "c22",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 197,
+   "to_chapter": null,
+   "quote": "张漕司（张浚）是能做出这种事情的"
+  },
+  {
+   "from": "c27",
+   "to": "c75",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 198,
+   "to_chapter": null,
+   "quote": "御史中丞李光强烈反对"
+  },
+  {
+   "from": "c18",
+   "to": "c10",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 199,
+   "to_chapter": null,
+   "quote": "岳飞在周围除了张荣以外所有同僚的冷冷注视"
+  },
+  {
+   "from": "c63",
+   "to": "c31",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 199,
+   "to_chapter": null,
+   "quote": "二人几乎一起畏缩，根本没有出列"
+  },
+  {
+   "from": "c75",
+   "to": "c21",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 200,
+   "to_chapter": null,
+   "quote": "李光却忍不住顺势提起了这一遭话来"
+  },
+  {
+   "from": "c112",
+   "to": "c21",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 201,
+   "to_chapter": null,
+   "quote": "这般轻视当朝宰执"
+  },
+  {
+   "from": "c112",
+   "to": "c4",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 201,
+   "to_chapter": null,
+   "quote": "轻视当朝宰执"
+  },
+  {
+   "from": "c75",
+   "to": "c95",
+   "type": "ally",
+   "label": "至交",
+   "from_chapter": 203,
+   "to_chapter": 357,
+   "quote": "李光为御史中丞，以李公相三弟李经"
+  },
+  {
+   "from": "c95",
+   "to": "c14",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 203,
+   "to_chapter": 374,
+   "quote": "李公相三弟李经"
+  },
+  {
+   "from": "c63",
+   "to": "c16",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 204,
+   "to_chapter": null,
+   "quote": "便是李彦仙在陕州的军事奇迹也是此人转向关"
+  },
+  {
+   "from": "c51",
+   "to": "c6",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 210,
+   "to_chapter": 367,
+   "quote": "将御营中军军饷和百官俸禄，一分为三"
+  },
+  {
+   "from": "c16",
+   "to": "c96",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 215,
+   "to_chapter": null,
+   "quote": "完颜娄室一分为二"
+  },
+  {
+   "from": "c33",
+   "to": "c12",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 216,
+   "to_chapter": null,
+   "quote": "完颜阿骨打本人不说，其兄弟完颜"
+  },
+  {
+   "from": "c44",
+   "to": "c33",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 219,
+   "to_chapter": null,
+   "quote": "完颜希尹上来第一个开口回应，却是默认了国"
+  },
+  {
+   "from": "c44",
+   "to": "c16",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 219,
+   "to_chapter": null,
+   "quote": "完颜希尹上来第一个开口回应，却是默认了国"
+  },
+  {
+   "from": "c8",
+   "to": "c43",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 220,
+   "to_chapter": null,
+   "quote": "在自己的宅邸内向自己两个哥哥进行了逼宫"
+  },
+  {
+   "from": "c8",
+   "to": "c44",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 220,
+   "to_chapter": null,
+   "quote": "在自己的宅邸内向自己两个哥哥进行了逼宫"
+  },
+  {
+   "from": "c33",
+   "to": "c29",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 220,
+   "to_chapter": null,
+   "quote": "压得正经国主和太祖嫡系喘不过气来"
+  },
+  {
+   "from": "c43",
+   "to": "c29",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 220,
+   "to_chapter": null,
+   "quote": "斡本和讹里朵支撑不住"
+  },
+  {
+   "from": "c44",
+   "to": "c43",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 220,
+   "to_chapter": null,
+   "quote": "斡本与讹里"
+  },
+  {
+   "from": "c1",
+   "to": "c16",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 223,
+   "to_chapter": null,
+   "quote": "这一仗，必然是要打的"
+  },
+  {
+   "from": "c16",
+   "to": "c114",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 226,
+   "to_chapter": null,
+   "quote": "朝自己身侧不远处扶刀侍从的次子完颜谋衍发"
+  },
+  {
+   "from": "c93",
+   "to": "c108",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 226,
+   "to_chapter": null,
+   "quote": "守将吴玠、吴璘兄弟二人一分为二"
+  },
+  {
+   "from": "c89",
+   "to": "c42",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 230,
+   "to_chapter": null,
+   "quote": "刘錡想要为吴玠辩解却又被兄长刘锡"
+  },
+  {
+   "from": "c93",
+   "to": "c58",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 234,
+   "to_chapter": null,
+   "quote": "北三路的曲端、吴氏兄弟肯定不会服气"
+  },
+  {
+   "from": "c55",
+   "to": "c54",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 235,
+   "to_chapter": null,
+   "quote": "王德以下，张景、乔仲福、傅庆"
+  },
+  {
+   "from": "c16",
+   "to": "c93",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 236,
+   "to_chapter": null,
+   "quote": "吴玠主动遣使者拜访完颜娄室"
+  },
+  {
+   "from": "c55",
+   "to": "c42",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 236,
+   "to_chapter": null,
+   "quote": "王德王副都统与刘錡刘经略"
+  },
+  {
+   "from": "c93",
+   "to": "c89",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 236,
+   "to_chapter": null,
+   "quote": "又是刘锡跟吴玠"
+  },
+  {
+   "from": "c116",
+   "to": "c89",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 241,
+   "to_chapter": 306,
+   "quote": "身为刘仲武的长子"
+  },
+  {
+   "from": "c80",
+   "to": "c115",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 244,
+   "to_chapter": null,
+   "quote": "让其子翟琮袭其职"
+  },
+  {
+   "from": "c14",
+   "to": "c75",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 248,
+   "to_chapter": 374,
+   "quote": "李纲当然在东南，犹然向朝中推了李光"
+  },
+  {
+   "from": "c83",
+   "to": "c21",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 248,
+   "to_chapter": null,
+   "quote": "许景衡选择退让之后，犹然将吕颐浩的前路给"
+  },
+  {
+   "from": "c22",
+   "to": "c1",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 251,
+   "to_chapter": null,
+   "quote": "张浚提出放开一定地方限制"
+  },
+  {
+   "from": "c19",
+   "to": "c1",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 251,
+   "to_chapter": null,
+   "quote": "赵鼎提出扩大国债规模"
+  },
+  {
+   "from": "c65",
+   "to": "c10",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 255,
+   "to_chapter": null,
+   "quote": "三路诸军州长官纷纷弹劾岳飞"
+  },
+  {
+   "from": "c22",
+   "to": "c64",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 257,
+   "to_chapter": null,
+   "quote": "便要作反呢"
+  },
+  {
+   "from": "c21",
+   "to": "c85",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 258,
+   "to_chapter": null,
+   "quote": "臣记得家父还曾代朝廷又一次征召过他"
+  },
+  {
+   "from": "c122",
+   "to": "c123",
+   "type": "master",
+   "label": "师徒",
+   "from_chapter": 258,
+   "to_chapter": 360,
+   "quote": "杨时）弟子，唤做罗丛"
+  },
+  {
+   "from": "c65",
+   "to": "c2",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 260,
+   "to_chapter": null,
+   "quote": "全都是弹劾杨沂中"
+  },
+  {
+   "from": "c119",
+   "to": "c120",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 264,
+   "to_chapter": null,
+   "quote": "郑亿年甫一回到家中，便直接往自己兄长郑修"
+  },
+  {
+   "from": "c29",
+   "to": "c79",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 271,
+   "to_chapter": null,
+   "quote": "完颜希尹、完颜银术可都是粘罕一系"
+  },
+  {
+   "from": "c75",
+   "to": "c10",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 272,
+   "to_chapter": null,
+   "quote": "官家不能因为宠信岳飞便一厢情愿"
+  },
+  {
+   "from": "c91",
+   "to": "c21",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 276,
+   "to_chapter": null,
+   "quote": "礼部尚书朱胜非"
+  },
+  {
+   "from": "c21",
+   "to": "c22",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 277,
+   "to_chapter": null,
+   "quote": "吕好问、赵鼎、张浚等人亲自带着蓝大官"
+  },
+  {
+   "from": "c27",
+   "to": "c19",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 277,
+   "to_chapter": null,
+   "quote": "赵鼎、张浚，外加此时在关西的胡寅"
+  },
+  {
+   "from": "c83",
+   "to": "c14",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 279,
+   "to_chapter": null,
+   "quote": "吕颐浩以上级的身份公开发文呵斥"
+  },
+  {
+   "from": "c127",
+   "to": "c1",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 280,
+   "to_chapter": null,
+   "quote": "官家的‘生母’韦太后"
+  },
+  {
+   "from": "c1",
+   "to": "c126",
+   "type": "other",
+   "label": "嫡母",
+   "from_chapter": 281,
+   "to_chapter": null,
+   "quote": "郑太后是太上道君皇帝的正宫"
+  },
+  {
+   "from": "c75",
+   "to": "c91",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 282,
+   "to_chapter": 363,
+   "quote": "李光，其人肃然以对"
+  },
+  {
+   "from": "c10",
+   "to": "c38",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 288,
+   "to_chapter": null,
+   "quote": "岳飞那个才十二三岁的长子岳云"
+  },
+  {
+   "from": "c59",
+   "to": "c69",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 288,
+   "to_chapter": null,
+   "quote": "被金军万户讹鲁补随手扔给了李成"
+  },
+  {
+   "from": "c10",
+   "to": "c30",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 289,
+   "to_chapter": null,
+   "quote": "臣弹劾御营前军都统岳飞行事私心作祟"
+  },
+  {
+   "from": "c129",
+   "to": "c130",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 291,
+   "to_chapter": 296,
+   "quote": "他弟弟孔端操"
+  },
+  {
+   "from": "c131",
+   "to": "c132",
+   "type": "other",
+   "label": "岳父",
+   "from_chapter": 298,
+   "to_chapter": 320,
+   "quote": "他岳父薛元礼更是位列宰执"
+  },
+  {
+   "from": "c8",
+   "to": "c99",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 300,
+   "to_chapter": null,
+   "quote": "此番明摆着是去夺活女兄弟的兵权"
+  },
+  {
+   "from": "c90",
+   "to": "c82",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 301,
+   "to_chapter": null,
+   "quote": "本族骑兵被耶律马五拿住"
+  },
+  {
+   "from": "c90",
+   "to": "c94",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 301,
+   "to_chapter": null,
+   "quote": "耶律大石"
+  },
+  {
+   "from": "c1",
+   "to": "c118",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 305,
+   "to_chapter": null,
+   "quote": "赵宋官家的私人嘲讽"
+  },
+  {
+   "from": "c8",
+   "to": "c44",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 305,
+   "to_chapter": null,
+   "quote": "完颜兀术与他三兄晋王完颜讹里朵不得不临时"
+  },
+  {
+   "from": "c1",
+   "to": "c57",
+   "type": "spouse",
+   "label": "夫妻",
+   "from_chapter": 306,
+   "to_chapter": null,
+   "quote": "吴贵妃与潘贵妃依次为这位赵宋天子诞下两个"
+  },
+  {
+   "from": "c7",
+   "to": "c134",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 306,
+   "to_chapter": 357,
+   "quote": "乳名德佐的皇子为潘贵妃所出"
+  },
+  {
+   "from": "c57",
+   "to": "c133",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 306,
+   "to_chapter": 357,
+   "quote": "乳名原佐的皇子为吴贵妃所出"
+  },
+  {
+   "from": "c94",
+   "to": "c118",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 308,
+   "to_chapter": 364,
+   "quote": "引三万大军与鹏举三万之众左右合击"
+  },
+  {
+   "from": "c8",
+   "to": "c117",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 309,
+   "to_chapter": null,
+   "quote": "万户完颜突合速忽然开口"
+  },
+  {
+   "from": "c118",
+   "to": "c135",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 313,
+   "to_chapter": 327,
+   "quote": "李乾顺成功以成年的弟弟嵬名察哥代替了对方"
+  },
+  {
+   "from": "c10",
+   "to": "c74",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 315,
+   "to_chapter": null,
+   "quote": "岳飞又唤来张宪，将此次携带的火药包交给自"
+  },
+  {
+   "from": "c131",
+   "to": "c10",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 315,
+   "to_chapter": null,
+   "quote": "双方在皇宫议事大堂前的空地上见面"
+  },
+  {
+   "from": "c10",
+   "to": "c118",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 319,
+   "to_chapter": null,
+   "quote": "岳飞‘可能’控制了兴灵之地"
+  },
+  {
+   "from": "c99",
+   "to": "c1",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 319,
+   "to_chapter": null,
+   "quote": "有杀父之仇的活女"
+  },
+  {
+   "from": "c93",
+   "to": "c118",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 319,
+   "to_chapter": null,
+   "quote": "李乾顺失踪引发横山全线动摇"
+  },
+  {
+   "from": "c137",
+   "to": "c136",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 320,
+   "to_chapter": 321,
+   "quote": "仁礼的兄长，濮王嵬名仁忠"
+  },
+  {
+   "from": "c10",
+   "to": "c135",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 321,
+   "to_chapter": null,
+   "quote": "西夏主帅嵬名察哥战死"
+  },
+  {
+   "from": "c8",
+   "to": "c107",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 324,
+   "to_chapter": null,
+   "quote": "见到了东部蒙兀汗王合不勒汗"
+  },
+  {
+   "from": "c94",
+   "to": "c1",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 325,
+   "to_chapter": null,
+   "quote": "大石林牙为一族兴衰所系"
+  },
+  {
+   "from": "c94",
+   "to": "c107",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 325,
+   "to_chapter": null,
+   "quote": "耶律大石孤身而走"
+  },
+  {
+   "from": "c94",
+   "to": "c8",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 326,
+   "to_chapter": null,
+   "quote": "与耶律大石以及两位蒙古王并马而归"
+  },
+  {
+   "from": "c27",
+   "to": "c113",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 328,
+   "to_chapter": null,
+   "quote": "将胡寅的弟弟胡宏强行塞了进来"
+  },
+  {
+   "from": "c31",
+   "to": "c66",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 331,
+   "to_chapter": null,
+   "quote": "赵玖让王彦去接马扩是有缘故的"
+  },
+  {
+   "from": "c95",
+   "to": "c1",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 336,
+   "to_chapter": null,
+   "quote": "御史李经忽然上书弹劾"
+  },
+  {
+   "from": "c124",
+   "to": "c101",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 342,
+   "to_chapter": null,
+   "quote": "乌林答贊谟、万户乌林答泰欲兄弟"
+  },
+  {
+   "from": "c33",
+   "to": "c138",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 343,
+   "to_chapter": null,
+   "quote": "吴乞买长子完颜蒲鲁虎"
+  },
+  {
+   "from": "c125",
+   "to": "c44",
+   "type": "sibling",
+   "label": "手足",
+   "from_chapter": 343,
+   "to_chapter": null,
+   "quote": "执政三兄弟中老大辽王"
+  },
+  {
+   "from": "c107",
+   "to": "c29",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 348,
+   "to_chapter": null,
+   "quote": "合不勒汗的姓氏而对他警惕"
+  },
+  {
+   "from": "c31",
+   "to": "c58",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 349,
+   "to_chapter": null,
+   "quote": "被曲端嘲讽的王彦"
+  },
+  {
+   "from": "c22",
+   "to": "c83",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 370,
+   "to_chapter": null,
+   "quote": "吕相公入朝后真正的对手其实是张相公"
+  },
+  {
+   "from": "c19",
+   "to": "c83",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 370,
+   "to_chapter": null,
+   "quote": "吕相公入朝后真正的对手其实是张相公"
+  },
+  {
+   "from": "c100",
+   "to": "c10",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 371,
+   "to_chapter": null,
+   "quote": "高景山保持了清醒，也做出了他力所能及的最"
+  },
+  {
+   "from": "c81",
+   "to": "c117",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 373,
+   "to_chapter": null,
+   "quote": "包括完颜拔离速本部万户、完颜突合速所部万"
+  },
+  {
+   "from": "c117",
+   "to": "c63",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 373,
+   "to_chapter": null,
+   "quote": "在突合速大旗监督下"
+  },
+  {
+   "from": "c15",
+   "to": "c63",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 374,
+   "to_chapter": null,
+   "quote": "韩郡王要发飙找李节度定个尊卑"
+  },
+  {
+   "from": "c117",
+   "to": "c15",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 375,
+   "to_chapter": null,
+   "quote": "拔离速也点起浍水大军"
+  },
+  {
+   "from": "c15",
+   "to": "c81",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 377,
+   "to_chapter": null,
+   "quote": "与拔离速对峙"
+  },
+  {
+   "from": "c81",
+   "to": "c63",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 377,
+   "to_chapter": null,
+   "quote": "与拔离速对峙，正夹在铁岭关立营的李彦仙"
+  },
+  {
+   "from": "c83",
+   "to": "c31",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 378,
+   "to_chapter": null,
+   "quote": "吕颐浩吕相公与王彦王总统"
+  },
+  {
+   "from": "c82",
+   "to": "c15",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 382,
+   "to_chapter": null,
+   "quote": "看旗号，乃是耶律马五断后"
+  },
+  {
+   "from": "c19",
+   "to": "c121",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 384,
+   "to_chapter": null,
+   "quote": "正是当朝首相长子，唤做赵汾的那位"
+  },
+  {
+   "from": "c23",
+   "to": "c27",
+   "type": "parent",
+   "label": "亲缘",
+   "from_chapter": 384,
+   "to_chapter": null,
+   "quote": "胡寅那里类似，他自有异父异母的亲弟胡宏"
+  },
+  {
+   "from": "c10",
+   "to": "c128",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 385,
+   "to_chapter": null,
+   "quote": "按照败兵叙述，应该是金国万户王伯龙本部"
+  },
+  {
+   "from": "c36",
+   "to": "c35",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 385,
+   "to_chapter": null,
+   "quote": "王贵领中军统制官汤怀出迎"
+  },
+  {
+   "from": "c128",
+   "to": "c30",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 385,
+   "to_chapter": null,
+   "quote": "遇到了金军大队，直接大败了一场，损失过半"
+  },
+  {
+   "from": "c100",
+   "to": "c128",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 386,
+   "to_chapter": null,
+   "quote": "王伯龙倒是出击了"
+  },
+  {
+   "from": "c100",
+   "to": "c30",
+   "type": "enemy",
+   "label": "敌对",
+   "from_chapter": 391,
+   "to_chapter": null,
+   "quote": "高景山强烈意识到某种可能性"
+  },
+  {
+   "from": "c59",
+   "to": "c60",
+   "type": "ally",
+   "label": "同盟",
+   "from_chapter": 395,
+   "to_chapter": null,
+   "quote": "东面完颜奔睹、讹鲁补，外加错位救援的阿里"
+  }
+ ],
+ "stats": {
+  "characters": 138,
+  "relations": 265,
+  "factions": 10,
+  "chaptersScanned": 395,
+  "sampledChapters": 395
+ }
+}
