@@ -4007,8 +4007,10 @@ async fn toc_from_cached_chapters(
         chapters.len()
     );
     if let Ok(json) = serde_json::to_string(&chapters) {
-        // book_url 也写进 toc_cache 的行键，书架刷新按 book_url 失效时能命中
-        let _ = state.storage.cache_toc(ns, book_url, toc_url, &json).await;
+        // 键沿用抓取成功路径的写法（book_url 列也填 toc_url）：toc_cache 主键是
+        // (book_url, user_namespace)，这里若改填书页 book_url，就会与抓取路径写入的行
+        // 并存出两条同 toc_url 的记录，而 get_toc_cache 只按 toc_url 查、命中哪条不定。
+        let _ = state.storage.cache_toc(ns, toc_url, toc_url, &json).await;
     }
     Some(chapters)
 }
@@ -24808,6 +24810,14 @@ mod tests {
             .unwrap();
         let cached = cached.expect("兜底目录应写入 toc_cache");
         assert!(cached.contains("第2章 乙"));
+        // 只写一行：toc_cache 主键是 (book_url, user_namespace)，若兜底用书页 book_url
+        // 建键，就会与抓取路径(以 toc_url 建键)并存两条同 toc_url 的记录
+        let rows: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM toc_cache WHERE toc_url = ?1")
+            .bind(dead_toc)
+            .fetch_one(&state.storage.pool)
+            .await
+            .unwrap();
+        assert_eq!(rows.0, 1, "同一 toc_url 只应有一条目录缓存");
 
         cleanup(state, dir).await;
     }
