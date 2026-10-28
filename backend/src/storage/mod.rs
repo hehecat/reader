@@ -5280,6 +5280,23 @@ fn write_zip_entry(
     Ok(())
 }
 
+/// 目录解析结果是否可信（够格回写 `total_chapter_num` / `latest_chapter_title`）。
+///
+/// 源站多页目录若翻页提前终止（末页 next 解析为空或页面结构变化），`analyze_toc`
+/// 会返回一份"结构正常但缺章"的目录；一旦拿它回写书架总数，前端进度/未读/「设为读完」
+/// 就全部按错值算（绍宋：书架 60 章 / 实际 400 章缓存，读到第 100 章会被算成"已读完"）。
+///
+/// 判据：解析章数既少于书架已知总数、又少于已缓存章数 → 判为残缺。
+/// 两条下界取"或"：卷末总结等让已缓存章数可能多于目录条目（绍宋缓存 400 条 / 目录 395 章），
+/// 只把缓存当上界会误杀正常目录；反过来只信 prev 也不行——prev 本身可能已被残缺血洗过。
+/// `cached = 0`（一章正文都没缓存）时缓存不构成下界，此时仅凭 prev 判断，否则
+/// 「prev 有 400 章、这次只解析出 50 章」会被 `parsed >= 0` 放行。
+/// `prev = 0` 的新书没有已知总数，先信任解析结果（交给缓存与阅读器的下界去纠正），
+/// 但 `parsed = 0` 永远不可信。
+fn plausible_chapter_total(parsed: i64, prev: i64, cached: i64) -> bool {
+    parsed > 0 && (parsed >= prev || (cached > 0 && parsed >= cached))
+}
+
 /// F-35：扫描 books 表 can_update=1 的书 → analyze_toc → 回写
 /// latest_chapter_title / total_chapter_num（单本失败跳过，不影响其余）
 pub async fn run_shelf_update(storage: &Storage) -> Result<usize> {
@@ -5323,6 +5340,22 @@ pub async fn run_shelf_update(storage: &Storage) -> Result<usize> {
                     chapters.iter().filter(|c| !c.is_volume).collect();
                 let latest = non_volume.last().map(|c| c.title.clone());
                 let total = non_volume.len() as i64;
+                // 质量门（与阅读器 getChapterList 同一判据）：残缺目录既不回写章数/最新章节，
+                // 也不失效目录缓存——否则 total_chapter_num 被永久毒化成小值。
+                // 已缓存章数是第二道锚：prev 一旦被残缺血洗过（绍宋 60）就失效，缓存仍能拦。
+                let cached = storage
+                    .count_book_chapters(&book.user_namespace, &book.book_url)
+                    .await
+                    .unwrap_or(0);
+                if !plausible_chapter_total(total, book.total_chapter_num, cached) {
+                    tracing::warn!(
+                        "书架更新跳过章节回写：目录疑似残缺 [{}] {}（解析 {total} 章 vs 书架 {} 章 / 已缓存 {cached} 章）",
+                        book.book_url,
+                        book.name,
+                        book.total_chapter_num
+                    );
+                    continue;
+                }
                 let now = chrono::Utc::now().timestamp_millis();
                 match storage
                     .update_book_update_info(
@@ -8613,6 +8646,29 @@ mod tests {
             .unwrap();
         assert_eq!(book.last_check_count, 0);
         cleanup(storage, "shelfrun").await;
+    }
+
+    /// 夜间书架更新的目录质量门：残缺目录（比已知总数和已缓存章数都少）不得回写章数
+    #[test]
+    fn test_plausible_chapter_total() {
+        // 残缺：解析 60 章 < 书架 395 / 已缓存 400（绍宋真实数据）→ 拒绝
+        assert!(!plausible_chapter_total(60, 395, 400));
+        // 正常增长：解析 400 ≥ 书架 395 → 接受
+        assert!(plausible_chapter_total(400, 395, 400));
+        // 持平续更：解析 400 > 395，即使缓存只有 100 章也接受
+        assert!(plausible_chapter_total(396, 396, 100));
+        // 卷末总结使缓存多于目录：解析 395 == 书架 395，缓存 400 → 接受
+        assert!(plausible_chapter_total(395, 395, 400));
+        // prev=0（新书首抓，无已知总数）→ 信任解析结果，交给缓存/阅读器下界纠正
+        assert!(plausible_chapter_total(300, 0, 0));
+        assert!(plausible_chapter_total(300, 0, 400));
+        // 只有 prev 一道锚也要拦
+        assert!(!plausible_chapter_total(50, 400, 0));
+        // 空解析永远不可信
+        assert!(!plausible_chapter_total(0, 0, 0));
+        assert!(!plausible_chapter_total(0, 400, 400));
+        // 负值（异常数据）同样不可信
+        assert!(!plausible_chapter_total(-1, 0, 0));
     }
 
     /// F-28：替换规则 CRUD 往返 + 命名空间隔离 + default 回退
