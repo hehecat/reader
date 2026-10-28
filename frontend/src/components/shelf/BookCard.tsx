@@ -13,6 +13,7 @@ import {
   cn,
 } from "@/components/ui";
 import { bookCover, bookGroupNames, readerPath } from "@/hooks/useBookshelf";
+import { effectiveTotalChapterNum } from "@/lib/chapterCount";
 import type { Book, BookGroup } from "@/types/api";
 
 /** grid=封面网格(封面 + 居中标题/作者两行); list=行卡(封面 + 书名 + 作者·分组 + 引言) */
@@ -63,25 +64,27 @@ export function BookCard({
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = React.useState(false);
 
-  const unread = book.totalChapterNum - 1 - book.durChapterIndex;
+  // 有效总章数: 书架记录的总数可能陈旧(被残缺目录回写过), 见 lib/chapterCount
+  const totalChapterNum = effectiveTotalChapterNum(book);
+  const unread = Math.max(0, totalChapterNum - 1 - book.durChapterIndex);
   const progressPct =
-    book.totalChapterNum > 0
-      ? Math.min(100, Math.round(((book.durChapterIndex + 1) / book.totalChapterNum) * 100))
+    totalChapterNum > 0
+      ? Math.min(100, Math.round(((book.durChapterIndex + 1) / totalChapterNum) * 100))
       : 0;
   const progressBar =
-    book.totalChapterNum > 0 ? (
+    totalChapterNum > 0 ? (
       <div aria-hidden className="h-0.5 overflow-hidden rounded-full bg-border/60">
         <div className="h-full bg-accent/70" style={{ width: `${progressPct}%` }} />
       </div>
     ) : null;
-  const canMarkRead = book.totalChapterNum > 0 && unread > 0;
+  const canMarkRead = totalChapterNum > 0 && unread > 0;
   const chapter = book.durChapterTitle?.trim();
   /** 阅读进度文案: 读至章节名/序号 + 总章数; 未读开时退化为最新章节 */
   // 章节名常超长被截断: 卡片只用序号(短且对齐), 章节名在详情弹窗看
   // 章号以进度下标为准(index+1): 标题可能滞后于进度(换源/源站缺号), 不作为章号来源
   const progressText =
-    book.totalChapterNum > 0
-      ? `读至第 ${book.durChapterIndex + 1} 章 · 共 ${book.totalChapterNum} 章`
+    totalChapterNum > 0
+      ? `读至第 ${book.durChapterIndex + 1} 章 · 共 ${totalChapterNum} 章`
       : (book.latestChapterTitle?.trim() ? `最新 ${book.latestChapterTitle.trim()}` : "");
   const intro = (book.customIntro ?? book.intro ?? "").trim();
   const groupNames = groups === undefined ? [] : bookGroupNames(book, groups);

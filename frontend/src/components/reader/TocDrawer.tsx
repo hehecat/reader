@@ -21,6 +21,7 @@ import {
 } from "@/components/ui";
 import { errorMessage } from "@/hooks/useBookshelf";
 import { searchBookContent, type BookContentHit } from "@/services/book";
+import { effectiveTotalChapterNum } from "@/lib/chapterCount";
 import { humanizeError } from "@/lib/errors";
 import {
   attachCacheBookStream,
@@ -92,7 +93,7 @@ export interface TocDrawerProps {
   onToggleReversed: () => void;
   /** 点击章节: 切章并关闭抽屉 */
   onSelect: (index: number) => void;
-  /** 书架记录的章数: 大于目录长度时提示目录可能不完整(翻页残缺/缓存陈旧) */
+  /** 书架记录的章数: 与目录长度不一致时双向提示(目录残缺 / 书架章数陈旧) */
   totalChapterNum?: number;
   /** 重取目录(跳过服务端缓存); 传了才显示「刷新目录」按钮 */
   onRefreshToc?: () => void;
@@ -128,6 +129,23 @@ export function TocDrawer({
     () => (reversed ? [...chapters].reverse() : chapters),
     [chapters, reversed],
   );
+
+  /** 有效总章数: 目录实际章数才是权威值——书架记录的总数可能被残缺目录回写成小值 */
+  const effectiveTotal = React.useMemo(
+    () =>
+      effectiveTotalChapterNum(
+        { totalChapterNum: totalChapterNum ?? 0, durChapterIndex: currentIndex },
+        chapters.length,
+      ),
+    [totalChapterNum, currentIndex, chapters.length],
+  );
+
+  /** 书架章数与目录章数不一致(两边都有值) → 双向提示: 目录残缺 / 书架章数陈旧 */
+  const countMismatch =
+    totalChapterNum !== undefined &&
+    totalChapterNum > 0 &&
+    chapters.length > 0 &&
+    totalChapterNum !== chapters.length;
 
   // 打开时把当前章节顶到列表可视区顶部 (抽屉每次打开重新挂载 Virtuoso)
   const initialTop = React.useMemo(() => {
@@ -351,10 +369,11 @@ export function TocDrawer({
             </div>
           )}
           <TocSearchField value={query} onChange={setQuery} />
-          {totalChapterNum !== undefined && totalChapterNum > chapters.length ? (
+          {countMismatch ? (
             <p className="mt-2 rounded-lg border border-accent/30 bg-surface px-2.5 py-1.5 text-xs text-accent">
-              目录只有 {chapters.length} 章, 但书架记录 {totalChapterNum} 章 —— 可能抓取不完整或缓存陈旧,
-              可点下方「刷新目录」重取。
+              {totalChapterNum > chapters.length
+                ? `目录只有 ${chapters.length} 章, 但书架记录 ${totalChapterNum} 章 —— 可能抓取不完整或缓存陈旧, 可点下方「刷新目录」重取。`
+                : `书架记录 ${totalChapterNum} 章, 但目录实际 ${chapters.length} 章 —— 书架章数可能陈旧(总章数曾被残缺目录回写过), 阅读进度已按目录 ${effectiveTotal} 章计算, 可点下方「刷新目录」重取校准。`}
             </p>
           ) : null}
         </DrawerHeader>

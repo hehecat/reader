@@ -23,6 +23,7 @@ import {
   bookGroupNames,
 } from "@/hooks/useBookshelf";
 import { BOOKS_QUERY_KEY, errorMessage } from "@/hooks/useBookshelf";
+import { effectiveTotalChapterNum } from "@/lib/chapterCount";
 import { humanizeError } from "@/lib/errors";
 import { saveBook } from "@/services/bookshelf";
 import type { Book, BookGroup } from "@/types/api";
@@ -75,7 +76,9 @@ export function BookInfoDialog({
     return <Dialog open={false} onOpenChange={onOpenChange} />;
   }
 
-  const unread = book.totalChapterNum - 1 - book.durChapterIndex;
+  // 有效总章数: 书架记录的总数可能陈旧(被残缺目录回写过), 见 lib/chapterCount
+  const totalChapterNum = effectiveTotalChapterNum(book);
+  const unread = Math.max(0, totalChapterNum - 1 - book.durChapterIndex);
   const intro = book.customIntro ?? book.intro ?? "";
   const groupNames = bookGroupNames(book, groups);
 
@@ -91,10 +94,10 @@ export function BookInfoDialog({
     {
       label: "阅读进度",
       value:
-        book.totalChapterNum > 0
+        totalChapterNum > 0
           ? book.durChapterTitle?.trim() || book.durChapterIndex > 0
-            ? `${book.durChapterIndex + 1} / ${book.totalChapterNum} 章`
-            : `共 ${book.totalChapterNum} 章`
+            ? `${book.durChapterIndex + 1} / ${totalChapterNum} 章`
+            : `共 ${totalChapterNum} 章`
           : "尚未读取目录",
     },
     {

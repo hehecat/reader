@@ -12,6 +12,7 @@ import {
   Skeleton,
 } from "@/components/ui";
 import { bookCover, errorMessage, readerPath, useBookshelf } from "@/hooks/useBookshelf";
+import { effectiveTotalChapterNum } from "@/lib/chapterCount";
 import type { Book } from "@/types/api";
 
 /** 最近阅读展示条数 */
@@ -19,7 +20,8 @@ const RECENT_COUNT = 3;
 
 /** 读完: 目录已拉取且进度推到最后一章(与书架详情弹窗的「已读完」判定一致) */
 function isFinished(book: Book): boolean {
-  return book.totalChapterNum > 0 && book.durChapterIndex >= book.totalChapterNum - 1;
+  const total = effectiveTotalChapterNum(book);
+  return total > 0 && book.durChapterIndex >= total - 1;
 }
 
 /** 在读: 有阅读记录(时长或章节进度)且尚未读到最后一章 */
@@ -29,15 +31,16 @@ function isReading(book: Book): boolean {
 
 /** 待读章节: 与 BookCard 的未读角标一致, 总章节数 - 1 - 当前章节 */
 function unreadChapters(book: Book): number {
-  return Math.max(0, book.totalChapterNum - 1 - book.durChapterIndex);
+  return Math.max(0, effectiveTotalChapterNum(book) - 1 - book.durChapterIndex);
 }
 
 /** 阅读进度百分比(0-100): 总章节数未知时按 0 计 */
 function progressPercent(book: Book): number {
-  if (book.totalChapterNum <= 0) {
+  const total = effectiveTotalChapterNum(book);
+  if (total <= 0) {
     return 0;
   }
-  const percent = ((book.durChapterIndex + 1) / book.totalChapterNum) * 100;
+  const percent = ((book.durChapterIndex + 1) / total) * 100;
   return Math.min(100, Math.max(0, Math.round(percent)));
 }
 
@@ -45,6 +48,7 @@ function progressPercent(book: Book): number {
 function RecentBook({ book }: { book: Book }) {
   const navigate = useNavigate();
   const percent = progressPercent(book);
+  const total = effectiveTotalChapterNum(book);
 
   return (
     <button
@@ -62,10 +66,10 @@ function RecentBook({ book }: { book: Book }) {
         <p className="mt-0.5 truncate text-xs text-muted-foreground">
           {book.durChapterTitle?.trim() ||
             (book.durChapterIndex > 0 ? `第 ${book.durChapterIndex + 1} 章` : "尚未开始阅读")}
-          {book.totalChapterNum > 0
+          {total > 0
             ? book.durChapterTitle?.trim() || book.durChapterIndex > 0
-              ? ` · ${book.durChapterIndex + 1} / ${book.totalChapterNum} 章`
-              : ` · 共 ${book.totalChapterNum} 章`
+              ? ` · ${book.durChapterIndex + 1} / ${total} 章`
+              : ` · 共 ${total} 章`
             : ""}
         </p>
         <div

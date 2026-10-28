@@ -3,6 +3,7 @@ import * as React from "react";
 
 import { toast } from "@/components/ui";
 import { ApiError } from "@/lib/api-client";
+import { effectiveTotalChapterNum } from "@/lib/chapterCount";
 import { getCoverUrl, saveBookProgress } from "@/services/book";
 import {
   deleteBook,
@@ -241,7 +242,9 @@ export function useMarkBookRead() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (book: Book) => {
-      const lastIndex = book.totalChapterNum - 1;
+      // 有效总章数而非书架记录的裸值: 总数被残缺目录回写成小值时(记录 60 章 / 实际 400 章),
+      // 直接写 total-1 会让读者进度倒退
+      const lastIndex = effectiveTotalChapterNum(book) - 1;
       if (lastIndex < 0) {
         return Promise.reject(new ApiError("这本书还没有章节信息"));
       }
