@@ -36,6 +36,10 @@ const SCORE_CUTOFF: f64 = 0.4;
 const MAX_WINDOWS_PER_CHAPTER: usize = 2;
 /// 问题关键词上限
 const MAX_KEYWORDS: usize = 8;
+/// 词性里的专名标签：nr 人名 / nz 其它专名 / ns 地名 / nt 机构名
+const ENTITY_TAGS: [&str; 4] = ["nr", "nz", "ns", "nt"];
+/// 专名关键词的权重下限（专名不受 df 过滤，也不能被"看中/身边"这类泛词挤掉）
+const ENTITY_FLOOR: f64 = 3.0;
 
 /// 章节评分：(分数, 章节下标)。
 type ScoredChapter = (f64, usize);
@@ -266,15 +270,20 @@ fn is_time_question(question: &str) -> bool {
     TIME_HINTS.iter().any(|h| question.contains(h))
 }
 
-/// 从问题里取关键词：jieba 分词 → 去虚词/单字/纯数字 → 按"书内稀缺度"筛泛词 →
+/// 从问题里取关键词：jieba 分词+词性 → 去虚词/单字/纯数字 → 按"书内稀缺度"筛泛词 →
 /// 按 idf×词长 降序取前 MAX_KEYWORDS 个，返回 (词, 权重)。
 ///
 /// 为什么要 df 过滤：`得到`、`一章` 这类词在几百章里到处出现，命中数完全由它们主导，
 /// 真名（`萧炎`）反而被稀释；只留下"书里出现但不泛滥"的词，检索才指向具体情节。
+///
+/// 但 df 过滤有条硬伤：**主角名本身就是最高频的词**。《绍宋》里`赵玖`出现在 300/395 章、
+/// `岳飞`208、`杨沂中`207，全被当成泛词丢掉，结果"问主角的事反而查不到"——32 题 gold
+/// 评测里召回失败的那几题几乎全是被丢名字的。jieba-rs 的 `tag()` 能给出词性，所以
+/// nr/nz/ns/nt（人名/专名/地名/机构）不但不丢，还给一个权重下限，让它们排得进前 8。
 fn question_keywords(question: &str, chapters: &[(i64, String, String)]) -> Vec<(String, f64)> {
     let seg = segmenter();
-    let mut cand: Vec<String> = Vec::new();
-    for token in seg.cut(question, true) {
+    let mut cand: Vec<(String, bool)> = Vec::new(); // (词, 是否专名)
+    for token in seg.tag(question, true) {
         let w = token.word.trim();
         let n = w.chars().count();
         if !(2..=8).contains(&n) {
@@ -286,8 +295,9 @@ fn question_keywords(question: &str, chapters: &[(i64, String, String)]) -> Vec<
         if STOPWORDS.contains(&w) {
             continue;
         }
-        if !cand.iter().any(|x| x == w) {
-            cand.push(w.to_string());
+        let is_entity = ENTITY_TAGS.contains(&token.tag);
+        if !cand.iter().any(|(x, _)| x == w) {
+            cand.push((w.to_string(), is_entity));
         }
     }
     let total = chapters.len();
@@ -295,17 +305,22 @@ fn question_keywords(question: &str, chapters: &[(i64, String, String)]) -> Vec<
         return Vec::new();
     }
     let mut scored: Vec<(f64, String)> = Vec::new();
-    for w in cand {
+    for (w, is_entity) in cand {
         let df = chapters.iter().filter(|ch| ch.2.contains(&w)).count();
         if df == 0 {
             continue; // 书里没有这个词：不是这本书的实体
         }
-        if df * 3 > total {
+        if df * 3 > total && !is_entity {
             continue; // 太常见（泛词）
         }
         let idf = (1.0 + total as f64 / df as f64).ln();
         let len_w = w.chars().count().min(4) as f64;
-        scored.push((idf * len_w, w));
+        let weight = if is_entity {
+            (idf * len_w).max(ENTITY_FLOOR)
+        } else {
+            idf * len_w
+        };
+        scored.push((weight, w));
     }
     scored.sort_by(|a, b| b.0.total_cmp(&a.0));
     scored.truncate(MAX_KEYWORDS);
@@ -941,4 +956,58 @@ pub fn extract_json_object(raw: &str) -> Option<Value> {
         return None;
     }
     serde_json::from_str::<Value>(&text[start..=end]).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chapters(n: usize) -> Vec<(i64, String, String)> {
+        (0..n)
+            .map(|i| {
+                (
+                    i as i64,
+                    format!("第{}章", i + 1),
+                    format!("第{}章的正文", i + 1),
+                )
+            })
+            .collect()
+    }
+
+    /// 主角名是全书最高频的词，旧版 df 过滤会把它当泛词丢掉，问主角的事就查不到。
+    /// 专名（词性 nr）必须豁免过滤，并且权重不低于 ENTITY_FLOOR。
+    #[test]
+    fn question_keywords_keeps_high_frequency_entity() {
+        let mut chs = chapters(120);
+        for (_, _, content) in chs.iter_mut() {
+            content.push_str("赵玖看了看岳飞，没说话。");
+        }
+        // 两个名字都在 120 章里出现 → df*3 > total，旧逻辑直接丢弃
+        let kws = question_keywords("赵玖和岳飞私下说了什么？", &chs);
+        assert!(
+            kws.iter().any(|(kw, _)| kw == "赵玖"),
+            "主角名不该被 df 过滤丢掉: {kws:?}"
+        );
+        assert!(
+            kws.iter().any(|(kw, _)| kw == "岳飞"),
+            "主角名不该被 df 过滤丢掉: {kws:?}"
+        );
+        for (kw, w) in &kws {
+            assert!(*w >= ENTITY_FLOOR, "{kw} 权重 {w} 低于专名下限");
+        }
+    }
+
+    /// 非专名的高频词仍然要被过滤（否则检索被"得到/一章"这类泛词主导）。
+    #[test]
+    fn question_keywords_still_drops_common_non_entity() {
+        let mut chs = chapters(120);
+        for (_, _, content) in chs.iter_mut() {
+            content.push_str("他得到了一章的书稿，又得到了一章的批注。");
+        }
+        let kws = question_keywords("他得到了一章的什么？", &chs);
+        assert!(
+            !kws.iter().any(|(kw, _)| kw == "一章"),
+            "泛词不该进关键词: {kws:?}"
+        );
+    }
 }
