@@ -9499,9 +9499,10 @@ async fn search_book_multi_sse(
         // 全量模式(本窗已覆盖到最后一个源): 一连接搜完, 不做预算收口 ——
         // 分窗+每次重算源列表会让游标漂移(死源区间每窗只推进 1 个源, 实测 30s×5 才走 5 个)
         let full_scan = end >= total.max(0) as usize;
-        // 慢源区间硬上限：1.5× 窗预算(默认 15s)。此前是 3×(默认 30s)：
-        // 一旦本窗所有源都卡住(冷关键词/死源区间)，用户要死等 30s 才见到 event: end。
-        let hard_cap = window_budget.mul_f64(1.5);
+        // 慢源区间硬上限（见 sse_hard_cap）：1.5× 窗预算，但不短于「单源超时 + 2s」。
+        // 关键：硬上限若短于单源超时，窗口会在源自己超时之前收口 → 每窗只剩窗首那台
+        // 悬着的源没完成，游标每次只前进 1 台（真机实测 15.1s/源，尾部 60 台死源要 15 分钟）。
+        let hard_cap = sse_hard_cap(window_budget, timeout_secs);
         // 绝对截止时刻：用 sleep_until 而不是「每次 next() 前后取样」——
         // 否则下一次检查点要等到某个源返回，实测会拖到 56s 才收口。
         let window_deadline = tokio::time::Instant::from_std(window_t0) + hard_cap;
@@ -9631,6 +9632,20 @@ fn sse_should_close(
     hard_cap: std::time::Duration,
 ) -> bool {
     elapsed >= hard_cap || (done >= 8 && elapsed > window_budget)
+}
+
+/// SSE 单窗硬上限（纯函数）：1.5× 窗预算，但不短于「单源超时 + 2s」。
+///
+/// 为什么要跟单源超时挂钩：硬上限若比单源超时还短，窗口会在源自己超时之前收口，
+/// 于是每窗都有「已经派出去、还没超时」的源未完成，续接点只能前进 1 台 ——
+/// 真机实测尾部死源区间稳定 15.1s 才走 1 台源，60 台要 15 分钟。让硬上限略长于
+/// 单源超时，窗内源就能在该窗内自己超时并落进 done，游标一次走满整窗。
+fn sse_hard_cap(window_budget: std::time::Duration, timeout_secs: u64) -> std::time::Duration {
+    window_budget
+        .mul_f64(1.5)
+        .max(std::time::Duration::from_secs(
+            timeout_secs.saturating_add(2),
+        ))
 }
 
 /// SSE 续接点（纯函数）：下一窗的 `lastIndex`。
@@ -13592,6 +13607,25 @@ mod tests {
         assert_eq!(sse_next_from(0, 10, &gaps, -1), 2);
         // 不倒退：算出来的值低于入参 last_index 时以 last_index 为准
         assert_eq!(sse_next_from(0, 3, &HashSet::new(), 100), 100);
+    }
+
+    /// 硬上限必须长于单源超时，否则每窗只前进 1 台源(实测 15.1s/源)
+    #[test]
+    fn sse_hard_cap_cases() {
+        use std::time::Duration;
+        // 默认: 窗预算 10s、单源超时 15s → 17s(不能是 15s，否则与源超时同刻收口)
+        assert_eq!(
+            sse_hard_cap(Duration::from_secs(10), 15),
+            Duration::from_secs(17)
+        );
+        // 单源超时很短时，1.5× 窗预算(15s) 更大，用后者
+        assert_eq!(
+            sse_hard_cap(Duration::from_secs(10), 3),
+            Duration::from_secs(15)
+        );
+        // 上限本身也必须比单源超时长
+        let cap = sse_hard_cap(Duration::from_secs(10), 60);
+        assert!(cap > Duration::from_secs(60), "cap={cap:?} 必须 > 单源超时");
     }
 
     /// 独立临时目录存储（避免污染真实 storage/reader.db）
