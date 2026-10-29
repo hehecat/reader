@@ -21,8 +21,9 @@ import { generateAiGraph, streamAiChat, type AiScope, type AiSnippet } from "@/s
 /** 检索范围偏好：本地记住，下次打开面板还是上次选的 */
 const SCOPE_KEY = "reader.aiScope";
 const SCOPE_OPTIONS: { id: AiScope; label: string; hint: string }[] = [
-  { id: "current", label: "当前章", hint: "只看当前章及前后各一章(默认), 问这段细节最准" },
-  { id: "book", label: "全书", hint: "整本书里找相关章节, 跨章线索用, token 更多" },
+  // 说明压在一行内: 手机 390px 下面板底部只有 ~200px 可用, 写长会折行把发送按钮挤歪
+  { id: "current", label: "当前章", hint: "当前章及前后各一章（默认）" },
+  { id: "book", label: "全书", hint: "跨章检索，线索更全，更耗 token" },
 ];
 
 function readScope(): AiScope {
@@ -442,7 +443,11 @@ export function AiChatPanel({
                     }
                   }}
                 >
-                  <SelectTrigger size="sm" aria-label="检索范围" className="w-24">
+                  <SelectTrigger
+                    size="sm"
+                    aria-label="检索范围"
+                    className="w-auto shrink-0 whitespace-nowrap"
+                  >
                     <SelectValue placeholder="范围" />
                   </SelectTrigger>
                   <SelectContent>
@@ -453,7 +458,8 @@ export function AiChatPanel({
                     ))}
                   </SelectContent>
                 </Select>
-                <span className="truncate text-xs text-muted-foreground">
+                {/* 说明文字允许折到第二行: 手机窄面板下截断会看不到关键区别 */}
+                <span className="min-w-0 flex-1 text-xs leading-snug text-muted-foreground">
                   {SCOPE_OPTIONS.find((option) => option.id === scope)?.hint ?? "基于已缓存章节"}
                 </span>
               </div>
