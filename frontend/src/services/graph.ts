@@ -104,6 +104,37 @@ export interface BookGraphResult {
 
 // ---- 调用 ----
 
+/**
+ * 后端兜底路由对「未注册的接口」回的错误串 (旧镜像里 /graph* 整组都没有, 见 router.rs 尾部 handler).
+ * 只认这一个固定串 (trim 后全等), 不做包含匹配 —— 放宽一次就会把「接口不存在对应的数据」
+ * 这类真实错误也吞成「版本旧」.
+ */
+const MISSING_API_MESSAGES: ReadonlySet<string> = new Set(["接口不存在"]);
+
+/**
+ * 这次失败是不是「后端没这个接口」(服务端版本较旧), 而不是真出了错.
+ *
+ * 两条依据覆盖后端两种可能行为:
+ *   1. 兜底 handler 走标准信封 + HTTP 200 → api-client 直接抛 errorMsg 原文「接口不存在」;
+ *   2. 路由层 404/501 且没有信封 → api-client 抛「请求失败 (HTTP 404)」, 原始 axios 错误挂在
+ *      cause 上, 这里沿 cause 链看 status.
+ * 其它 errorMsg(「系统错误」等)/ 网络失败 / 超时 / 响应格式错误一律 false, 照常当真实错误报.
+ */
+export function isGraphApiMissing(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; current instanceof Error && depth < 5; depth += 1) {
+    if (MISSING_API_MESSAGES.has(current.message.trim())) {
+      return true;
+    }
+    const status = (current as Error & { response?: { status?: unknown } }).response?.status;
+    if (status === 404 || status === 501) {
+      return true;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 /** 预估: 生成前给用户看「多少章 / 几批 / 大概花多少钱」 */
 export async function getGraphEstimate(bookUrl: string): Promise<GraphEstimate> {
   return parseWith(graphEstimateSchema, await get<unknown>("/graphEstimate", { url: bookUrl }));
