@@ -9363,9 +9363,10 @@ async fn search_book_multi_sse(
             let ns = ns.clone();
             let storage = storage.clone();
             let source = source_item.clone();
-            // 错峰斜坡 150ms/源: 实测去掉斜坡+并发 32 会让出口瞬时壅塞(首结果 6s→113s),
-            // 保留既有验证过的斜率(并发 24 时约 3.5s 爬满, 平滑不壅塞)
-            let ramp_ms = offset as u64 * 150;
+            // 错峰斜坡: 前 8 路免延迟, 之后每路 +150ms。实测去掉斜坡+并发 32 会让出口
+            // 瞬时壅塞(首结果 6s→113s), 所以斜坡保留; 免掉前 8 路的排队等价于首屏命中
+            // 早 0~1.05s(首条命中本就来自前几路源)。
+            let ramp_ms = sse_ramp_delay_ms(offset);
             tasks.push(Box::pin(async move {
                 if ramp_ms > 0 {
                     tokio::time::sleep(std::time::Duration::from_millis(ramp_ms)).await;
@@ -9436,25 +9437,35 @@ async fn search_book_multi_sse(
         // 全量模式(本窗已覆盖到最后一个源): 一连接搜完, 不做预算收口 ——
         // 分窗+每次重算源列表会让游标漂移(死源区间每窗只推进 1 个源, 实测 30s×5 才走 5 个)
         let full_scan = end >= total.max(0) as usize;
-        let hard_cap = window_budget * 3; // 慢源区间上限(默认 30s)
+        // 慢源区间硬上限：1.5× 窗预算(默认 15s)。此前是 3×(默认 30s)：
+        // 一旦本窗所有源都卡住(冷关键词/死源区间)，用户要死等 30s 才见到 event: end。
+        let hard_cap = window_budget.mul_f64(1.5);
+        // 绝对截止时刻：用 sleep_until 而不是「每次 next() 前后取样」——
+        // 否则下一次检查点要等到某个源返回，实测会拖到 56s 才收口。
+        let window_deadline = tokio::time::Instant::from_std(window_t0) + hard_cap;
         loop {
-            // timeout 包住 next(): 窗内长时间无源返回时也能按时收口(否则检查点稀疏, 实测拖到 56s)
+            if !full_scan
+                && sse_should_close(done.len(), window_t0.elapsed(), window_budget, hard_cap)
+            {
+                break; // 余下源留给前端下一窗(见 next_from)
+            }
+            // 双路等待：源返回 / 窗预算到期。到点立刻收尾发 event: end，
+            // 不再被窗内最慢源拖住（全量模式仍一连接搜完，不受预算限制）。
             let (i, text, found) = if full_scan {
                 match tasks.next().await {
                     Some(v) => v,
                     None => break, // 全部源搜完
                 }
             } else {
-                let left = hard_cap
-                    .checked_sub(window_t0.elapsed())
-                    .unwrap_or_default();
-                if left.is_zero() {
-                    break;
-                }
-                match tokio::time::timeout(left, tasks.next()).await {
-                    Ok(Some(v)) => v,
-                    Ok(None) => break,
-                    Err(_) => break, // 硬上限到: 余下慢源留给前端下一窗
+                tokio::select! {
+                    // 优先消费已就绪的结果：避免「刚好有源返回的同时 deadline 到期」
+                    // 时白丢一条 —— 有结果就先发，下一轮再收口
+                    biased;
+                    next = tasks.next() => match next {
+                        Some(v) => v,
+                        None => break, // 全部源搜完
+                    },
+                    _ = tokio::time::sleep_until(window_deadline) => break, // 硬上限到
                 }
             };
             last = i;
@@ -9462,12 +9473,6 @@ async fn search_book_multi_sse(
             discovered.extend(found);
             if tx.send(Ok(Bytes::from(text))).await.is_err() {
                 break; // 客户端断开
-            }
-            // 预算耗尽且已完成 ≥8 源才收口: 保证游标实质推进(续接点用连续前缀),
-            // 又不被窗尾慢源拖满整窗
-            // 常规收口: 预算耗尽且已完成 ≥8 源
-            if !full_scan && done.len() >= 8 && window_t0.elapsed() > window_budget {
-                break; // 余下源留给前端下一窗(见 next_from)
             }
         }
         // 续接点 = 已完成连续前缀的末位(第一个未完成源下标 - 1), 且不低于本窗起点 - 1:
@@ -9554,6 +9559,29 @@ fn sse_window_budget_secs() -> u64 {
             .filter(|v: &u64| *v > 0)
             .unwrap_or(10)
     })
+}
+
+/// SSE 抓取的错峰斜坡：前 N 个源立刻放行（并发仍被 semaphore 控住，不会瞬间打满出口），
+/// 之后的源每多一个多等 `SSE_RAMP_STEP_MS`。实测去掉斜坡 + 并发 32 会让出口瞬时壅塞
+/// （首结果 6s→113s），所以斜坡保留；但首屏命中全靠前几路，前 8 路免延迟可省掉
+/// 0~1.05s 的纯等待（第 9 路才开始每路 +150ms）。
+const SSE_RAMP_STEP_MS: u64 = 150;
+const SSE_RAMP_FREE_SOURCES: usize = 8;
+
+/// 单源错峰延迟（ms）——纯函数
+fn sse_ramp_delay_ms(offset: usize) -> u64 {
+    (offset.saturating_sub(SSE_RAMP_FREE_SOURCES) as u64).saturating_mul(SSE_RAMP_STEP_MS)
+}
+
+/// 本窗是否该收口（纯函数）：
+/// 完成 ≥8 源且预算耗尽（保证游标实质推进），或到达硬上限（慢源区间兜底）。
+fn sse_should_close(
+    done: usize,
+    elapsed: std::time::Duration,
+    window_budget: std::time::Duration,
+    hard_cap: std::time::Duration,
+) -> bool {
+    elapsed >= hard_cap || (done >= 8 && elapsed > window_budget)
 }
 
 fn search_timeout_param(
@@ -13416,6 +13444,54 @@ mod tests {
     use super::*;
     use axum::body::Bytes;
     use axum::extract::State as AxumState;
+
+    /// SSE 收口判定边界：预算内不收、预算外且 ≥8 源收、硬上限必收
+    #[test]
+    fn sse_should_close_cases() {
+        use std::time::Duration;
+        let budget = Duration::from_secs(10);
+        let cap = budget.mul_f64(1.5); // 15s
+                                       // 预算内：无论完成多少源都不收
+        assert!(!sse_should_close(0, Duration::from_secs(0), budget, cap));
+        assert!(!sse_should_close(50, budget, budget, cap)); // 恰好等于预算不算「耗尽」
+                                                             // 预算刚过、但完成源不足 8：继续等（保证游标实质推进）
+        assert!(!sse_should_close(
+            7,
+            budget + Duration::from_millis(1),
+            budget,
+            cap
+        ));
+        // 预算过 + 完成 ≥8 源：收口
+        assert!(sse_should_close(
+            8,
+            budget + Duration::from_millis(1),
+            budget,
+            cap
+        ));
+        assert!(sse_should_close(8, cap, budget, cap)); // 正好到硬上限
+                                                        // 硬上限：完成 0 源也必须收（冷关键词不能死等）
+        assert!(sse_should_close(
+            0,
+            cap + Duration::from_millis(1),
+            budget,
+            cap
+        ));
+        assert!(!sse_should_close(0, Duration::from_secs(14), budget, cap));
+        // 硬上限必须是 1.5× 预算（防止退回 3× 的 30s 死等）
+        assert_eq!(cap, Duration::from_millis(15_000));
+    }
+
+    /// 斜坡：前 8 源免延迟，之后每路 +150ms，且不会因为大 offset 溢出
+    #[test]
+    fn sse_ramp_delay_ms_cases() {
+        for offset in 0..SSE_RAMP_FREE_SOURCES {
+            assert_eq!(sse_ramp_delay_ms(offset), 0, "offset={offset} 应免延迟");
+        }
+        assert_eq!(sse_ramp_delay_ms(8), 0);
+        assert_eq!(sse_ramp_delay_ms(9), 150);
+        assert_eq!(sse_ramp_delay_ms(10), 300);
+        assert_eq!(sse_ramp_delay_ms(usize::MAX), u64::MAX); // 饱和，不 panic
+    }
 
     /// 独立临时目录存储（避免污染真实 storage/reader.db）
     async fn test_state(tag: &str) -> (AppState, std::path::PathBuf) {

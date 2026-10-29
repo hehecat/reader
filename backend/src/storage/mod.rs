@@ -14,7 +14,13 @@ pub mod migrate;
 pub struct Storage {
     pub pool: SqlitePool,
     pub config: AppConfig,
+    /// 实例标识：cookie 快照缓存按「实例 + 命名空间」分桶，避免多个库/多实例（测试、备份库）
+    /// 之间串用快照。同一池的 clone 共享同一标识，符合语义。
+    cache_tag: u64,
 }
+
+/// 实例标识发号器
+static STORAGE_INSTANCE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// 缓存统计（getCacheInfo）
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -193,6 +199,22 @@ async fn migrate_ns_composite_keys(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+/// 连接池上限（env `READER_DB_MAX_CONNECTIONS`，默认 32）。
+///
+/// 默认从 8 提到 32：搜索 fan-out 并发 24（SSE/非 SSE 都是），每个源的搜索在
+/// 「读 cookie 快照 + 读目录缓存 + 写目录/正文缓存」之间要占连接——池 8 时 24 路并发
+/// 有 2/3 在排队，线上日志表现为 10~30s 的慢 SQL（排队时长算进 elapsed）。
+/// SQLite 侧仍靠 WAL + busy_timeout(5s) 保证写竞争不报错；读多写少的本库其实不怕
+/// 连接多，怕的是连接少导致的排队。实测依据见 scripts/dev-backend.sh 压测记录。
+fn max_connections() -> u32 {
+    std::env::var("READER_DB_MAX_CONNECTIONS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(32)
+        .clamp(1, 128)
+}
+
 /// 初始化：建目录 + 打开/建库 + 建表
 pub async fn init(config: &AppConfig) -> Result<Storage> {
     let storage_dir = config.storage_dir();
@@ -211,8 +233,9 @@ pub async fn init(config: &AppConfig) -> Result<Storage> {
         // SqliteRow::current 越界 panic（row.rs:43，见 storage 测试偶发失败）。
         // 本库规模下准备开销可忽略，禁用缓存彻底规避。
         .statement_cache_capacity(0);
+    let max_connections = max_connections();
     let pool = SqlitePoolOptions::new()
-        .max_connections(8)
+        .max_connections(max_connections)
         .connect_with(options)
         .await?;
 
@@ -938,6 +961,7 @@ pub async fn init(config: &AppConfig) -> Result<Storage> {
     let storage = Storage {
         pool,
         config: config.clone(),
+        cache_tag: STORAGE_INSTANCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
     };
     if let Err(e) = crate::storage::migrate::migrate_if_needed(&storage).await {
         tracing::error!("JSON→SQLite 迁移失败（服务继续启动，数据仍保留在 JSON）：{e}");
@@ -956,7 +980,8 @@ pub async fn init(config: &AppConfig) -> Result<Storage> {
     // 读不到新表结构/新数据（sqlx-sqlite 0.7.4 下表现为 row.rs 越界 panic 或
     // 查询返回空——storage 测试偶发）。BEGIN;COMMIT; 结束各连接的隐式读事务，
     // 下次读取强制取新快照（无事务的连接上为安全 no-op；裸 COMMIT 会报错）。
-    let max_conns = 8; // 与上方 SqlitePoolOptions::max_connections(8) 一致
+    // 每个池连接都刷一次（上限跟 max_connections 一致，见函数注释）
+    let max_conns = storage.pool.options().get_max_connections();
     for _ in 0..max_conns {
         let mut conn = storage.pool.acquire().await?;
         sqlx::query("BEGIN; COMMIT;").execute(&mut *conn).await?;
@@ -964,6 +989,107 @@ pub async fn init(config: &AppConfig) -> Result<Storage> {
     storage.ensure_source_stats_table().await?;
     storage.ensure_search_cache_table().await?;
     Ok(storage)
+}
+
+// ---------------- 书源 cookie 快照缓存（抓取热路径） ----------------
+//
+// 背景：`session_for` / `get_cookie_by_base` / `get_login_header_by_base` 每次抓取都要按
+// ns 全表读一遍 `book_source_cookies`（线上 199 行）去找「本源」那一条。按源收窄 SQL 不可行：
+// 线上 cookie 行的 `source_url` 是裸 host（如 `016wx.com`）或 `host##备用地址` 形式，而
+// 164 个书源里只有 3 个有对应 cookie 行（其余 161 个每次都要「查不到」）——把查询改成按源
+// 精查会让「查不到」这个绝大多数情况从 1 次查询变成 3~4 次查询。
+// 因此采用「按 ns 缓存整份快照 + 写路径立刻失效」：稳态下一次抓取 0 次查询，
+// TTL 10s 兜住任何漏掉的写路径，写路径 invalidation 保证不会拿到旧 cookie（登录态）。
+
+/// ns 快照：`key = 实例标识 + ns`，值 = (写入时刻, 快照)
+type CookieSnapshotMap =
+    std::collections::HashMap<String, (std::time::Instant, std::sync::Arc<CookieSnapshot>)>;
+
+fn cookie_snapshots() -> &'static std::sync::Mutex<CookieSnapshotMap> {
+    static M: std::sync::OnceLock<std::sync::Mutex<CookieSnapshotMap>> = std::sync::OnceLock::new();
+    M.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// 写代数：任何 cookie 写入都 +1（与缓存读写同锁），用于拒绝「写期间读到的旧快照」
+static COOKIE_SNAPSHOT_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 快照 TTL：写路径已全部失效，TTL 只是兜底（≤30s 约束内的保守取值）
+const COOKIE_SNAPSHOT_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// 容量上限（ns 数量级极小，纯防呆）
+const COOKIE_SNAPSHOT_MAX: usize = 32;
+
+fn cookie_snapshot_peek(key: &str) -> Option<std::sync::Arc<CookieSnapshot>> {
+    let m = cookie_snapshots().lock().unwrap_or_else(|e| e.into_inner());
+    match m.get(key) {
+        Some((t, snap)) if t.elapsed() < COOKIE_SNAPSHOT_TTL => Some(snap.clone()),
+        _ => None,
+    }
+}
+
+/// 失效全部 cookie 快照——**任何写 `book_source_cookies` 的路径都必须调用**
+/// （set/clear cookie、set login_header、删书源、删用户、备份恢复）。
+/// 失效放在写事务提交之后调用，保证重新加载时读到已提交的新值。
+pub(crate) fn invalidate_cookie_snapshots() {
+    let mut m = cookie_snapshots().lock().unwrap_or_else(|e| e.into_inner());
+    COOKIE_SNAPSHOT_GEN.fetch_add(1, std::sync::atomic::Ordering::Release);
+    m.clear();
+}
+
+/// 一份 cookie 快照：预先把 `source_url`（含 `##` 备用地址）按 [`normalize_base`] 摊平成
+/// base → 行下标，匹配退化为哈希查找。三张表分别复刻历史逐行扫描的三种语义
+/// （「先命中者胜」，都按表顺序取第一条）：
+/// - `any`：不过滤（`session_for`：返回 cookie + user_agent，空值也算命中）
+/// - `cookie`：跳过 cookie 为空的行（`get_cookie_by_base`）
+/// - `header`：跳过 login_header 为空的行（`get_login_header_by_base`）
+#[derive(Debug, Default)]
+struct CookieSnapshot {
+    rows: Vec<(String, String, String)>,
+    any: std::collections::HashMap<String, usize>,
+    cookie: std::collections::HashMap<String, usize>,
+    header: std::collections::HashMap<String, usize>,
+}
+
+impl CookieSnapshot {
+    fn build(rows: Vec<(String, String, String, String)>) -> Self {
+        let mut snap = CookieSnapshot::default();
+        snap.rows.reserve(rows.len());
+        for (source_url, cookie, user_agent, login_header) in rows {
+            let idx = snap.rows.len();
+            for part in source_url.split("##") {
+                let Some(base) = normalize_base(part) else {
+                    continue;
+                };
+                snap.any.entry(base.clone()).or_insert(idx);
+                if !cookie.is_empty() {
+                    snap.cookie.entry(base.clone()).or_insert(idx);
+                }
+                if !login_header.trim().is_empty() {
+                    snap.header.entry(base).or_insert(idx);
+                }
+            }
+            snap.rows.push((cookie, user_agent, login_header));
+        }
+        snap
+    }
+
+    /// `session_for` 语义：cookie + user_agent（不筛空）
+    fn session(&self, base: &str) -> Option<(String, String)> {
+        let row = self.rows.get(*self.any.get(base)?)?;
+        Some((row.0.clone(), row.1.clone()))
+    }
+
+    /// `get_cookie_by_base` 语义：cookie 非空才算命中
+    fn cookie_for(&self, base: &str) -> Option<String> {
+        let row = self.rows.get(*self.cookie.get(base)?)?;
+        Some(row.0.clone())
+    }
+
+    /// `get_login_header_by_base` 语义：login_header 非空才算命中
+    fn header_for(&self, base: &str) -> Option<String> {
+        let row = self.rows.get(*self.header.get(base)?)?;
+        Some(row.2.clone())
+    }
 }
 
 impl Storage {
@@ -1202,6 +1328,7 @@ impl Storage {
             }
         }
         tx.commit().await?;
+        invalidate_cookie_snapshots();
         Ok(affected)
     }
 
@@ -1293,6 +1420,7 @@ impl Storage {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
+        invalidate_cookie_snapshots();
         Ok(affected)
     }
 
@@ -1608,6 +1736,47 @@ impl Storage {
 
     // ---------------- 书源登录态 cookie（按用户隔离） ----------------
 
+    /// 取本命名空间的 cookie 快照（10s TTL 内存缓存，见 [`CookieSnapshot`]）
+    ///
+    /// 抓取热路径：每次抓取此前要按 ns 全表读 `book_source_cookies`（线上 199 行）找
+    /// 「本源」那一条，fan-out 期间每秒数十次；线上 18 条慢 SQL 全是这条查询。
+    async fn cookie_snapshot(&self, ns: &str) -> Result<std::sync::Arc<CookieSnapshot>> {
+        let key = format!("{}\u{1}{ns}", self.cache_tag);
+        if let Some(snap) = cookie_snapshot_peek(&key) {
+            return Ok(snap);
+        }
+        // 单飞（single-flight）：fan-out 起步的同一瞬间会有几十个抓取同时 miss，
+        // 若各自查库就变成「几十个一模一样的全表读」，缓存反而把慢 SQL 变多（实测过）。
+        // 用一把异步锁串行化构建：后到者拿到锁后重新 peek，直接命中刚建好的快照。
+        static LOAD_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+        let _load = LOAD_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        if let Some(snap) = cookie_snapshot_peek(&key) {
+            return Ok(snap);
+        }
+        let gen = COOKIE_SNAPSHOT_GEN.load(std::sync::atomic::Ordering::Acquire);
+        let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+            "SELECT source_url, cookie, user_agent, login_header FROM book_source_cookies \
+             WHERE user_namespace = ?1",
+        )
+        .bind(ns)
+        .fetch_all(&self.pool)
+        .await?;
+        let snap = std::sync::Arc::new(CookieSnapshot::build(rows));
+        // 「校验写代数 + 写入」在同一把锁内完成：写路径 invalidate 也在这把锁内 bump 代数，
+        // 因此不会出现「读到写前旧数据、却在 invalidate 之后才塞进缓存」的竞态。
+        let mut m = cookie_snapshots().lock().unwrap_or_else(|e| e.into_inner());
+        if COOKIE_SNAPSHOT_GEN.load(std::sync::atomic::Ordering::Acquire) == gen {
+            if m.len() >= COOKIE_SNAPSHOT_MAX && !m.contains_key(&key) {
+                m.clear();
+            }
+            m.insert(key, (std::time::Instant::now(), snap.clone()));
+        }
+        Ok(snap)
+    }
+
     /// 读取书源 cookie（精确 source_url 键；无则 None）
     pub async fn get_cookie(&self, ns: &str, source_url: &str) -> Result<Option<String>> {
         let r: Option<(String,)> = sqlx::query_as(
@@ -1659,6 +1828,7 @@ impl Storage {
         .bind(chrono::Utc::now().timestamp_millis())
         .execute(&self.pool)
         .await?;
+        invalidate_cookie_snapshots();
         Ok(())
     }
 
@@ -1671,6 +1841,7 @@ impl Storage {
         .bind(source_url)
         .execute(&self.pool)
         .await?;
+        invalidate_cookie_snapshots();
         Ok(r.rows_affected())
     }
 
@@ -1695,6 +1866,7 @@ impl Storage {
         .bind(chrono::Utc::now().timestamp_millis())
         .execute(&self.pool)
         .await?;
+        invalidate_cookie_snapshots();
         Ok(())
     }
 
@@ -1716,28 +1888,12 @@ impl Storage {
 
     /// 按 baseUrl 匹配书源 cookie（crawler 抓取用：请求 URL 的 base 与书源
     /// source_url 的 base 一致即命中——source_url 可能带 `##` 备用地址后缀）。
-    /// 仅查本命名空间（书源 cookie 按用户隔离）。
+    /// 仅查本命名空间（书源 cookie 按用户隔离）。走 cookie 快照缓存（写路径会立刻失效）。
     pub async fn get_cookie_by_base(&self, ns: &str, base_url: &str) -> Result<Option<String>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT source_url, cookie FROM book_source_cookies WHERE user_namespace = ?1",
-        )
-        .bind(ns)
-        .fetch_all(&self.pool)
-        .await?;
-        let target = normalize_base(base_url);
-        for (source_url, cookie) in rows {
-            // `##` 后缀：主地址/备用地址都算同源（与 book_sources 语义一致）——任一段命中即可
-            if cookie.is_empty() {
-                continue;
-            }
-            let any_match = source_url
-                .split("##")
-                .any(|part| normalize_base(part) == target);
-            if any_match {
-                return Ok(Some(cookie));
-            }
-        }
-        Ok(None)
+        let Some(target) = normalize_base(base_url) else {
+            return Ok(None);
+        };
+        Ok(self.cookie_snapshot(ns).await?.cookie_for(&target))
     }
 
     /// 读取书源登录头（legacy putLoginHeader 持久化，按用户 + source_url 键）
@@ -1776,6 +1932,7 @@ impl Storage {
                 .execute(&self.pool)
                 .await?;
             }
+            invalidate_cookie_snapshots();
             return Ok(());
         }
         sqlx::query(
@@ -1792,6 +1949,7 @@ impl Storage {
         .bind(chrono::Utc::now().timestamp_millis())
         .execute(&self.pool)
         .await?;
+        invalidate_cookie_snapshots();
         Ok(())
     }
 
@@ -1801,25 +1959,23 @@ impl Storage {
         ns: &str,
         base_url: &str,
     ) -> Result<Option<String>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT source_url, login_header FROM book_source_cookies WHERE user_namespace = ?1",
-        )
-        .bind(ns)
-        .fetch_all(&self.pool)
-        .await?;
-        let target = normalize_base(base_url);
-        for (source_url, header) in rows {
-            if header.trim().is_empty() {
-                continue;
-            }
-            let any_match = source_url
-                .split("##")
-                .any(|part| normalize_base(part) == target);
-            if any_match {
-                return Ok(Some(header));
-            }
-        }
-        Ok(None)
+        let Some(target) = normalize_base(base_url) else {
+            return Ok(None);
+        };
+        Ok(self.cookie_snapshot(ns).await?.header_for(&target))
+    }
+
+    /// 按 baseUrl 匹配书源会话（cookie + user_agent；`##` 备地址语义，空值也算命中——
+    /// 与 crawler `session_for` 的历史语义一致），走 cookie 快照缓存。
+    pub async fn get_session_by_base(
+        &self,
+        ns: &str,
+        base_url: &str,
+    ) -> Result<Option<(String, String)>> {
+        let Some(target) = normalize_base(base_url) else {
+            return Ok(None);
+        };
+        Ok(self.cookie_snapshot(ns).await?.session(&target))
     }
 
     // ---------------- RSS ----------------
@@ -4627,6 +4783,7 @@ impl Storage {
             deleted.push(username);
         }
         tx.commit().await?;
+        invalidate_cookie_snapshots();
         for username in &deleted {
             self.remove_user_data_dir(username);
         }
@@ -4764,6 +4921,7 @@ impl Storage {
         }
         delete_user_rows(&mut tx, username).await?;
         tx.commit().await?;
+        invalidate_cookie_snapshots();
         self.remove_user_data_dir(username);
         Ok(1)
     }
@@ -4786,6 +4944,7 @@ impl Storage {
             }
         }
         tx.commit().await?;
+        invalidate_cookie_snapshots();
         for username in removed {
             self.remove_user_data_dir(&username);
         }
@@ -5462,6 +5621,9 @@ impl Storage {
                             .bind(c.updated_at)
                             .execute(&self.pool)
                             .await?;
+                            // 恢复会大量改写 cookie：立刻让快照缓存失效（一次性 restore 内
+                            // 每行失效的开销只是清一个几项的 HashMap，可忽略）
+                            invalidate_cookie_snapshots();
                             report.restored.cookies += 1;
                         }
                     }

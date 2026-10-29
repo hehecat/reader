@@ -212,11 +212,20 @@ static DNS_PINS: std::sync::LazyLock<
     >,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
+/// DNS 钉扎代数：每次新增钉扎 +1。缓存的直连 Client 里 `resolve_to_addrs` 是构建期快照，
+/// 新钉扎必须重建 Client 才生效——代数进缓存 key，天然淘汰旧 Client（否则钉扎后重试仍走假 IP）。
+static DNS_PIN_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 钉扎 TTL（与 [`pin_dns`] 的 retain 窗口一致）：缓存 key 带 600s 槽位，槽位翻转即重建 Client，
+/// 避免缓存的 Client 把过期 IP 钉死到进程结束。
+const DNS_PIN_TTL_SECS: u64 = 600;
+
 fn pin_dns(host: &str, ips: Vec<std::net::IpAddr>) {
     if let Ok(mut m) = DNS_PINS.lock() {
-        m.retain(|_, (t, _)| t.elapsed() < std::time::Duration::from_secs(600));
+        m.retain(|_, (t, _)| t.elapsed() < std::time::Duration::from_secs(DNS_PIN_TTL_SECS));
         m.insert(host.to_string(), (std::time::Instant::now(), ips));
     }
+    DNS_PIN_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 fn dns_pins() -> Vec<(String, Vec<std::net::IpAddr>)> {
@@ -383,6 +392,99 @@ fn proxy_http_client(proxy_url: &str) -> Result<reqwest::Client> {
     Ok(client)
 }
 
+// ---- 直连 Client 缓存（无 proxy 分支）：线上书源几乎全部无 proxy，本分支是 100% 走的抓取路径。
+// 曾经每次抓取都 `Client::builder()...build()`，连接池与 TLS 会话完全不复用（目录翻页每页重握手，
+// 实测同一源经后端 3.3~5.1s vs 浏览器直连 0.8~1.6s）。现在按「会改变 Client 身份/行为」的配置
+// 组合缓存，key 覆盖：全局 timeout、重定向策略 tag、READER_HTTP_PROXY 现值、证书相关开关
+// （READER_DANGER_ACCEPT_INVALID_CERTS / READER_CA_FILE）、DNS 钉扎代数与钉扎 TTL 槽位。
+// UA 不随源变化（builder 内固定），故不进 key；书源级 UA 由每次请求的 header 覆盖。
+// 容量上限 64：到顶整体清空重建（`reqwest::Client` 构建很便宜，不做 LRU）；key 空间由
+// 上述有限配置组合决定，正常情况下同源不同 timeout 也就几种。
+static DIRECT_CLIENTS: LazyLock<Mutex<HashMap<String, reqwest::Client>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+const DIRECT_CLIENT_CACHE_MAX: usize = 64;
+
+/// 钉扎 TTL 槽位起点（见 [`DNS_PIN_TTL_SECS`]）
+static CLIENT_CACHE_EPOCH: LazyLock<std::time::Instant> = LazyLock::new(std::time::Instant::now);
+
+/// 直连 Client 缓存 key 的全部输入（纯数据，便于单测 key 区分度）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClientCacheKeyInputs {
+    pub timeout_secs: u64,
+    pub redirect_tag: &'static str,
+    pub env_proxy: String,
+    pub insecure_certs: bool,
+    pub ca_file: String,
+    pub pin_gen: u64,
+    pub pin_epoch: u64,
+}
+
+impl ClientCacheKeyInputs {
+    /// 直连抓取用的输入（读进程环境 + 钉扎代数/槽位）
+    fn current(timeout_secs: u64) -> Self {
+        let env = |k: &str| std::env::var(k).unwrap_or_default().trim().to_string();
+        Self {
+            timeout_secs,
+            redirect_tag: "source",
+            env_proxy: env("READER_HTTP_PROXY"),
+            insecure_certs: env("READER_DANGER_ACCEPT_INVALID_CERTS") == "1",
+            ca_file: env("READER_CA_FILE"),
+            pin_gen: DNS_PIN_GEN.load(std::sync::atomic::Ordering::Relaxed),
+            pin_epoch: CLIENT_CACHE_EPOCH.elapsed().as_secs() / DNS_PIN_TTL_SECS,
+        }
+    }
+}
+
+/// 缓存 key（纯函数；任何一项变化都必须产生不同 key，否则会串用身份不同的 Client）
+pub(crate) fn client_cache_key(i: &ClientCacheKeyInputs) -> String {
+    format!(
+        "t={}\u{1}r={}\u{1}p={}\u{1}i={}\u{1}ca={}\u{1}g={}\u{1}e={}",
+        i.timeout_secs,
+        i.redirect_tag,
+        i.env_proxy,
+        u8::from(i.insecure_certs),
+        i.ca_file,
+        i.pin_gen,
+        i.pin_epoch
+    )
+}
+
+/// 容量上限插入：到顶就整体清空（简单防呆，不做 LRU）
+pub(crate) fn insert_capped<V>(
+    m: &mut HashMap<String, V>,
+    key: String,
+    value: V,
+    max: usize,
+) -> bool {
+    if m.len() >= max && !m.contains_key(&key) {
+        m.clear();
+        m.insert(key, value);
+        return true;
+    }
+    m.insert(key, value);
+    false
+}
+
+/// 取（或建）无 proxy 直连抓取用的共享 Client——连接池/TLS 会话跨请求复用。
+///
+/// 构建失败不缓存、按原路径直接返回错误（调用方 [`fetch`] 另有降级：缓存路径整体失败时
+/// 退回「每请求新建」的原逻辑），保证缓存不引入新的失败点。
+pub(crate) fn shared_direct_client(timeout_secs: u64) -> Result<reqwest::Client> {
+    let key = client_cache_key(&ClientCacheKeyInputs::current(timeout_secs));
+    if let Some(c) = DIRECT_CLIENTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key)
+    {
+        return Ok(c.clone()); // Client 内部 Arc，clone 廉价
+    }
+    let client = build_http_client(timeout_secs, source_redirect_policy(), None)?;
+    let mut m = DIRECT_CLIENTS.lock().unwrap_or_else(|e| e.into_inner());
+    insert_capped(&mut m, key, client.clone(), DIRECT_CLIENT_CACHE_MAX);
+    Ok(client)
+}
+
 /// 可重试的传输层错误（超时/连接中断/EOF/TLS 握手——不重试 4xx/5xx 业务响应）
 fn retryable_http_error(e: &anyhow::Error) -> bool {
     // 顶层消息可能是 "error decoding response body"，真正的 EOF/断连在 cause 链里——
@@ -543,13 +645,16 @@ pub async fn fetch(
 ) -> Result<FetchResponse> {
     // 入口目标校验（DNS 解析后——拒绝私网/回环/169.254 等；书源专用开关控制）
     validate_source_target(url).await?;
-    // EG5：书源级代理 → 共享代理 Client（按代理串缓存）；否则按次构建直连 Client
+    // EG5：书源级代理 → 共享代理 Client（按代理串缓存）；否则共享直连 Client
+    // （按配置组合缓存，复用连接池/TLS 会话）
     let client = match proxy.map(str::trim).filter(|p| !p.is_empty()) {
         Some(p) => {
             tracing::debug!("http_fetch 走书源级代理 {p} {method} {url}");
             proxy_http_client(p)?
         }
-        None => http_client_builder(timeout_secs, source_redirect_policy())?,
+        // 缓存路径整体失败时降级回「每请求新建」的原逻辑（缓存不引入新的失败点）
+        None => shared_direct_client(timeout_secs)
+            .or_else(|_| http_client_builder(timeout_secs, source_redirect_policy()))?,
     };
     let retries = http_retry_count();
     let mut last_err: Option<anyhow::Error> = None;
@@ -1110,30 +1215,17 @@ pub async fn set_login_header_for(ns: &str, source_url: &str, header: &str) {
 }
 
 /// 按命名空间 + 请求 URL 查书源登录态（cookie + user_agent）
+///
+/// 走 storage 的 cookie 快照缓存（按 ns 的内存快照，写路径立刻失效）——
+/// 此前每次抓取都要全表读 `book_source_cookies` 找本源那一条，fan-out 期间是
+/// 线上最热的慢 SQL。语义不变（`##` 备地址任一命中、空 cookie 也算命中）。
 pub async fn session_for(ns: &str, url: &str) -> Option<(String, String)> {
     let base = base_url_of(url)?;
     let storage = COOKIE_STORAGE
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone()?;
-    let rows: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT source_url, cookie, user_agent FROM book_source_cookies WHERE user_namespace = ?1",
-    )
-    .bind(ns)
-    .fetch_all(&storage.pool)
-    .await
-    .ok()?;
-    let target = crate::storage::normalize_base(&base)?;
-    for (source_url, cookie, ua) in rows {
-        // `##` 后缀：主地址/备用地址任一段命中即可（与 book_sources 语义一致）
-        let any_match = source_url
-            .split("##")
-            .any(|part| crate::storage::normalize_base(part) == Some(target.clone()));
-        if any_match {
-            return Some((cookie, ua));
-        }
-    }
-    None
+    storage.get_session_by_base(ns, &base).await.ok().flatten()
 }
 
 // ==================== 书源抓取（带 cookie + Cloudflare 质询绕过） ====================
@@ -2176,6 +2268,123 @@ fn merge_login_header(headers: &mut HashMap<String, String>, login_header: &str)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn base_key_inputs() -> ClientCacheKeyInputs {
+        ClientCacheKeyInputs {
+            timeout_secs: 15,
+            redirect_tag: "source",
+            env_proxy: String::new(),
+            insecure_certs: false,
+            ca_file: String::new(),
+            pin_gen: 7,
+            pin_epoch: 3,
+        }
+    }
+
+    /// client 缓存 key 必须对每个「会改变 Client 身份/行为」的配置项都敏感：
+    /// 漏掉任何一项都会让两种不同配置串用同一个 Client（超时/证书/proxy 静默失效）
+    #[test]
+    fn client_cache_key_distinguishes_every_input() {
+        let base = base_key_inputs();
+        let k0 = client_cache_key(&base);
+        assert_eq!(k0, client_cache_key(&base), "同输入必须同 key");
+
+        let mut variants: Vec<ClientCacheKeyInputs> = Vec::new();
+        let mut v = base.clone();
+        v.timeout_secs = 30;
+        variants.push(v);
+        let mut v = base.clone();
+        v.redirect_tag = "none";
+        variants.push(v);
+        let mut v = base.clone();
+        v.env_proxy = "http://127.0.0.1:7890".into();
+        variants.push(v);
+        let mut v = base.clone();
+        v.insecure_certs = true;
+        variants.push(v);
+        let mut v = base.clone();
+        v.ca_file = "/etc/ca.pem".into();
+        variants.push(v);
+        let mut v = base.clone();
+        v.pin_gen = 8;
+        variants.push(v);
+        let mut v = base.clone();
+        v.pin_epoch = 4;
+        variants.push(v);
+
+        let mut seen = std::collections::HashSet::new();
+        seen.insert(k0.clone());
+        for (i, variant) in variants.iter().enumerate() {
+            let k = client_cache_key(variant);
+            assert_ne!(k, k0, "第 {i} 项变化没有改变 key");
+            assert!(seen.insert(k), "第 {i} 项与之前某项 key 撞了");
+        }
+    }
+
+    /// 容量上限：到顶后插入新 key 会整体清空再重建（有上限，key 空间不会无限涨）
+    #[test]
+    fn insert_capped_enforces_limit() {
+        let mut m: HashMap<String, u8> = HashMap::new();
+        for i in 0..3 {
+            assert!(!insert_capped(&mut m, format!("k{i}"), i, 3));
+        }
+        assert_eq!(m.len(), 3);
+        // 覆盖已有 key：不清空、返回 false
+        assert!(!insert_capped(&mut m, "k1".to_string(), 99, 3));
+        assert_eq!(m.len(), 3);
+        assert_eq!(m.get("k1"), Some(&99));
+        // 插入新 key 且已到顶：清空后只留新 key，返回 true（表示发生过清空）
+        assert!(insert_capped(&mut m, "k9".to_string(), 9, 3));
+        assert_eq!(m.len(), 1);
+        assert_eq!(m.get("k9"), Some(&9));
+    }
+
+    /// shared_direct_client 复用同一个底层 Client（连接池/TLS 会话跨抓取共享）：
+    /// 同一配置组合第二次调用不再 build、也不再新增条目；不同 timeout 各占一条
+    #[test]
+    fn shared_direct_client_is_reused() {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        DIRECT_CLIENTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        let key = client_cache_key(&ClientCacheKeyInputs::current(17));
+        let _ = shared_direct_client(17).expect("构建 client");
+        assert_eq!(
+            DIRECT_CLIENTS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .len(),
+            1
+        );
+        assert!(DIRECT_CLIENTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&key));
+        let _ = shared_direct_client(17).expect("构建 client");
+        assert_eq!(
+            DIRECT_CLIENTS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .len(),
+            1,
+            "同一配置不应重复插入"
+        );
+        let _ = shared_direct_client(18).expect("构建 client");
+        assert_eq!(
+            DIRECT_CLIENTS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .len(),
+            2,
+            "不同 timeout 必须是不同条目"
+        );
+        DIRECT_CLIENTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
 
     /// E6：cookie 域键 = legacy getSubDomain（host[:port] 去最左标签）
     #[test]
