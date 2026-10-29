@@ -15,8 +15,8 @@ import {
   cn,
 } from "@/components/ui";
 import { MarkdownLite } from "@/components/reader/ai-markdown";
-import { CharacterGraph, type GraphData } from "@/components/reader/CharacterGraph";
-import { generateAiGraph, streamAiChat, type AiScope, type AiSnippet } from "@/services/ai";
+import { GraphTabCard } from "@/components/reader/GraphTabCard";
+import { streamAiChat, type AiScope, type AiSnippet } from "@/services/ai";
 
 /** 检索范围偏好：本地记住，下次打开面板还是上次选的 */
 const SCOPE_KEY = "reader.aiScope";
@@ -100,9 +100,6 @@ export function AiChatPanel({
   const [streaming, setStreaming] = React.useState(false);
   const [scope, setScope] = React.useState<AiScope>(readScope);
   // 关系图: 生成结果 / 加载态 / 错误
-  const [graph, setGraph] = React.useState<GraphData | null>(null);
-  const [graphLoading, setGraphLoading] = React.useState(false);
-  const [graphError, setGraphError] = React.useState<string | null>(null);
   const cancelRef = React.useRef<(() => void) | null>(null);
   const scrollRef = React.useRef<HTMLDivElement>(null);
 
@@ -215,27 +212,6 @@ export function AiChatPanel({
     );
   }, []);
 
-  const loadGraph = React.useCallback(() => {
-    if (!configured || graphLoading) {
-      return;
-    }
-    setGraphLoading(true);
-    setGraphError(null);
-    void generateAiGraph({ url: bookUrl, bookName, titles, currentTitle })
-      .then((data) => {
-        setGraph(data);
-        if (data.characters.length === 0) {
-          setGraphError("片段里没抽出人物, 先读几章再试, 或换个章节位置生成。");
-        }
-      })
-      .catch((error: unknown) => {
-        setGraphError((error as Error).message || "生成失败");
-      })
-      .finally(() => {
-        setGraphLoading(false);
-      });
-  }, [bookName, bookUrl, configured, currentTitle, graphLoading, titles]);
-
   const clear = React.useCallback(() => {
     cancelRef.current?.();
     cancelRef.current = null;
@@ -295,25 +271,8 @@ export function AiChatPanel({
           <code className="font-mono text-xs">READER_AI_API_KEY</code> 后重启容器即可。
         </div>
       ) : tab === "graph" ? (
-          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" loading={graphLoading} onClick={loadGraph}>
-                {graph === null ? "生成关系图" : "重新生成"}
-              </Button>
-              <span className="text-xs text-muted-foreground">
-                基于已缓存章节 · 点人物看关系
-              </span>
-            </div>
-            {graphError !== null ? <p className="text-xs text-danger">{graphError}</p> : null}
-            {graph === null ? (
-              <p className="text-sm text-muted-foreground">
-                从已缓存章节里抽取主要人物与关系, 生成一张可点击的图; 点人物看身份、首次出场章节与关系清单。
-              </p>
-            ) : (
-              <CharacterGraph data={graph} onJump={onJump} />
-            )}
-          </div>
-        ) : (
+        <GraphTabCard bookUrl={bookUrl} bookName={bookName} />
+      ) : (
         <>
           <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
             {messages.length === 0 ? (

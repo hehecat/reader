@@ -212,43 +212,6 @@ export async function listAiModels(input: AiSettingsInput): Promise<string[]> {
 
 const aiModelsSchema = z.object({ models: z.array(z.string()).default([]) });
 
-/** 关系图: 人物 + 关系（后端让模型输出 JSON 后透传） */
-export const graphCharacterSchema = z.object({
-  name: z.string(),
-  alias: z.string().optional(),
-  firstChapter: z.string().optional(),
-  role: z.string().optional(),
-});
-export const graphRelationSchema = z.object({
-  from: z.string(),
-  to: z.string(),
-  label: z.string().optional(),
-  chapter: z.string().optional(),
-});
-export const aiGraphSchema = z.object({
-  graph: z.object({
-    characters: z.array(graphCharacterSchema).default([]),
-    relations: z.array(graphRelationSchema).default([]),
-  }),
-  cachedChapters: z.number().optional(),
-});
-export type AiGraphData = z.infer<typeof aiGraphSchema>["graph"];
-
-export interface AiGraphInput {
-  url: string;
-  bookName?: string;
-  titles?: string[];
-  currentTitle?: string;
-  /** 可选: 重点关注的人物/关系 */
-  question?: string;
-}
-
-export async function generateAiGraph(input: AiGraphInput): Promise<AiGraphData> {
-  // 推理模型生成结构化图较慢(实测 20-30s, 偶发更久): 单独放宽到 180s, 避免默认超时误杀
-  const data = await post<unknown>("/aiGraph", input, { timeout: 180_000 });
-  return aiGraphSchema.parse(data).graph;
-}
-
 /** 设置页: 判定模型（Jev / EMRank）配置——端点与 chat 端点不同, 单独存 */
 export const jevSettingsSchema = z.object({
   enabled: z.boolean(),
