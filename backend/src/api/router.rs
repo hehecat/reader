@@ -4052,15 +4052,18 @@ async fn toc_from_cached_chapters(
         // 并存出两条同 toc_url 的记录，而 get_toc_cache 只按 toc_url 查、命中哪条不定。
         let _ = state.storage.cache_toc(ns, toc_url, toc_url, &json).await;
     }
-    // 顺手把书架上被残缺血洗过的章数往上修（如生产里《绍宋》停在 20 章而缓存有 400 章）：
-    // 只增不减——源站可能还有缓存里没有的新章；lastCheckError/lastCheckTime 一律不动，
-    // 因为这次确实没抓到源站，诊断信息要留着。
+    // 顺手把书架上被残缺血洗过的章数往上修（如生产里《绍宋》停在 20 章而缓存有 400 章）。
+    // 判据统一走 `chapter_total_writeback` 的 `CachedToc` 档（只增不减）：兜底目录天然
+    // 可能少于真相（正文没缓存齐），只能往上修，绝不能把记录降下来。
+    // lastCheckError/lastCheckTime 一律不动——这次确实没抓到源站，诊断信息要留着。
     if let Some(b) = shelf {
-        if (chapters.len() as i64) > b.total_chapter_num {
-            let patch = serde_json::Map::from_iter([(
-                "totalChapterNum".to_string(),
-                json!(chapters.len() as i64),
-            )]);
+        if let Some(total) = crate::storage::chapter_total_writeback(
+            crate::storage::TocWitness::CachedToc,
+            chapters.len() as i64,
+            b.total_chapter_num,
+            0,
+        ) {
+            let patch = serde_json::Map::from_iter([("totalChapterNum".to_string(), json!(total))]);
             let _ = state.storage.patch_book(ns, &b.book_url, &patch).await;
         }
     }
@@ -4117,6 +4120,9 @@ async fn get_book_toc(
                 serde_json::from_str::<Vec<crate::model::book_chapter::BookChapter>>(&cached)
             {
                 tracing::debug!("getBookToc 前置命中目录缓存 [{toc_url}]");
+                // 章数自愈：缓存目录比书架记录多 ⇒ 记录陈旧（残缺目录只会写小值），顺手校准
+                calibrate_total_from_cached_toc(&state, &namespace, &url_param, chapters.len())
+                    .await;
                 return Json(ReturnData::ok(
                     serde_json::to_value(chapters).unwrap_or(serde_json::Value::Null),
                 ));
@@ -4209,6 +4215,9 @@ async fn get_book_toc(
                 serde_json::from_str::<Vec<crate::model::book_chapter::BookChapter>>(&cached)
             {
                 tracing::debug!("getBookToc 命中目录缓存 [{toc_url}]");
+                // 章数自愈：缓存目录比书架记录多 ⇒ 记录陈旧（残缺目录只会写小值），顺手校准
+                calibrate_total_from_cached_toc(&state, &namespace, &url_param, chapters.len())
+                    .await;
                 return Json(ReturnData::ok(
                     serde_json::to_value(chapters).unwrap_or(serde_json::Value::Null),
                 ));
@@ -4313,11 +4322,23 @@ async fn get_book_toc(
                 }
             }
             // F8：成功回写 latestChapterTitle/totalChapterNum/lastCheckTime，清 lastCheckError
+            // 章数自愈：真目录章数才算权威（双向：源站真删章也该跟着降），
+            // 是否允许写入由 storage::chapter_total_writeback 一处判定
+            let calibrated_total = crate::storage::chapter_total_writeback(
+                crate::storage::TocWitness::Fetched,
+                chapters.len() as i64,
+                prev_total,
+                cached_chapters,
+            );
             if let Some(shelf) = shelf_for_write.as_ref() {
                 let latest = chapters.last().map(|c| c.title.clone());
                 let mut patch = serde_json::Map::new();
-                if !looks_partial {
-                    patch.insert("totalChapterNum".into(), json!(chapters.len() as i64));
+                if let Some(total) = calibrated_total {
+                    tracing::info!(
+                        "抓取目录校准章数 {prev_total} -> {total} [{}]",
+                        shelf.book_url
+                    );
+                    patch.insert("totalChapterNum".into(), json!(total));
                 }
                 patch.insert("lastCheckTime".into(), json!(now_millis()));
                 patch.insert("lastCheckError".into(), json!(Value::Null));
@@ -4368,6 +4389,48 @@ async fn get_book_toc(
             Json(ReturnData::err("获取目录失败"))
         }
     }
+}
+
+/// 目录缓存命中时的章数校准：缓存里的目录 JSON 分不出「上次真抓到的高质量目录」还是
+/// 「离线兜底合成的目录」，因此按 `TocWitness::CachedToc` 只允许**只增不减**地修章数
+/// （判据见 `storage::chapter_total_writeback`）。命中即校准，用户不必再点「刷新目录」。
+async fn calibrate_total_from_cached_toc(
+    state: &AppState,
+    namespace: &str,
+    book_url: &str,
+    toc_len: usize,
+) {
+    if book_url.is_empty() || toc_len == 0 {
+        return;
+    }
+    let Ok(Some(shelf)) = state.storage.find_book(namespace, book_url).await else {
+        return;
+    };
+    let cached = state
+        .storage
+        .count_book_chapters(namespace, &shelf.book_url)
+        .await
+        .unwrap_or(0);
+    let Some(total) = crate::storage::chapter_total_writeback(
+        crate::storage::TocWitness::CachedToc,
+        toc_len as i64,
+        shelf.total_chapter_num,
+        cached,
+    ) else {
+        return;
+    };
+    tracing::info!(
+        "目录缓存命中校准章数 {} -> {total} [{}]",
+        shelf.total_chapter_num,
+        shelf.book_url
+    );
+    let mut patch = serde_json::Map::new();
+    patch.insert("totalChapterNum".into(), json!(total));
+    patch.insert("lastCheckError".into(), json!(Value::Null));
+    let _ = state
+        .storage
+        .patch_book(namespace, &shelf.book_url, &patch)
+        .await;
 }
 
 /// 书源使用统计：正文抓取成功 → use_count+1 / use_ts 刷新（计数失败仅记 debug，不影响响应）

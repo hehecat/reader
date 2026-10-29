@@ -5718,6 +5718,52 @@ pub(crate) fn plausible_chapter_total(parsed: i64, prev: i64, cached: i64) -> bo
     parsed > 0 && (parsed >= prev || (cached > 0 && parsed >= cached))
 }
 
+/// 这次目录章数是"从哪儿看到的"——决定它够不够格回写 `books.total_chapter_num`。
+///
+/// 阅读器目录有三条来源，可信度不同（都是「打开书籍就该修好章数」的一部分，
+/// 用户不该为章数不一致手动点「刷新目录」）：
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum TocWitness {
+    /// 真抓到源站目录（`analyze_toc` 成功，空目录 / 残缺已在调用处排除）。
+    /// 唯一可**双向**回写的来源：源站真删章（完本精简、作者合并卷）也该跟着降。
+    Fetched,
+    /// 目录缓存命中（`toc_cache`）。缓存里既可能是上次真抓到的高质量目录，
+    /// 也可能是离线兜底合成的目录（见 router 的 `toc_from_cached_chapters`，它写同一个 key），
+    /// 两种情况只看 JSON 分不出来，故只允许**只增不减**：比记录多 ⇒ 记录必然陈旧
+    /// （残缺目录只会写小值，缓存合成也只会比真相少）；比记录少 ⇒ 无从判断，不写。
+    /// 离线兜底（用 `book_chapters` 已缓存正文临时合成的目录）走的就是这一档：
+    /// 它天然可能少于真相（正文没缓存齐），所以只能往上修，绝不能降。
+    CachedToc,
+}
+
+/// 目录观测 → 该把 `total_chapter_num` 写成什么（`None` = 这次不写）。
+///
+/// 这是「什么时候允许回写章数」的唯一判据（阅读器目录路径 + 夜间书架更新共用
+/// `plausible_chapter_total` 这条质量门，这里只是在它上面再叠加"来源可信度"）：
+///
+/// - `toc_len <= 0`：空目录/解析失败，永远不写（空值入库会把书永久写成 0 章）；
+/// - `Fetched`：过 `plausible_chapter_total`（既不少于书架记录、也不少于已缓存章数）
+///   才写，双向生效；与记录相同则不产生无意义写；
+/// - `CachedToc`（含离线兜底合成）：只在 `toc_len > prev` 时写（理由见 [`TocWitness::CachedToc`]）。
+///
+/// `cached`（已缓存章数）只在 `Fetched` 下参与判断，其余来源传 0 即可。
+pub(crate) fn chapter_total_writeback(
+    witness: TocWitness,
+    toc_len: i64,
+    prev: i64,
+    cached: i64,
+) -> Option<i64> {
+    if toc_len <= 0 {
+        return None;
+    }
+    match witness {
+        TocWitness::Fetched => {
+            (plausible_chapter_total(toc_len, prev, cached) && toc_len != prev).then_some(toc_len)
+        }
+        TocWitness::CachedToc => (toc_len > prev).then_some(toc_len),
+    }
+}
+
 /// F-35：扫描 books 表 can_update=1 的书 → analyze_toc → 回写
 /// latest_chapter_title / total_chapter_num（单本失败跳过，不影响其余）
 pub async fn run_shelf_update(storage: &Storage) -> Result<usize> {
@@ -9090,6 +9136,67 @@ mod tests {
         assert!(!plausible_chapter_total(0, 400, 400));
         // 负值（异常数据）同样不可信
         assert!(!plausible_chapter_total(-1, 0, 0));
+    }
+
+    /// 章数自愈：真目录抓到多少就回写多少（双向），兜底/缓存命中不得把章数写小。
+    #[test]
+    fn test_chapter_total_writeback() {
+        // ① 真目录 1747 vs 记录 1745（《玄鉴仙族》线上实况）→ 写 1747
+        assert_eq!(
+            chapter_total_writeback(TocWitness::Fetched, 1747, 1745, 12),
+            Some(1747)
+        );
+        // ② 兜底目录（离线合成）400 章 vs 记录 1747 → 不写（无论缓存多少章）
+        assert_eq!(
+            chapter_total_writeback(TocWitness::CachedToc, 400, 1747, 400),
+            None
+        );
+        // ③ 真目录比记录少且不是残缺（完本删章：1747 → 1740，缓存 300）→ 照样写
+        assert_eq!(
+            chapter_total_writeback(TocWitness::Fetched, 1740, 1747, 300),
+            Some(1740)
+        );
+        // ④ 章数 0 → 不写（任何来源）
+        assert_eq!(
+            chapter_total_writeback(TocWitness::Fetched, 0, 1747, 0),
+            None
+        );
+        assert_eq!(
+            chapter_total_writeback(TocWitness::CachedToc, 0, 1747, 0),
+            None
+        );
+        assert_eq!(
+            chapter_total_writeback(TocWitness::CachedToc, 0, 0, 0),
+            None
+        );
+        // ⑤ 真目录比记录少且明显少于已缓存章数 → 判为残缺，不写（质量门下界）
+        assert_eq!(
+            chapter_total_writeback(TocWitness::Fetched, 50, 1747, 400),
+            None
+        );
+        // ⑥ 真目录与记录一致 → 不产生无意义写
+        assert_eq!(
+            chapter_total_writeback(TocWitness::Fetched, 1747, 1747, 1747),
+            None
+        );
+        // ⑦ 目录缓存命中只允许"只增不减"：1800 > 1747 写，1745 < 1747 不写
+        assert_eq!(
+            chapter_total_writeback(TocWitness::CachedToc, 1800, 1747, 0),
+            Some(1800)
+        );
+        assert_eq!(
+            chapter_total_writeback(TocWitness::CachedToc, 1745, 1747, 0),
+            None
+        );
+        // ⑧ 新书 prev=0：真目录直接写；缓存/兜底来源走"只增"，也能把这个 0 往上修
+        assert_eq!(
+            chapter_total_writeback(TocWitness::Fetched, 300, 0, 0),
+            Some(300)
+        );
+        assert_eq!(
+            chapter_total_writeback(TocWitness::CachedToc, 300, 0, 0),
+            Some(300)
+        );
     }
 
     /// F-28：替换规则 CRUD 往返 + 命名空间隔离 + default 回退
