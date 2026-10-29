@@ -12,6 +12,7 @@ pub mod epub;
 pub mod explore;
 pub mod export_book;
 pub mod fs_rate;
+pub mod graph;
 pub mod health;
 pub mod image_cache;
 pub mod imaging;

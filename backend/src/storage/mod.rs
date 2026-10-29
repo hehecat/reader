@@ -723,6 +723,62 @@ pub async fn init(config: &AppConfig) -> Result<Storage> {
     .execute(&pool)
     .await?;
 
+    // 关系图谱 B 阶段（整本批量生成）：任务进度 / 逐批原始输出 / 每书成品。
+    // 只增表，不改已有列：旧库升级时直接建空表即可。
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS book_graph_jobs (
+            job_id TEXT PRIMARY KEY,
+            book_url TEXT NOT NULL,
+            user_namespace TEXT NOT NULL DEFAULT 'default',
+            status TEXT NOT NULL,
+            total_batches INTEGER NOT NULL DEFAULT 0,
+            done_batches  INTEGER NOT NULL DEFAULT 0,
+            chapters_scanned INTEGER NOT NULL DEFAULT 0,
+            prompt_tokens INTEGER NOT NULL DEFAULT 0,
+            completion_tokens INTEGER NOT NULL DEFAULT 0,
+            error TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS book_graph_batches (
+            job_id TEXT NOT NULL,
+            batch_no INTEGER NOT NULL,
+            raw_json TEXT NOT NULL,
+            finished_at INTEGER NOT NULL,
+            PRIMARY KEY (job_id, batch_no)
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS book_graphs (
+            book_url TEXT NOT NULL,
+            user_namespace TEXT NOT NULL DEFAULT 'default',
+            data_json TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'batch',
+            characters INTEGER NOT NULL DEFAULT 0,
+            relations  INTEGER NOT NULL DEFAULT 0,
+            chapters_scanned INTEGER NOT NULL DEFAULT 0,
+            job_id TEXT,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (book_url, user_namespace)
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
     // 幂等补列（兼容旧库：缺列则 ALTER TABLE 补上）
     let columns = [
         ("users", &["token_map", "raw_json"][..]),
@@ -2402,6 +2458,173 @@ impl Storage {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    // ---------------- 关系图谱 B 阶段（整本批量生成） ----------------
+    // 表：book_graph_jobs（任务进度）/ book_graph_batches（逐批原始输出）/ book_graphs（每书成品）
+
+    /// 建任务行（同 job_id 覆盖）：status=queued、进度归零
+    pub async fn graph_job_create(
+        &self,
+        job_id: &str,
+        ns: &str,
+        book_url: &str,
+        total_batches: i64,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().timestamp_millis();
+        sqlx::query(
+            "INSERT OR REPLACE INTO book_graph_jobs \
+             (job_id, book_url, user_namespace, status, total_batches, done_batches, chapters_scanned, \
+              prompt_tokens, completion_tokens, error, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, 'queued', ?4, 0, 0, 0, 0, NULL, ?5, ?5)",
+        )
+        .bind(job_id)
+        .bind(book_url)
+        .bind(ns)
+        .bind(total_batches)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// 写任务状态（queued/running/done/failed/cancelled）+ 错误信息
+    pub async fn graph_job_set_status(
+        &self,
+        job_id: &str,
+        status: &str,
+        error: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE book_graph_jobs SET status = ?2, error = ?3, updated_at = ?4 WHERE job_id = ?1",
+        )
+        .bind(job_id)
+        .bind(status)
+        .bind(error)
+        .bind(chrono::Utc::now().timestamp_millis())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// 写任务进度（批进度 + 已扫章数 + token 估算）
+    pub async fn graph_job_set_progress(
+        &self,
+        job_id: &str,
+        done_batches: i64,
+        chapters_scanned: i64,
+        prompt_tokens: i64,
+        completion_tokens: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE book_graph_jobs SET done_batches = ?2, chapters_scanned = ?3, \
+             prompt_tokens = ?4, completion_tokens = ?5, updated_at = ?6 WHERE job_id = ?1",
+        )
+        .bind(job_id)
+        .bind(done_batches)
+        .bind(chapters_scanned)
+        .bind(prompt_tokens)
+        .bind(completion_tokens)
+        .bind(chrono::Utc::now().timestamp_millis())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// 任务快照：(status, total_batches, done_batches, error)
+    pub async fn graph_job_snapshot(
+        &self,
+        job_id: &str,
+    ) -> Result<Option<(String, i64, i64, Option<String>)>> {
+        let row = sqlx::query_as::<_, (String, i64, i64, Option<String>)>(
+            "SELECT status, total_batches, done_batches, error FROM book_graph_jobs WHERE job_id = ?1",
+        )
+        .bind(job_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// 本书未完成的任务（running/queued）——重启后可续跑 / 避免重复开跑
+    pub async fn graph_job_unfinished(&self, ns: &str, book_url: &str) -> Result<Option<String>> {
+        let row = sqlx::query_as::<_, (String,)>(
+            "SELECT job_id FROM book_graph_jobs \
+             WHERE user_namespace = ?1 AND book_url = ?2 AND status IN ('queued','running') \
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(ns)
+        .bind(book_url)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.0))
+    }
+
+    /// 逐批原始输出落库（一批一行，续跑时跳过已成功的批）
+    pub async fn graph_batch_put(&self, job_id: &str, batch_no: i64, raw_json: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO book_graph_batches (job_id, batch_no, raw_json, finished_at) \
+             VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(job_id)
+        .bind(batch_no)
+        .bind(raw_json)
+        .bind(chrono::Utc::now().timestamp_millis())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// 读回某任务的全部批次（按 batch_no 升序）
+    pub async fn graph_batches(&self, job_id: &str) -> Result<Vec<(i64, String)>> {
+        let rows = sqlx::query_as::<_, (i64, String)>(
+            "SELECT batch_no, raw_json FROM book_graph_batches WHERE job_id = ?1 ORDER BY batch_no",
+        )
+        .bind(job_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// 成品落库（每书一份，覆盖写）
+    #[allow(clippy::too_many_arguments)]
+    pub async fn graph_save(
+        &self,
+        ns: &str,
+        book_url: &str,
+        data_json: &str,
+        characters: i64,
+        relations: i64,
+        chapters_scanned: i64,
+        job_id: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO book_graphs \
+             (book_url, user_namespace, data_json, source, characters, relations, chapters_scanned, job_id, updated_at) \
+             VALUES (?1, ?2, ?3, 'batch', ?4, ?5, ?6, ?7, ?8)",
+        )
+        .bind(book_url)
+        .bind(ns)
+        .bind(data_json)
+        .bind(characters)
+        .bind(relations)
+        .bind(chapters_scanned)
+        .bind(job_id)
+        .bind(chrono::Utc::now().timestamp_millis())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// 读成品 JSON（没生成过返回 None）
+    pub async fn graph_get(&self, ns: &str, book_url: &str) -> Result<Option<String>> {
+        let row = sqlx::query_as::<_, (String,)>(
+            "SELECT data_json FROM book_graphs WHERE user_namespace = ?1 AND book_url = ?2",
+        )
+        .bind(ns)
+        .bind(book_url)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.0))
     }
 
     /// 删除本地书（含章节）

@@ -121,6 +121,12 @@ pub fn router(config: crate::AppConfig, storage: Storage) -> axum::Router {
         )
         .route("/reader3/aiTest", post(ai_test))
         .route("/reader3/aiGraph", post(ai_graph))
+        // 关系图谱整本生成（B 阶段）：预估 / 启动 / 进度流 / 取消 / 取成品
+        .route("/reader3/graphEstimate", get(graph_estimate))
+        .route("/reader3/graphStart", post(graph_start))
+        .route("/reader3/graphSSE", get(graph_sse).post(graph_sse))
+        .route("/reader3/graphCancel", get(graph_cancel).post(graph_cancel))
+        .route("/reader3/graph", get(book_graph).post(book_graph))
         // 判定模型(Jev/EMRank): 端点与 chat 端点不同, 配置单独存
         .route(
             "/reader3/jevSettings",
@@ -9539,6 +9545,265 @@ async fn ai_graph(
             ))),
         },
         Err(e) => Json(ReturnData::err(format!("生成失败: {e}"))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 关系图谱整本生成（B 阶段）：预估 / 启动 / 进度流 / 取消 / 取成品
+//
+// 生成本身在后台任务里跑（`service::graph::job`：分批 → 逐批落库 → 归一化 → 落成品），
+// 这边只做参数校验与协议适配；进度靠 300ms 轮询内存任务表推 SSE（同 cacheBookSSE）。
+// ---------------------------------------------------------------------------
+
+/// 预估批数：优先用真实选章结果。
+///
+/// `plan.rs` 仍在并行开发（`todo!()`），直接调用会让整个请求 panic，所以兜一层
+/// catch_unwind：取不到就回落到上界估计 `estimate_batches`（每批 `PER_BATCH` 章、最多
+/// `BATCHES` 批）。plan.rs 落地后这里自动切到真实批数，不用再改。
+fn graph_preview_batches(chapters: &[crate::service::graph::Chapter]) -> usize {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::service::graph::plan_batches(chapters).len()
+    }))
+    .ok()
+    .filter(|batches| *batches > 0)
+    .unwrap_or_else(|| crate::service::graph::job::estimate_batches(chapters.len()))
+}
+
+/// 万 token 的口语化写法（预算是给用户看的量级，不追求精确）
+fn wan_tokens(tokens: u64) -> String {
+    format!("{:.1}", tokens as f64 / 10_000.0)
+}
+
+/// GET/POST /reader3/graphEstimate?url=：生成前预估（只读本地缓存，不调用模型、不花钱）
+async fn graph_estimate(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Option<axum::body::Bytes>,
+) -> Json<ReturnData> {
+    let namespace = match resolve_namespace(&state, &params, &headers).await {
+        Ok(ns) => ns,
+        Err(ret) => return Json(ret),
+    };
+    crate::service::ai::ensure_loaded(&state.storage).await;
+    crate::service::graph::job::register_storage(state.storage.clone());
+    let body_json = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    let url = param_of(&params, body_json.as_ref(), "url");
+    if url.trim().is_empty() {
+        return Json(ReturnData::err("缺少书籍地址"));
+    }
+    let chapters = match state.storage.list_cached_chapters(&namespace, &url).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!("graphEstimate 读取已缓存章节失败 [{namespace}/{url}]: {e}");
+            return Json(ReturnData::err("系统错误"));
+        }
+    };
+    let cached = chapters.len();
+    let batches = graph_preview_batches(&chapters);
+    let (est_prompt, est_completion) = crate::service::graph::estimate(cached, batches);
+    let est_cost_note = if cached == 0 {
+        "本书还没有已缓存章节：先读几章（或先缓存章节）再生成，目前没有可送模型的正文。".to_string()
+    } else {
+        format!(
+            "已缓存 {cached} 章，分 {batches} 批送入模型：约等于 {} 万 token（其中输出约 {} 万），实际用量浮动约三成。",
+            wan_tokens(est_prompt + est_completion),
+            wan_tokens(est_completion),
+        )
+    };
+    Json(ReturnData::ok(json!({
+        "cachedChapters": cached,
+        "batches": batches,
+        "estPromptTokens": est_prompt,
+        "estCompletionTokens": est_completion,
+        "estCostNote": est_cost_note,
+    })))
+}
+
+/// POST /reader3/graphStart：确认后启动整本生成 → {jobId, totalBatches}
+async fn graph_start(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Option<axum::body::Bytes>,
+) -> Json<ReturnData> {
+    let namespace = match resolve_namespace(&state, &params, &headers).await {
+        Ok(ns) => ns,
+        Err(ret) => return Json(ret),
+    };
+    crate::service::ai::ensure_loaded(&state.storage).await;
+    crate::service::graph::job::register_storage(state.storage.clone());
+    let body_json = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    let url = param_of(&params, body_json.as_ref(), "url");
+    if url.trim().is_empty() {
+        return Json(ReturnData::err("缺少书籍地址"));
+    }
+    // 整本生成要跑多批模型调用，必须显式确认（这是唯一的防误触闸门）
+    let confirm = param_of(&params, body_json.as_ref(), "confirm");
+    if !matches!(
+        confirm.trim().to_ascii_lowercase().as_str(),
+        "true" | "1" | "yes"
+    ) {
+        return Json(ReturnData::err(
+            "需要确认后才能生成关系图（请求体需带 confirm: true）：整本生成会调用多次模型并产生费用",
+        ));
+    }
+    let Some(cfg) = crate::service::ai::config() else {
+        return Json(ReturnData::err(
+            "未配置 AI 端点：先到「设置 → AI 阅读助手」填写接口地址 / 密钥 / 模型",
+        ));
+    };
+    let mut book_name = param_of(&params, body_json.as_ref(), "bookName");
+    if book_name.trim().is_empty() {
+        // 提示词里要书名；前端没传就从书架补
+        if let Ok(Some(book)) = state.storage.find_book(&namespace, &url).await {
+            book_name = book.name;
+        }
+    }
+    let max_batches = param_of(&params, body_json.as_ref(), "maxBatches")
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|n| *n > 0);
+    let opts = crate::service::graph::JobOptions {
+        book_name,
+        max_batches,
+    };
+    match crate::service::graph::start_job(state.storage.clone(), namespace, url.clone(), opts, cfg)
+    {
+        Ok(job_id) => {
+            // 已有在跑任务时会复用同一个 job_id，批数从进度对象里读
+            let total_batches = crate::service::graph::progress_of(&url)
+                .map(|p| p.lock().unwrap_or_else(|e| e.into_inner()).total_batches)
+                .unwrap_or(0);
+            Json(ReturnData::ok(json!({
+                "jobId": job_id,
+                "totalBatches": total_batches,
+            })))
+        }
+        Err(e) => Json(ReturnData::err(format!("启动失败: {e:#}"))),
+    }
+}
+
+/// GET/POST /reader3/graphSSE?url=：进度流
+/// {status,doneBatches,totalBatches,characters,relations,error}，终态（done/failed/cancelled）
+/// 发完最后一帧后关流。写法与 `cache_book_sse` 一致：300ms 轮询 + mpsc + unfold。
+async fn graph_sse(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Option<axum::body::Bytes>,
+) -> Response {
+    let _namespace = match resolve_namespace(&state, &params, &headers).await {
+        Ok(ns) => ns,
+        Err(ret) => return sse_error(ret),
+    };
+    crate::service::ai::ensure_loaded(&state.storage).await;
+    // progress_of 的 DB 回落要靠进程级 storage 句柄
+    crate::service::graph::job::register_storage(state.storage.clone());
+    let body_json = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    let url = param_of(&params, body_json.as_ref(), "url");
+    if url.trim().is_empty() {
+        return sse_error(ReturnData::err("参数错误"));
+    }
+    let Some(progress) = crate::service::graph::progress_of(&url) else {
+        return sse_error(ReturnData::err("这本书还没有生成任务（先调用 graphStart）"));
+    };
+
+    let (tx, rx) =
+        tokio::sync::mpsc::unbounded_channel::<Result<Bytes, std::convert::Infallible>>();
+    let progress_for_task = progress.clone();
+    tokio::spawn(async move {
+        loop {
+            let (payload, finished) = {
+                let p = progress_for_task.lock().unwrap_or_else(|e| e.into_inner());
+                (
+                    json!({
+                        "status": p.status,
+                        "doneBatches": p.done_batches,
+                        "totalBatches": p.total_batches,
+                        "characters": p.characters,
+                        "relations": p.relations,
+                        "error": p.error,
+                    }),
+                    crate::service::graph::job::is_terminal_status(&p.status),
+                )
+            };
+            let text = format!("data: {payload}\n\n");
+            if tx.send(Ok(Bytes::from(text))).is_err() {
+                return; // 客户端断开
+            }
+            if finished {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+    });
+
+    let stream = futures::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|item| (item, rx))
+    });
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/event-stream; charset=utf-8")
+        .header("Cache-Control", "no-cache")
+        .body(Body::from_stream(stream))
+        .unwrap()
+}
+
+/// POST /reader3/graphCancel：取消后台生成（已完成的批保留，便于续跑/排查）
+async fn graph_cancel(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Option<axum::body::Bytes>,
+) -> Json<ReturnData> {
+    let _namespace = match resolve_namespace(&state, &params, &headers).await {
+        Ok(ns) => ns,
+        Err(ret) => return Json(ret),
+    };
+    crate::service::ai::ensure_loaded(&state.storage).await;
+    crate::service::graph::job::register_storage(state.storage.clone());
+    let body_json = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    let url = param_of(&params, body_json.as_ref(), "url");
+    if url.trim().is_empty() {
+        return Json(ReturnData::err("参数错误"));
+    }
+    let cancelled = crate::service::graph::cancel(&url);
+    Json(ReturnData::ok(json!({ "cancelled": cancelled })))
+}
+
+/// GET/POST /reader3/graph?url=：本书成品 {graph: {...} | null}（没生成过不算错误）
+async fn book_graph(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Option<axum::body::Bytes>,
+) -> Json<ReturnData> {
+    let namespace = match resolve_namespace(&state, &params, &headers).await {
+        Ok(ns) => ns,
+        Err(ret) => return Json(ret),
+    };
+    crate::service::ai::ensure_loaded(&state.storage).await;
+    crate::service::graph::job::register_storage(state.storage.clone());
+    let body_json = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    let url = param_of(&params, body_json.as_ref(), "url");
+    if url.trim().is_empty() {
+        return Json(ReturnData::err("缺少书籍地址"));
+    }
+    match state.storage.graph_get(&namespace, &url).await {
+        Ok(Some(raw)) => match serde_json::from_str::<Value>(&raw) {
+            Ok(graph) => Json(ReturnData::ok(json!({ "graph": graph }))),
+            Err(e) => {
+                tracing::error!("graph 成品 JSON 损坏 [{namespace}/{url}]: {e}");
+                Json(ReturnData::err("成品数据损坏，请重新生成"))
+            }
+        },
+        Ok(None) => Json(ReturnData::ok(json!({ "graph": null }))),
+        Err(e) => {
+            tracing::error!("graph 读取成品失败 [{namespace}/{url}]: {e}");
+            Json(ReturnData::err("系统错误"))
+        }
     }
 }
 
