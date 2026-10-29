@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
-import { useCallback, useMemo, useEffect, useState } from "react";
+import { useCallback, useMemo, useEffect, useRef, useState } from "react";
 
 import { getBookInfoCache, rememberBookInfo } from "@/lib/bookInfoCache";
 import { getChapters, putChapters } from "@/lib/chapterCache";
@@ -134,8 +134,13 @@ export function useBookData(bookUrl: string, sourceHint?: string): UseBookDataRe
       // 普通路径就是 refresh=0 (服务端优先用目录缓存); 只有当用户显式点「刷新目录」才
       // 走 refreshChapters(refresh=1), 两者互不影响。
       const list = await getChapterList(bookUrl, undefined, { bookSourceUrl });
-      // 落盘是异步的 (IndexedDB 本身异步), 不阻塞本次渲染
-      void putChapters(bookUrl, list);
+      // 落盘只在「选源提示已确定」时做: origin 还没到就取到的目录可能是服务端默认源的,
+      // 写进 IndexedDB 会被下次进书当成这本书的目录渲染 (且 staleTime 内不会自愈)。
+      // `local://` 的书没有 origin, 但目录就是本地解析结果, 照常持久化。
+      if (bookSourceUrl !== undefined || bookUrl.startsWith("local://")) {
+        // 落盘是异步的 (IndexedDB 本身异步), 不阻塞本次渲染
+        void putChapters(bookUrl, list);
+      }
       return list;
     },
     enabled: ready,
@@ -153,6 +158,23 @@ export function useBookData(bookUrl: string, sourceHint?: string): UseBookDataRe
     staleTime: BOOKMARK_CACHE_TTL_MS,
   });
   const queryClient = useQueryClient();
+
+  // origin 迟到自愈: 起跑时如果还没拿到选源提示 (书架接口慢 / 冷启动深链 / 断网),
+  // 那次目录可能是服务端默认源的。origin 一到就失效重取, 避免「错源目录 + staleTime
+  // 内不再回源」的僵死状态 (配合上面"origin 未知不落盘")。
+  const originStateRef = useRef<{ bookUrl: string; origin: string | undefined }>({
+    bookUrl,
+    origin: bookSourceUrl,
+  });
+  useEffect(() => {
+    const prev = originStateRef.current;
+    originStateRef.current = { bookUrl, origin: bookSourceUrl };
+    // 只在「同一本书内 origin 由未知变已知」时重取
+    if (prev.bookUrl === bookUrl && prev.origin === undefined && bookSourceUrl !== undefined) {
+      void queryClient.invalidateQueries({ queryKey: ["chapters", bookUrl] });
+      void queryClient.invalidateQueries({ queryKey: ["bookInfo", bookUrl] });
+    }
+  }, [bookSourceUrl, bookUrl, queryClient]);
   const refreshChapters = useCallback(async (): Promise<BookChapter[]> => {
     const list = await getChapterList(bookUrl, true, { bookSourceUrl });
     queryClient.setQueryData<BookChapter[]>(["chapters", bookUrl], list);

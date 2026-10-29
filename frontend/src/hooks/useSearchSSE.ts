@@ -220,7 +220,8 @@ export function useSearchSSE(): UseSearchSSEResult {
     clearFlushTimer();
     const nextIndex = pendingIndexRef.current;
     pendingIndexRef.current = -1;
-    if (nextIndex >= 0 && nextIndex !== lastIndexRef.current) {
+    // 游标只许前进: 迟到的窗口批次不能把它推回去 (否则下一窗会重复搜已完成的源)
+    if (nextIndex >= 0 && nextIndex >= lastIndexRef.current) {
       lastIndexRef.current = nextIndex;
       setLastIndex(nextIndex);
     }
@@ -233,6 +234,18 @@ export function useSearchSSE(): UseSearchSSEResult {
     setResults(rankResults(accRef.current.items, keyRef.current ?? ""));
   }, [clearFlushTimer]);
   flushRef.current = flushNow;
+
+  // 卸载清理: 停掉在飞的 SSE + 清掉 flush 定时器 —— 否则流会继续跑到结束并对已卸载
+  // 组件 setState (React 忽略但白烧请求), 定时器也会晚一步再跑一次 flush.
+  useEffect(
+    () => () => {
+      cancelRef.current?.();
+      cancelRef.current = null;
+      autoRef.current = false;
+      clearFlushTimer();
+    },
+    [clearFlushTimer],
+  );
 
   /** 开一个 flush 窗口: 已有窗口则让它自然到期 (攒批的关键) */
   const scheduleFlush = useCallback(() => {
@@ -485,11 +498,14 @@ export function useSearchSSE(): UseSearchSSEResult {
     if (key === null || searchingRef.current) {
       return;
     }
+    // 先把攒着的窗口落地: 否则未 flush 的批次会在 connect 之后才写游标,
+    // 让下一窗从旧游标起搜 (重复搜已完成的源, 白跑请求)
+    flushNow();
     autoRef.current = true;
     noMoreRef.current = false;
     stallRef.current = 0;
     connect(key, lastIndexRef.current, concurrentRef.current);
-  }, [connect]);
+  }, [connect, flushNow]);
 
   /** 会话快照恢复: 阅读器预览返回后保留原搜索列表, 不重新起搜 */
   const hydrate = useCallback(

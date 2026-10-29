@@ -131,6 +131,11 @@ export interface UseChapterContentResult {
   isPending: boolean;
   isError: boolean;
   errorMessage: string;
+  /**
+   * 降级态: 网络失败但本地缓存兜住了正文 (能读, 但必须告诉用户这次请求失败、可重试).
+   * 与 isError 互斥 —— 有缓存时不盖整块错误卡, 只用一条轻提示 + 重试.
+   */
+  degraded: boolean;
   /** 请求成功但正文 (净化后) 为空 */
   isEmpty: boolean;
   refetch: () => void;
@@ -199,10 +204,15 @@ export function useChapterContent(
         // 没有缓存才把原始错误抛给 UI
         const fallback = await getContent(bookUrl, index, chapterUrl);
         if (fallback !== undefined) {
+          // 有缓存就先把正文给用户 —— 但把「这次请求失败」和原因一并带出去,
+          // 不能静默吞错 (否则用户以为网络正常, 看不到任何重试入口).
           return {
             title: fallback.title,
             content: fallback.content,
             nextContentUrl: fallback.nextContentUrl,
+            degraded: true,
+            degradedReason:
+              error instanceof Error && error.message !== "" ? error.message : "正文加载失败",
           };
         }
         throw error;
@@ -286,7 +296,18 @@ export function useChapterContent(
         staleTime: 5 * 60_000,
       });
     }
-  }, [queryClient, bookUrl, index, prefetchReady, chapterCount, nextChapterUrl, nextChapterUrl2, origin]);
+  }, [
+    queryClient,
+    bookUrl,
+    index,
+    prefetchReady,
+    chapterCount,
+    nextChapterUrl,
+    nextChapterUrl2,
+    nextChapterTitle,
+    nextChapterTitle2,
+    origin,
+  ]);
 
   const rawTitle = chapter?.title ?? cachedContent?.title ?? "";
   const isVolume = chapter?.isVolume ?? false;
@@ -312,6 +333,9 @@ export function useChapterContent(
   );
 
   const error = contentQuery.error;
+  // 降级原因来自 queryFn 里「缓存兜住网络失败」那条分支 (query 本身是 success, 拿不到 error)
+  const degradedReason =
+    (contentQuery.data as { degradedReason?: string } | undefined)?.degradedReason ?? "";
 
   return {
     items,
@@ -319,7 +343,13 @@ export function useChapterContent(
     // 有本地缓存时既不算「加载中」也不算「失败」—— 正文已经能读, 网络只是在后台补/出错
     isPending: contentQuery.isLoading && cachedContent === undefined,
     isError: contentQuery.isError && cachedContent === undefined,
-    errorMessage: error instanceof Error && error.message !== "" ? error.message : "正文加载失败",
+    degraded: degradedReason !== "",
+    errorMessage:
+      degradedReason !== ""
+        ? degradedReason
+        : error instanceof Error && error.message !== ""
+          ? error.message
+          : "正文加载失败",
     isEmpty: isSuccess && content.trim() === "",
     refetch: () => {
       void contentQuery.refetch();

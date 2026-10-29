@@ -715,6 +715,22 @@ export default function ReaderPage() {
           </div>
         ) : null}
 
+        {/* 正文降级: 这次取新失败, 但本地缓存兜住了正文 —— 能读就得让读, 但不能静默,
+            给一条「显示的是本地缓存 + 原因 + 重试」的轻提示 (整块错误卡会盖掉能读的正文) */}
+        {content.degraded ? (
+          <div className="flex items-center justify-center gap-2 border-b border-border bg-surface px-3 py-1 text-xs text-muted-foreground">
+            <span className="truncate">取新失败({content.errorMessage}), 当前显示本地缓存</span>
+            <button
+              type="button"
+              className="shrink-0 cursor-pointer font-medium text-accent disabled:opacity-50"
+              disabled={content.isReloading}
+              onClick={content.refetch}
+            >
+              {content.isReloading ? "重试中…" : "重试"}
+            </button>
+          </div>
+        ) : null}
+
         {/* 正文容器: 加入书签时扫描其中带 data-pos 的段落取可视区首段作摘要; 划选工具条也只认这个容器内的选区 */}
         <div ref={contentRef} className="min-h-0 flex-1">
           {/* 目录未就绪时不再整页返回一个死转圈: 留在阅读框架内(顶栏「返回」始终可用),
