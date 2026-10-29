@@ -3,6 +3,7 @@ import DOMPurify from "dompurify";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { proxiedAssetUrl } from "@/lib/asset";
+import { getContent, putContent, type CachedContent } from "@/lib/chapterCache";
 import { getBookContent } from "@/services/book";
 import { activeReplaceRules, applyReplaceRules, useReplaceRules } from "@/services/purify";
 import type { BookChapter } from "@/types/api";
@@ -157,23 +158,63 @@ export function useChapterContent(
   nextChapterTitle2?: string,
 ): UseChapterContentResult {
   const queryClient = useQueryClient();
+  const chapterUrl = chapter?.url;
+
+  // 正文本地缓存 (IndexedDB): 先读缓存立刻出正文, 网络结果回来再覆盖 —— 二次进书/断网
+  // 不必等接口。setState 只在异步回调里发生 (切章时按 key 天然失效, 不需要同步复位)。
+  const [cached, setCached] = useState<{ key: string; content: CachedContent } | undefined>(undefined);
+  const cacheKey = `${bookUrl}\u0000${index}`;
+  useEffect(() => {
+    if (bookUrl === "" || index < 0) {
+      return;
+    }
+    let cancelled = false;
+    void getContent(bookUrl, index, chapterUrl).then((content) => {
+      if (!cancelled && content !== undefined) {
+        setCached({ key: cacheKey, content });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [bookUrl, index, chapterUrl, cacheKey]);
+  const cachedContent = cached !== undefined && cached.key === cacheKey ? cached.content : undefined;
 
   // warp getBookContent 的 url 参数是章节页 URL (Kotlin 旧形为 bookUrl+index 内部解析);
   // 章节列表就绪后才发起, 避免 index=0 抢跑污染书架进度.
   const contentQuery = useQuery({
     queryKey: ["content", bookUrl, index],
-    queryFn: () =>
-      getBookContent(chapter?.url ?? bookUrl, index, {
-        bookSourceUrl: origin,
-        bookUrl,
-        title: chapter?.title,
-      }),
+    queryFn: async () => {
+      try {
+        const data = await getBookContent(chapterUrl ?? bookUrl, index, {
+          bookSourceUrl: origin,
+          bookUrl,
+          title: chapter?.title,
+        });
+        // 落盘异步进行, 不阻塞渲染
+        void putContent(bookUrl, index, data, chapterUrl);
+        return data;
+      } catch (error) {
+        // 网络失败: 有本地缓存就用缓存 (断网/后端不可用时已缓存章节仍可读),
+        // 没有缓存才把原始错误抛给 UI
+        const fallback = await getContent(bookUrl, index, chapterUrl);
+        if (fallback !== undefined) {
+          return {
+            title: fallback.title,
+            content: fallback.content,
+            nextContentUrl: fallback.nextContentUrl,
+          };
+        }
+        throw error;
+      }
+    },
     enabled: bookUrl !== "" && index >= 0 && chapter !== undefined,
     // 服务端章节缓存命中即秒回; staleTime 让章间往返/回退重进走客户端缓存
     staleTime: 5 * 60_000,
   });
 
-  const isSuccess = contentQuery.isSuccess;
+  // 「有正文可渲染」: 网络成功, 或本地持久缓存命中 (两者都算成功, 不显示错误/骨架)
+  const isSuccess = contentQuery.isSuccess || cachedContent !== undefined;
 
   // 重新拉取本章: 带 refresh=1 绕过服务端的永久正文缓存 (源站修正 / 防盗页),
   // 成功后回写同一个 query key, 页面直接换成新正文; 失败原样抛出交给调用方提示.
@@ -192,17 +233,30 @@ export function useChapterContent(
         title: chapter.title,
       });
       queryClient.setQueryData(["content", bookUrl, index], data);
+      void putContent(bookUrl, index, data, chapter.url);
     } finally {
       setIsReloading(false);
     }
   }, [queryClient, bookUrl, index, chapter, origin]);
 
-  // 预加载后续两章: 缓存未覆盖到的阅读前沿时, 翻页前大概率已缓存秒开
+  /**
+   * 预取门控: 目录就绪 (chapter 存在) 且本章请求已结束即可预取 ——
+   * 不再只认 isSuccess: 本章失败/走本地缓存时邻居照样该热.
+   * 本章还在飞时不抢跑, 免得首屏 4 个源站请求互相拖慢.
+   */
+  const prefetchReady = bookUrl !== "" && chapter !== undefined && !contentQuery.isFetching;
+
+  // 预加载前后邻居 (index-1 / +1 / +2): 回退与翻页都在缓存里秒开
   useEffect(() => {
-    if (!isSuccess || bookUrl === "") {
+    if (!prefetchReady) {
       return;
     }
+    // 上一章的 URL/标题: 阅读页只把 +1/+2 传进来, index-1 从目录缓存里取 (与 useBookData
+    // 同一个 query key, 这里只读不拉取)
+    const chaptersOfBook = queryClient.getQueryData<BookChapter[]>(["chapters", bookUrl]);
+    const prevChapter = index > 0 ? chaptersOfBook?.[index - 1] : undefined;
     for (const [offset, url, nextTitle] of [
+      [-1, prevChapter?.url, prevChapter?.title],
       [1, nextChapterUrl, nextChapterTitle],
       [2, nextChapterUrl2, nextChapterTitle2],
     ] as const) {
@@ -210,26 +264,34 @@ export function useChapterContent(
         continue;
       }
       const nextIndex = index + offset;
+      if (nextIndex < 0) {
+        continue;
+      }
       if (chapterCount !== undefined && nextIndex >= chapterCount) {
         continue;
       }
       void queryClient.prefetchQuery({
         queryKey: ["content", bookUrl, nextIndex],
-        queryFn: () =>
-          getBookContent(url, nextIndex, {
+        queryFn: async () => {
+          const data = await getBookContent(url, nextIndex, {
             cache: true,
             bookSourceUrl: origin,
             bookUrl,
             title: nextTitle,
-          }),
+          });
+          // 预取到的章节同样落盘: 断网时仍能继续翻已缓存的两章
+          void putContent(bookUrl, nextIndex, data, url);
+          return data;
+        },
         staleTime: 5 * 60_000,
       });
     }
-  }, [queryClient, bookUrl, index, isSuccess, chapterCount, nextChapterUrl, nextChapterUrl2, origin]);
+  }, [queryClient, bookUrl, index, prefetchReady, chapterCount, nextChapterUrl, nextChapterUrl2, origin]);
 
-  const rawTitle = chapter?.title ?? "";
+  const rawTitle = chapter?.title ?? cachedContent?.title ?? "";
   const isVolume = chapter?.isVolume ?? false;
-  const rawContent = contentQuery.data?.content ?? "";
+  // 网络数据优先; 网络还没回来/失败时用 IndexedDB 里的同一章 (断网可读)
+  const rawContent = contentQuery.data?.content ?? cachedContent?.content ?? "";
 
   // 净化规则: warp 只做规则 CRUD, 不把规则应用到正文, 所以替换发生在渲染期 ——
   // 清洗前对原始正文/章标题按 order 升序跑一遍; 规则改动经 ["replaceRules"] 失效后,
@@ -254,8 +316,9 @@ export function useChapterContent(
   return {
     items,
     title,
-    isPending: contentQuery.isLoading,
-    isError: contentQuery.isError,
+    // 有本地缓存时既不算「加载中」也不算「失败」—— 正文已经能读, 网络只是在后台补/出错
+    isPending: contentQuery.isLoading && cachedContent === undefined,
+    isError: contentQuery.isError && cachedContent === undefined,
     errorMessage: error instanceof Error && error.message !== "" ? error.message : "正文加载失败",
     isEmpty: isSuccess && content.trim() === "",
     refetch: () => {

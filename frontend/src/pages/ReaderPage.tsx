@@ -142,14 +142,11 @@ export default function ReaderPage() {
   });
   const { stepChapter, goToChapter } = progress;
 
-  // 进阅读器即取一次最新书架数据: 权威进度在书架记录里, 而它有 30s staleTime ——
-  // 不主动刷新会在多端场景下用旧进度开读(随后又把服务端的新进度覆盖回去)
-  const refetchShelf = shelfQuery.refetch;
-  React.useEffect(() => {
-    if (bookUrl !== "") {
-      void refetchShelf();
-    }
-  }, [bookUrl, refetchShelf]);
+  // 进阅读器补一次最新书架数据: 权威进度在书架记录里, 它有 30s staleTime ——
+  // 但不能在进书那一刻抢带宽 (它会和书籍详情/目录/正文同时排队, 实测接口并发把首屏推后):
+  // 改为「首屏正文已出 + 书架数据确实过期」才补, 且每本书只补一次 (实现见下方 useChapterContent 之后)。
+  // 挂载本身就会 fetch (无缓存时 isLoading), 那种情况直接跳过, 与改动前等价。
+
 
   /**
    * 多端进度提示: 回到前台/窗口获得焦点时重取服务端进度, 若明显更靠后则提示跳转
@@ -223,6 +220,25 @@ export default function ReaderPage() {
     chapters[progress.index + 1]?.title,
     chapters[progress.index + 2]?.title,
   );
+
+  // 书架数据补取 (取代原来进书立刻 refetch): 只在「首屏正文已出」且「书架数据过期」时补一次。
+  // 断网/后端挂住时这里不会连环重试 —— 首屏可读优先, 多端进度提示另有 focus 检查兜底。
+  const shelfIsStale = shelfQuery.isStale;
+  const shelfSettled = shelfQuery.isSuccess;
+  // 「正文已出」= 有可渲染段落 (缓存命中也算) 或已明确失败
+  const bodyReady = content.items.length > 0 || content.isError;
+  const shelfSyncedBookRef = React.useRef("");
+  const refetchShelf = shelfQuery.refetch;
+  React.useEffect(() => {
+    if (bookUrl === "" || !bodyReady || !shelfSettled || !shelfIsStale) {
+      return;
+    }
+    if (shelfSyncedBookRef.current === bookUrl) {
+      return;
+    }
+    shelfSyncedBookRef.current = bookUrl;
+    void refetchShelf();
+  }, [bookUrl, bodyReady, shelfSettled, shelfIsStale, refetchShelf]);
 
   const toc = useToc({ book, onNavigate: goToChapter });
 
@@ -683,15 +699,32 @@ export default function ReaderPage() {
           chromeHidden={chromeHidden}
         />
 
+        {/* 目录来自本地缓存且这次取新失败: 只给一条「可能不是最新」的轻提示, 正文照常可读,
+            绝不用整块错误卡把已缓存的目录/正文盖掉 (断网二次进书的核心场景) */}
+        {chaptersError !== "" && chapters.length > 0 ? (
+          <div className="flex items-center justify-center gap-2 border-b border-border bg-surface px-3 py-1 text-xs text-muted-foreground">
+            <span className="truncate">目录可能不是最新(用的是本地缓存), 可刷新目录重试</span>
+            <button
+              type="button"
+              className="shrink-0 cursor-pointer font-medium text-accent disabled:opacity-50"
+              disabled={tocRefreshing}
+              onClick={handleRefreshToc}
+            >
+              {tocRefreshing ? "刷新中…" : "刷新"}
+            </button>
+          </div>
+        ) : null}
+
         {/* 正文容器: 加入书签时扫描其中带 data-pos 的段落取可视区首段作摘要; 划选工具条也只认这个容器内的选区 */}
         <div ref={contentRef} className="min-h-0 flex-1">
           {/* 目录未就绪时不再整页返回一个死转圈: 留在阅读框架内(顶栏「返回」始终可用),
-              加载超过 8s 解释原因, 失败/空目录给原文 + 重试/换源/返回书架 */}
-          {chaptersQuery.isLoading ? (
+              加载超过 8s 解释原因, 失败/空目录给原文 + 重试/换源/返回书架。
+              注意判据都是「没有目录」时才算 loading/失败: 本地缓存已有目录就直接渲染正文 */}
+          {chaptersQuery.isLoading && chapters.length === 0 ? (
             <div className="flex h-full items-center justify-center">
               <ReaderLoadingStatus />
             </div>
-          ) : chaptersError !== "" ? (
+          ) : chaptersError !== "" && chapters.length === 0 ? (
             <div className="flex h-full items-center justify-center px-6">
               <ReaderStateCard
                 icon={<CircleAlert />}
@@ -798,6 +831,7 @@ export default function ReaderPage() {
       {/* 朗读浮动条: 盖在底栏上方, idle 时组件自己不渲染 */}
       <TtsBar tts={tts} />
 
+      {/* 目录来自缓存时抽屉不该再唱空城计: 有章节就不算 loading, 也不该把已缓存的目录盖成错误页 */}
       <TocDrawer
         open={toc.tocOpen}
         onOpenChange={toc.setTocOpen}
@@ -809,8 +843,8 @@ export default function ReaderPage() {
         onReloadChapter={handleReloadChapter}
         reloadingChapter={content.isReloading}
         refreshingToc={tocRefreshing}
-        tocError={chaptersError !== "" ? chaptersError : tocError}
-        tocLoading={chaptersQuery.isLoading}
+        tocError={chapters.length === 0 ? (chaptersError !== "" ? chaptersError : tocError) : tocError}
+        tocLoading={chaptersQuery.isLoading && chapters.length === 0}
         onRefreshToc={handleRefreshToc}
         onSwitchSource={() => {
           toc.setTocOpen(false);

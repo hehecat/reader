@@ -9,6 +9,7 @@ import {
 } from "react-virtuoso";
 
 import { ChapterEndBlock, type ChapterEndBlockProps } from "@/components/reader/ChapterEndBlock";
+import { ChapterSkeleton } from "@/components/reader/ChapterSkeleton";
 import { injectAnnotationMarks } from "@/components/reader/annotation-marks";
 import { Button, EmptyState, Spinner } from "@/components/ui";
 import type { ReaderParagraph } from "@/hooks/useChapterContent";
@@ -17,8 +18,64 @@ import { NO_ANNOTATIONS, type Annotation } from "@/stores/annotations-store";
 import { useReaderUIStore } from "@/stores/reader-ui-store";
 import { useSettingsStore, type ReadMode } from "@/stores/settings-store";
 
-/** 虚拟列表阈值: 超过该段落数启用 Virtuoso, 短章节全量渲染避免虚拟化开销 */
-export const VIRTUALIZATION_THRESHOLD = 500;
+/**
+ * 长章渲染门控. 判据从「500 段」改成「段数 + 正文字数双超限」——
+ * 500 段相当于 8 万字以上, 现实里几乎不触发, 30k 字 (180 段) 的章节照样一次全量布局.
+ * 现在分两档: 超过 OFFSCREEN_SKIP_MIN_PARAGRAPHS 段只开屏外跳过 (元素全在 DOM, 只跳布局/绘制),
+ * 再超过 VIRTUALIZE_* 才上 Virtuoso (段落根本不在 DOM, 极端长章/整卷合并时的兜底).
+ */
+const OFFSCREEN_SKIP_MIN_PARAGRAPHS = 120;
+const VIRTUALIZE_MIN_PARAGRAPHS = 400;
+const VIRTUALIZE_MIN_CHARS = 60_000;
+
+/** 是否上 Virtuoso 虚拟列表: 段落数与正文字符数同时超限才算长章 */
+export function shouldVirtualize(items: readonly ReaderParagraph[]): boolean {
+  if (items.length <= VIRTUALIZE_MIN_PARAGRAPHS) {
+    return false;
+  }
+  let chars = 0;
+  for (const item of items) {
+    chars += item.text.length;
+    if (chars > VIRTUALIZE_MIN_CHARS) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 段落高度估算参数: 由 FullScrollList 实测栏宽与字号后给出 (见 useParagraphEstimate).
+ * 不做成 CSS 变量 —— 400 个段落各自 calc(var(...)) 会让每次换章的首绘多花 300ms 以上 (实测),
+ * 换成 JS 算好的纯 px 就回到基线.
+ */
+interface ParagraphEstimate {
+  /** 一行放几个汉字 */
+  charsPerLine: number;
+  /** 行高 (px) */
+  lineHeight: number;
+  /** 段间距 (px) */
+  paragraphGap: number;
+}
+
+/** 还没量到栏宽时的兜底: 18px 字号 / 42em 栏宽下的桌面默认值 */
+const DEFAULT_ESTIMATE: ParagraphEstimate = { charsPerLine: 36, lineHeight: 32, paragraphGap: 14 };
+
+/**
+ * 屏外跳过 (content-visibility: auto + contain-intrinsic-size): 视口外的段落不参与布局与绘制,
+ * 但元素仍在 DOM 里 —— 划词、TTS 的高亮滚动、data-pos 进度扫描都不受影响.
+ * 高度按「本机实际每行字数」估算: 同样 104 字的一段, 42em 栏宽是 3 行, 手机 21em 栏宽是 5 行,
+ * 用固定值会把长章估矮近一半, 进度恢复落点和滚动条长度就跟着偏.
+ * contain-intrinsic-size 的 auto 关键字会记住段落实测高度, 渲染过之后不再用估算值.
+ */
+function offscreenSkipStyle(text: string, estimate: ParagraphEstimate): React.CSSProperties {
+  // 粗略去掉标签再数字数: item.text 是净化后的 HTML 片段
+  const plainLength = text.replace(/<[^>]*>/g, "").length;
+  const lines = Math.max(1, Math.ceil(plainLength / estimate.charsPerLine));
+  return {
+    contentVisibility: "auto",
+    containIntrinsicSize: `auto ${Math.round(lines * estimate.lineHeight + estimate.paragraphGap)}px`,
+  };
+}
 
 /** 批注抽屉的跳转请求: 滚动到目标段落并闪烁; nonce 区分对同一段落的连续两次跳转 */
 export interface FocusRequest {
@@ -185,6 +242,7 @@ const ParagraphItem = React.memo(function ParagraphItem({
   bookName,
   bookAuthor,
   annotations,
+  estimate = null,
 }: {
   item: ReaderParagraph;
   indent: boolean;
@@ -192,6 +250,8 @@ const ParagraphItem = React.memo(function ParagraphItem({
   bookAuthor: string;
   /** 落在本段的批注 (页面层按 paraIndex 分好组; 无批注时是稳定空数组) */
   annotations: Annotation[];
+  /** 长章全量渲染时让屏外段落跳过布局/绘制 (元素仍在 DOM); null = 不开屏外跳过 */
+  estimate?: ParagraphEstimate | null;
 }) {
   // 无批注直接用原串 (零开销); 有批注时切分文本节点包 <mark>, 文本内容不变, 偏移下次仍然成立
   const annotatedHtml = React.useMemo(
@@ -236,7 +296,13 @@ const ParagraphItem = React.memo(function ParagraphItem({
         <div
           data-pos={item.pos}
           className="break-inside-avoid px-5 [&_img]:mx-auto [&_img]:block [&_img]:h-auto [&_img]:max-w-full"
-          style={paragraphBlockPadding}
+          style={{
+            ...paragraphBlockPadding,
+            // 图片真实高度要等解码, 屏外时给个占位高度免得滚动位置来回跳
+            ...(estimate === null
+              ? null
+              : { contentVisibility: "auto", containIntrinsicSize: "auto 260px" }),
+          }}
           dangerouslySetInnerHTML={{ __html: item.text }}
         />
       );
@@ -246,7 +312,11 @@ const ParagraphItem = React.memo(function ParagraphItem({
           data-pos={item.pos}
           data-para-index={item.key}
           className="px-5 text-pretty text-foreground/90"
-          style={{ ...paragraphBlockPadding, textIndent: indent ? "2em" : undefined }}
+          style={{
+            ...paragraphBlockPadding,
+            ...(estimate === null ? null : offscreenSkipStyle(item.text, estimate)),
+            textIndent: indent ? "2em" : undefined,
+          }}
           dangerouslySetInnerHTML={{ __html: annotatedHtml }}
         />
       );
@@ -441,7 +511,10 @@ function VirtualScrollList({
   );
 }
 
-/** 短章节 (<= VIRTUALIZATION_THRESHOLD 段): 全量渲染 + 原生滚动, data-pos 扫描定位 */
+/**
+ * 未达虚拟化门控的章节 (`!shouldVirtualize`): 元素全在 DOM + 原生滚动, data-pos 扫描定位。
+ * 段落够多时额外开屏外跳过 (`content-visibility: auto`): 元素仍在 DOM, 只是不参与布局/绘制。
+ */
 function FullScrollList({
   items,
   indent,
@@ -456,6 +529,8 @@ function FullScrollList({
   endBlock,
   onScrollerReady,
 }: ScrollListProps) {
+  // 长章才开屏外跳过: 短章开了只是给每段加一层估算
+  const skipOffscreen = items.length > OFFSCREEN_SKIP_MIN_PARAGRAPHS;
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
   const frameRef = React.useRef(0);
   const onReadRatioRef = React.useRef(onReadRatio);
@@ -482,6 +557,67 @@ function FullScrollList({
     [onScrollerReady],
   );
 
+  // 量一次「一行几个字 / 行高 / 段间距」, 给屏外段落估高用 (见 offscreenSkipStyle).
+  // 栏宽、字号、主题变了由 ResizeObserver 兜; 每次换章再量一次, 成本可忽略.
+  const [estimate, setEstimate] = React.useState<ParagraphEstimate | null>(null);
+  React.useEffect(() => {
+    const el = scrollRef.current;
+    const column = el?.firstElementChild;
+    if (el === null || !skipOffscreen || !(column instanceof HTMLElement)) {
+      return;
+    }
+    // 只在「栏宽/字号」变了才重量: ResizeObserver 也会因为列高变化触发 (估值变 → 列高变), 不设这道闸会反复强制布局
+    let signature = "";
+    const sync = (force: boolean): void => {
+      const style = getComputedStyle(column);
+      const sample = el.querySelector<HTMLElement>("p[data-para-index]");
+      const sampleStyle = sample === null ? null : getComputedStyle(sample);
+      const fontSize = Number.parseFloat(style.fontSize) || 18;
+      const lineHeight = Number.parseFloat(style.lineHeight) || fontSize * 1.8;
+      const width =
+        sample === null
+          ? column.clientWidth
+          : sample.clientWidth -
+            (Number.parseFloat(sampleStyle?.paddingLeft ?? "0") || 0) -
+            (Number.parseFloat(sampleStyle?.paddingRight ?? "0") || 0);
+      const next = `${width}|${fontSize}|${lineHeight}`;
+      if (!force && next === signature) {
+        return;
+      }
+      signature = next;
+      // 汉字按 fontSize 当步进只是近似: 中文避头尾规则 (行首不能是「,。」) 会让实际行数比「字数/每行字数」
+      // 多出半行上下, 长章就能差出 5% 的总高度. 直接量一段真文本: 把同样的字塞进一个隐藏但参与排版的盒子,
+      // 用它的高度反推每行字数 —— 避头尾、字距、标点全都自然算进去, 且它不受 content-visibility 影响.
+      let charsPerLine = Math.max(8, Math.round(width / fontSize));
+      const text = sample?.textContent ?? "";
+      if (text.length > 0) {
+        const probe = document.createElement("div");
+        probe.setAttribute("aria-hidden", "true");
+        probe.style.cssText =
+          `position:absolute;top:0;left:0;visibility:hidden;pointer-events:none;` +
+          `width:${width}px;font:${style.font};line-height:${style.lineHeight};` +
+          `letter-spacing:${style.letterSpacing};text-align:${style.textAlign};`;
+        probe.textContent = text;
+        column.appendChild(probe);
+        const lines = probe.getBoundingClientRect().height / lineHeight;
+        probe.remove();
+        if (lines >= 1) {
+          charsPerLine = Math.max(8, Math.round(text.length / lines));
+        }
+      }
+      const gapEm = Number.parseFloat(style.getPropertyValue("--reader-paragraph-gap")) || 0.75;
+      setEstimate({ charsPerLine, lineHeight, paragraphGap: Math.round(gapEm * fontSize) });
+    };
+    // 首帧布局完成后再量 (effect 里同步量的话段落还没排版)
+    const frame = requestAnimationFrame(() => sync(true));
+    const observer = new ResizeObserver(() => sync(false));
+    observer.observe(column);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [skipOffscreen, items]);
+
   // 进度恢复: 滚动到第一个 data-pos >= restorePos 的段落; 图片首帧渲染后若用户未滚动再校正一次
   React.useEffect(() => {
     const el = scrollRef.current;
@@ -489,7 +625,13 @@ function FullScrollList({
       return;
     }
     let expectedTop: number | null = null;
-    const apply = () => {
+    let passes = 0;
+    let frame = 0;
+    // 屏外段落是估算高度 (content-visibility), 自己量 rect 算 delta 的做法收敛不了:
+    // 目标上方的段落还没渲染, 它们的真实高度根本量不到, 反复「量-滚」只会落在估算位置 (实测能差 47 段).
+    // 用 scrollIntoView 让浏览器自己收敛 —— 它会边滚边把沿途段落排出来, 并对 content-visibility 做多轮校正;
+    // 之后再用 rect 差的绝对值兜底一次, 应付图片/字体晚到导致的整体位移.
+    const apply = (): void => {
       const nodes = el.querySelectorAll<HTMLElement>("[data-pos]");
       if (nodes.length === 0) {
         return;
@@ -508,8 +650,16 @@ function FullScrollList({
       if (target === null) {
         return;
       }
-      el.scrollTop += target.getBoundingClientRect().top - el.getBoundingClientRect().top;
+      target.scrollIntoView({ block: "start", behavior: "instant" });
+      const delta = target.getBoundingClientRect().top - el.getBoundingClientRect().top;
+      if (Math.abs(delta) >= 8) {
+        el.scrollTop += delta;
+      }
       expectedTop = el.scrollTop;
+      if (Math.abs(delta) >= 8 && passes < 4) {
+        passes += 1;
+        frame = requestAnimationFrame(apply);
+      }
     };
     apply();
     const timer = window.setTimeout(() => {
@@ -517,7 +667,12 @@ function FullScrollList({
         apply();
       }
     }, 250);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      if (frame !== 0) {
+        cancelAnimationFrame(frame);
+      }
+    };
   }, [items, restorePos]);
 
   // 批注抽屉跳转: 目标段落滚到容器中部并闪烁 (rAF 排在进度恢复之后; 恢复的 250ms 校正见滚动位置已变会自动让路)
@@ -600,6 +755,7 @@ function FullScrollList({
             bookName={bookName}
             bookAuthor={bookAuthor}
             annotations={annotationsByPara.get(item.key) ?? NO_ANNOTATIONS}
+            estimate={skipOffscreen ? (estimate ?? DEFAULT_ESTIMATE) : null}
           />
         ))}
         <ChapterEndBlock {...endBlock} />
@@ -647,6 +803,8 @@ function ScrollMode({
   // 滚动模式没有边缘翻页区, 任意有效 tap (非控件/无选区/非拖拽) 都切换上下工具条
   const tapProps = useTapZone(() => onToggleChrome?.());
 
+  const virtualize = React.useMemo(() => shouldVirtualize(items), [items]);
+
   const listProps: ScrollListProps = {
     items,
     indent,
@@ -664,11 +822,7 @@ function ScrollMode({
 
   return (
     <div className="h-full" {...tapProps}>
-      {items.length > VIRTUALIZATION_THRESHOLD ? (
-        <VirtualScrollList {...listProps} />
-      ) : (
-        <FullScrollList {...listProps} />
-      )}
+      {virtualize ? <VirtualScrollList {...listProps} /> : <FullScrollList {...listProps} />}
     </div>
   );
 }
@@ -1120,11 +1274,8 @@ export const ContentView = React.memo(function ContentView({
 
   let body: React.ReactNode;
   if (isPending) {
-    body = (
-      <div className="flex h-full items-center justify-center">
-        <ReaderLoading />
-      </div>
-    );
+    // 未命中缓存时不摆居中转圈: 直接画正文段落形状的骨架, 命中后原地替换、版面不跳
+    body = <ChapterSkeleton />;
   } else if (isError) {
     body = (
       <div className="flex h-full items-center justify-center">

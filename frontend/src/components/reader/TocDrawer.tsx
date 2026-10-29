@@ -93,7 +93,7 @@ export interface TocDrawerProps {
   onToggleReversed: () => void;
   /** 点击章节: 切章并关闭抽屉 */
   onSelect: (index: number) => void;
-  /** 书架记录的章数: 与目录长度不一致时双向提示(目录残缺 / 书架章数陈旧) */
+  /** 书架记录的章数: 仅用于「目录取到的比它少」时提示目录可能抓残; 展示一律用有效总章数 */
   totalChapterNum?: number;
   /** 重取目录(跳过服务端缓存); 传了才显示「刷新目录」按钮 */
   onRefreshToc?: () => void;
@@ -146,12 +146,16 @@ export function TocDrawer({
     [totalChapterNum, currentIndex, chapters.length],
   );
 
-  /** 书架章数与目录章数不一致(两边都有值) → 双向提示: 目录残缺 / 书架章数陈旧 */
-  const countMismatch =
+  /**
+   * 目录比书架记录**少**才提示(目录可能抓残); 目录比记录**多**不提示——
+   * 那里目录就是权威值, 后端抓目录时会顺手把 books.total_chapter_num 校准成目录章数,
+   * 用户不需要(也不该)为此手动点「刷新目录」。
+   */
+  const tocLooksShort =
     totalChapterNum !== undefined &&
     totalChapterNum > 0 &&
     chapters.length > 0 &&
-    totalChapterNum !== chapters.length;
+    chapters.length < totalChapterNum;
 
   // 打开时把当前章节顶到列表可视区顶部 (抽屉每次打开重新挂载 Virtuoso)
   const initialTop = React.useMemo(() => {
@@ -327,8 +331,8 @@ export function TocDrawer({
     // cancelled 终态帧会沿进度流到达, 由 onDone 统一收流并提示
   }, [bookUrl]);
 
-  // 进度行文案: 目录解析完成前 total=0 用章节列表数兜底; title 就位前是 url, 用书名兜底
-  const runningTotal = progress !== null && progress.total > 0 ? progress.total : chapters.length;
+  // 进度行文案: 分母一律用有效总章数(目录章数为权威), 只有目录还没到时才用任务自报总数兜底
+  const runningTotal = Math.max(effectiveTotal, progress?.total ?? 0);
   const runningTitle =
     progress !== null && progress.title !== "" && progress.title !== bookUrl
       ? progress.title
@@ -378,11 +382,12 @@ export function TocDrawer({
             </div>
           )}
           <TocSearchField value={query} onChange={setQuery} />
-          {countMismatch ? (
-            <p className="mt-2 rounded-lg border border-accent/30 bg-surface px-2.5 py-1.5 text-xs text-accent">
-              {totalChapterNum > chapters.length
-                ? `目录只有 ${chapters.length} 章, 但书架记录 ${totalChapterNum} 章 —— 可能抓取不完整或缓存陈旧, 可点下方「刷新目录」重取。`
-                : `书架记录 ${totalChapterNum} 章, 但目录实际 ${chapters.length} 章 —— 书架章数可能陈旧(总章数曾被残缺目录回写过), 阅读进度已按目录 ${effectiveTotal} 章计算, 可点下方「刷新目录」重取校准。`}
+          {/* 只有「目录比书架记录少」才提示: 目录抓残是源站/抓取的异常; 章数不一致本身
+              已由后端在校准, 不需要用户动手(不出现「请点刷新目录」这类操作要求) */}
+          {tocLooksShort ? (
+            <p className="mt-2 rounded-lg border border-accent/30 bg-surface px-2.5 py-1.5 text-xs text-muted-foreground">
+              目录只取到 {chapters.length} 章(书架记录 {totalChapterNum} 章), 可能源站目录不完整
+              —— 残缺目录不会被服务端缓存, 重新打开本书会自动重试。
             </p>
           ) : null}
         </DrawerHeader>
