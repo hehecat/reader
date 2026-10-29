@@ -9359,42 +9359,49 @@ async fn search_book_multi_sse(
         .filter(|s| book_source_group_matches(&group, s.book_source_group.as_deref()))
         .filter(|s| single_source_url.is_empty() || s.book_source_url == single_source_url)
         .collect();
+    // 历史表现快照：一次查询供三处复用（置信度排序 / 垫底源跳过 / 窗内派发顺序），
+    // 原来这里查了两次，且窗内排序还得再查一次 —— 不新增 DB 往返。
+    let stats_rows = state
+        .storage
+        .get_source_stats(&namespace)
+        .await
+        .unwrap_or_default();
     // 置信度排序快照 (稳定排序): 死/慢源往后放, 优质源靠前; 冷启动 0.5 不惩罚新源
-    if let Ok(stats) = state.storage.get_source_stats(&namespace).await {
+    {
         // 置信度降序 + 平均延时升序: 同置信度下快源先跑, 慢源沉到队尾
         let mut map: std::collections::HashMap<String, (f64, i64)> =
             std::collections::HashMap::new();
-        for st in stats {
+        for st in &stats_rows {
             map.insert(
                 st.source_url.clone(),
                 (st.confidence(), st.avg_latency_ms()),
             );
         }
-        sources.sort_by(|a, b| {
-            let (ca, la) = map.get(&a.book_source_url).copied().unwrap_or((0.5, 3000));
-            let (cb, lb) = map.get(&b.book_source_url).copied().unwrap_or((0.5, 3000));
-            cb.partial_cmp(&ca)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| la.cmp(&lb))
-        });
+        if !map.is_empty() {
+            sources.sort_by(|a, b| {
+                let (ca, la) = map.get(&a.book_source_url).copied().unwrap_or((0.5, 3000));
+                let (cb, lb) = map.get(&b.book_source_url).copied().unwrap_or((0.5, 3000));
+                cb.partial_cmp(&ca)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| la.cmp(&lb))
+            });
+        }
     }
     // 置信度跳过: 垫底源(连败/低成功率)6h 内不搜, 到期放行一次探针; all=1 强制全搜
     let include_dead = params.get("all").map(|v| v == "1").unwrap_or(false);
     if !include_dead && single_source_url.is_empty() {
         let now = chrono::Utc::now().timestamp_millis();
-        if let Ok(stats) = state.storage.get_source_stats(&namespace).await {
-            let dead: std::collections::HashSet<String> = stats
-                .iter()
-                .filter(|st| {
-                    st.confidence() <= 0.05
-                        && st.attempts >= 5
-                        && now - st.last_failure_at <= 6 * 3_600_000
-                })
-                .map(|st| st.source_url.clone())
-                .collect();
-            if !dead.is_empty() {
-                sources.retain(|s| !dead.contains(&s.book_source_url));
-            }
+        let dead: std::collections::HashSet<String> = stats_rows
+            .iter()
+            .filter(|st| {
+                st.confidence() <= 0.05
+                    && st.attempts >= 5
+                    && now - st.last_failure_at <= 6 * 3_600_000
+            })
+            .map(|st| st.source_url.clone())
+            .collect();
+        if !dead.is_empty() {
+            sources.retain(|s| !dead.contains(&s.book_source_url));
         }
     }
     if sources.is_empty() {
@@ -9407,25 +9414,71 @@ async fn search_book_multi_sse(
     let concurrent_count = effective_concurrent_count(concurrent_count);
     let timeout_secs = search_timeout_param(&params, body_json.as_ref());
 
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::convert::Infallible>>(
-        concurrent_count.clamp(4, 64),
+    // 冻结源顺序 + 取回跨窗派发账本：
+    // 一次全量走查由前端按 lastIndex 串成多条请求，只在单请求内去重没意义
+    // （一个窗本来就只派一次），必须把「哪些源已有结论」带过窗口。
+    let (sources, marks) = sched_begin(
+        &sched_session_key(&namespace, &group, &key, &single_source_url),
+        sources,
+        last_index < 0,
     );
+    let session_urls: Vec<String> = sources.iter().map(|s| s.book_source_url.clone()).collect();
     let total = sources.len() as i64;
     let start = (last_index + 1).max(0) as usize;
     let end = (start + search_size).min(sources.len());
+    // 每源历史表现（按冻结后的下标对齐）：决定窗内谁先被派
+    let stat_by_url: std::collections::HashMap<&str, SchedStat> = stats_rows
+        .iter()
+        .filter_map(|st| SchedStat::from_row(st).map(|s| (st.source_url.as_str(), s)))
+        .collect();
+    let stat_vec: Vec<Option<SchedStat>> = session_urls
+        .iter()
+        .map(|u| stat_by_url.get(u.as_str()).copied())
+        .collect();
+    // 本窗派发计划：先剔除本会话已有结论的源（dup→0），再按历史表现排序（慢/死源沉到窗尾）
+    let (window, next_from_planned) = plan_window(start, end, &marks, last_index);
+    let dispatch: Vec<usize> = order_window(start, end, &stat_vec)
+        .into_iter()
+        .filter(|i| window.contains(i))
+        .collect();
+    tracing::info!(
+        "SSE 窗口 lastIndex={} start={} end={} plan={} dispatch={} 已结论={} 窗口预算={}s 超时={}s",
+        last_index,
+        start,
+        end,
+        window.len(),
+        dispatch.len(),
+        marks.done.len(),
+        sse_window_budget_secs(),
+        timeout_secs
+    );
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::convert::Infallible>>(
+        concurrent_count.clamp(4, 64),
+    );
+    let sched_key = sched_session_key(&namespace, &group, &key, &single_source_url);
     let ns = namespace.clone();
     let storage = state.storage.clone();
     tokio::spawn(async move {
         // 并发受控（semaphore），结果到达即推送（FuturesUnordered 完成顺序）
         let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrent_count));
         let mut tasks = futures::stream::FuturesUnordered::new();
-        for (offset, source_item) in sources[start..end].iter().enumerate() {
-            let idx = start + offset;
+        let conn_t0 = std::time::Instant::now();
+        for (offset, &idx) in dispatch.iter().enumerate() {
+            let source_item = &sources[idx];
             let sem = sem.clone();
             let key = key.clone();
             let ns = ns.clone();
             let storage = storage.clone();
             let source = source_item.clone();
+            // 派发审计日志：真机走查靠它统计「同一台源在一次走查里被派了几次」(dup)
+            tracing::info!(
+                "SSE 派发源 idx={} offset={} url={} t_ms={}",
+                idx,
+                offset,
+                source.book_source_url,
+                conn_t0.elapsed().as_millis()
+            );
             // 错峰斜坡: 前 8 路免延迟, 之后每路 +150ms。实测去掉斜坡+并发 32 会让出口
             // 瞬时壅塞(首结果 6s→113s), 所以斜坡保留; 免掉前 8 路的排队等价于首屏命中
             // 早 0~1.05s(首条命中本就来自前几路源)。
@@ -9486,7 +9539,8 @@ async fn search_book_multi_sse(
                 }
                 let payload = serde_json::json!({ "lastIndex": idx as i64, "data": unique });
                 // 第三项回传给外层：本窗全部命中（搜索完统一写换源候选表，避免并发覆盖）
-                (idx as i64, format!("data: {payload}\n\n"), unique)
+                // 第四项 ok：成功/失败结论回写派发账本（失败源在游标回退时允许重派一次）
+                (idx as i64, format!("data: {payload}\n\n"), unique, ok)
             }));
         }
         // 窗口预算：到点提前收口(不再被窗内最慢源拖满整窗), 并把
@@ -9508,6 +9562,8 @@ async fn search_book_multi_sse(
         let window_deadline = tokio::time::Instant::from_std(window_t0) + hard_cap;
         // 是否被硬上限强行收口: 窗内源集体巨慢(死源区间)时整窗跳过, 否则每窗只前进 1 台源
         // (实测 17s/台, 尾部几十台死源要十几分钟)。跳过的源下次全新搜索(从 0 起)还会再试。
+        // 本窗派发结论：(下标, 是否成功) —— 收口后回写会话账本，跨窗不再重派
+        let mut results: Vec<(usize, bool)> = Vec::new();
         let mut hard_capped = false;
         loop {
             if !full_scan
@@ -9520,7 +9576,7 @@ async fn search_book_multi_sse(
             }
             // 双路等待：源返回 / 窗预算到期。到点立刻收尾发 event: end，
             // 不再被窗内最慢源拖住（全量模式仍一连接搜完，不受预算限制）。
-            let (i, text, found) = if full_scan {
+            let (i, text, found, ok) = if full_scan {
                 match tasks.next().await {
                     Some(v) => v,
                     None => break, // 全部源搜完
@@ -9541,14 +9597,35 @@ async fn search_book_multi_sse(
                 }
             };
             done.insert(i as usize);
+            results.push((i as usize, ok));
             discovered.extend(found);
             if tx.send(Ok(Bytes::from(text))).await.is_err() {
                 break; // 客户端断开
             }
         }
+        // 回写本窗结论：派过的源从此进会话账本，后面的窗不会再派它（dup 16 → 0 的来源）
+        sched_finish(&sched_key, &session_urls, &results, last_index);
         // 续接点(纯函数, 见 sse_next_from): 第一个未完成源下标 - 1, 不倒退也不吞整窗;
-        // 被硬上限强行收口时整窗前进(窗内源都太慢, 留着只会把游标卡在窗首)
-        let next_from = sse_next_from(start, end, &done, last_index, hard_capped);
+        // 被硬上限强行收口时整窗前进(窗内源都太慢, 留着只会把游标卡在窗首)。
+        // 「已完成」= 本请求之前就已有结论的源 ∪ 本窗刚收口的源；本窗因预算/客户端断开
+        // 没跑完的源不在此列 —— 它们没有结论，下一窗会重新派（不算重复）。
+        let mut concluded = marks.done.clone();
+        concluded.extend(done.iter().copied());
+        // 计划游标（plan_window 的返回值）是下限保护：即便本窗一台源都没派（全被账本
+        // 跳过），游标也必须前进到窗末，否则前端会拿着同一个 lastIndex 原地打转。
+        let next_from = sse_next_from(start, end, &concluded, last_index, hard_capped)
+            .min(next_from_planned)
+            .max(last_index);
+        tracing::info!(
+            "SSE 窗口收口 lastIndex={} 计划派={} 实际完成={} 硬顶={} next_from={} 计划游标={} 命中={}",
+            last_index,
+            dispatch.len(),
+            done.len(),
+            hard_capped,
+            next_from,
+            next_from_planned,
+            discovered.len()
+        );
         // 搜索命中 → 换源候选表（换源面板首屏直接读它；用户实测「搜索 5 个源、换源 1 个」）
         if !discovered.is_empty() {
             persist_search_candidates(&storage, &ns, &discovered).await;
@@ -9690,6 +9767,275 @@ fn sse_next_from(
         // 窗内全完成: 游标落到窗末, 下一窗从 end 起(最后一窗则 isEnd=true)
         None => (end as i64 - 1).max(last_index),
     }
+}
+
+// ---------- 多源搜索调度：窗口内排序 + 跨窗去重 ----------
+
+/// 单源历史表现快照（只取搜索维度：成不成、多快）。
+///
+/// 不复用 `SourceStat::confidence()`：它掺了目录/正文/丰富度权重，而「首波先派哪几台」
+/// 只关心搜索成功率与耗时；三档排序也比一个加权标量更容易解释、更容易写死单测。
+#[derive(Debug, Clone, Copy)]
+struct SchedStat {
+    success_rate: f64,
+    avg_latency_ms: i64,
+}
+
+impl SchedStat {
+    /// 统计行 → 轻量快照；从未尝试过（attempts=0）返回 None，即「无历史」
+    fn from_row(st: &crate::model::SourceStat) -> Option<Self> {
+        (st.attempts > 0).then(|| Self {
+            success_rate: st.success_rate(),
+            avg_latency_ms: st.avg_latency_ms(),
+        })
+    }
+}
+
+/// 排序档位（纯函数）：0 = 有历史且成功过（最前），1 = 无历史（**中间**：新源可能是好源，
+/// 一律沉底会让新库/新源永远进不了首屏），2 = 有过尝试但一次没成（最后，但不丢弃）
+fn sched_rank(s: Option<SchedStat>) -> u8 {
+    match s {
+        None => 1,
+        Some(x) if x.success_rate > 0.0 => 0,
+        Some(_) => 2,
+    }
+}
+
+fn sched_slot(stats: &[Option<SchedStat>], i: usize) -> Option<SchedStat> {
+    stats.get(i).copied().flatten()
+}
+
+/// 窗口内派发顺序（纯函数）：历史成功率降序 → 平均耗时升序 → 下标升序。
+///
+/// 窗口**成员不变**（只改窗内顺序），所以 `lastIndex` / `isEnd` 语义完全不受影响：
+/// 每窗第一次派出的就是历史上最快最稳的那几台，死源沉到窗尾，慢源不再占首屏位置。
+/// `stats` 按下标（= 冻结后的源顺序）索引，缺失/无历史一律走「中间档」。
+fn order_window(start: usize, end: usize, stats: &[Option<SchedStat>]) -> Vec<usize> {
+    let mut idx: Vec<usize> = (start..end.max(start)).collect();
+    idx.sort_by(|&a, &b| {
+        let (sa, sb) = (sched_slot(stats, a), sched_slot(stats, b));
+        sched_rank(sa)
+            .cmp(&sched_rank(sb))
+            // 档内：成功率降序（无历史不参与比较）
+            .then_with(|| match (sa, sb) {
+                (Some(x), Some(y)) => y
+                    .success_rate
+                    .partial_cmp(&x.success_rate)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                _ => std::cmp::Ordering::Equal,
+            })
+            // 再按平均耗时升序（同上，无历史不参与）
+            .then_with(|| match (sa, sb) {
+                (Some(x), Some(y)) => x.avg_latency_ms.cmp(&y.avg_latency_ms),
+                _ => std::cmp::Ordering::Equal,
+            })
+            .then_with(|| a.cmp(&b))
+    });
+    idx
+}
+
+/// 一次搜索会话的派发账本：哪些源已有结论、哪些是失败结论、失败源是否已经重派过。
+/// 下标对齐**冻结后的源顺序**（见 `sched_begin`）。
+#[derive(Debug, Default, Clone)]
+struct SchedMarks {
+    /// 已有结论（成功，或失败且已重派过一次）—— 不再派
+    done: std::collections::HashSet<usize>,
+    /// 结论是失败（超时/网络失败）—— 游标回退时允许重派一次
+    failed: std::collections::HashSet<usize>,
+    /// 失败源里已经重派过的那批（重派后仍失败 = 永久结论）
+    retried: std::collections::HashSet<usize>,
+    /// 失败发生时的 lastIndex（= 那一窗的游标）：只有前端真把游标退回到它之前才重派
+    failed_at: std::collections::HashMap<usize, i64>,
+}
+
+/// 本窗派哪些源 + 下一游标（纯函数）。
+///
+/// 规则：
+/// 1. `[start, end)` 内已在 `done_sources.done` 里的源**不重派** —— 这是把「同一台源在一次
+///    全量走查里被搜 16 次」压到 0 的核心；
+/// 2. 例外：失败结论 + 还没重派过 + 下标 **< last_index** 的源可以再派一次。前端带旧
+///    `lastIndex` 重连（游标回退）时，别把一次超时当成永久结论；重派过一次即落进 `retried`；
+/// 3. 下一游标 = 窗末（`end-1`），且**不倒退**（低于 `last_index` 时取 `last_index`）。
+///    本窗计划消费的源要么完成、要么放弃，都会落成结论，所以游标一次走满整窗；
+///    空窗口（窗内源全在 done 里）同样前进到窗末 —— 这就是「空窗口收敛」，
+///    否则前端会拿着同一个 lastIndex 原地打转。
+fn plan_window(
+    start: usize,
+    end: usize,
+    done_sources: &SchedMarks,
+    last_index: i64,
+) -> (Vec<usize>, i64) {
+    let end = end.max(start);
+    let win: Vec<usize> = (start..end)
+        .filter(|&i| {
+            if !done_sources.done.contains(&i) {
+                return true; // 没跑过 / 上次没有结论 → 派
+            }
+            // 已有结论的源唯一的重派机会：失败结论 + 还没重派过 + 前端真把游标退回到了
+            // 它失败的那一窗之前（重连场景）。前进中的走查游标单调不减，永远不满足这条，
+            // 所以「同一台源在一次走查里被搜 16 次」会被压到 0，而一次超时不会被当成永久结论。
+            done_sources.failed.contains(&i)
+                && !done_sources.retried.contains(&i)
+                && (i as i64) > last_index
+                && done_sources
+                    .failed_at
+                    .get(&i)
+                    .is_some_and(|&c| last_index < c)
+        })
+        .collect();
+    let next = (end as i64 - 1).max(last_index);
+    (win, next)
+}
+
+/// 一个搜索会话的冻结状态。
+///
+/// 为什么要跨请求存：前端按 `event: end` 的 `lastIndex` 续接，每次续接都是一条**新请求**，
+/// 只在单请求内去重没有意义（一个窗本来就只派一次），必须把「哪些源已经有结论」带过窗口。
+/// 存 **url** 而不是下标：源表每窗都会按最新统计重排、失效源也会被过滤掉，下标会漂移，
+/// 用 url 记账才能保证同一台源不被重复派发。
+#[derive(Debug, Clone)]
+struct SchedSession {
+    urls: Vec<String>,
+    done: std::collections::HashSet<String>,
+    failed: std::collections::HashSet<String>,
+    retried: std::collections::HashSet<String>,
+    /// 失败发生时的 lastIndex（游标回退判定用）
+    failed_at: std::collections::HashMap<String, i64>,
+    touched_ms: i64,
+}
+
+/// 会话表：key = 命名空间|分组|关键词|单源url
+static SSE_SESSIONS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, SchedSession>>,
+> = std::sync::OnceLock::new();
+
+/// 会话闲置多久后回收（真机一次全量走查约 4 分钟，15 分钟足够宽松）
+const SSE_SESSION_IDLE_MS: i64 = 15 * 60 * 1000;
+/// 会话表上限：超出时先淘汰最久未用的一个（不新增 GC 任务）
+const SSE_SESSION_MAX: usize = 64;
+
+fn sse_sessions() -> &'static std::sync::Mutex<std::collections::HashMap<String, SchedSession>> {
+    SSE_SESSIONS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn sched_session_key(ns: &str, group: &str, key: &str, single_url: &str) -> String {
+    format!("{ns}\u{1}{group}\u{1}{key}\u{1}{single_url}")
+}
+
+/// 冻结源顺序 + 取回派发账本。
+///
+/// `fresh = true`（新搜索，`last_index < 0`）时丢弃旧会话重建 —— 否则同一关键词重搜会被
+/// 上一轮「已搜完」的账本直接跳过，等于搜不到东西。
+fn sched_begin(
+    session_key: &str,
+    sources: Vec<crate::model::BookSource>,
+    fresh: bool,
+) -> (Vec<crate::model::BookSource>, SchedMarks) {
+    use std::collections::HashMap as Map;
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut guard = match sse_sessions().lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.retain(|_, s| now - s.touched_ms <= SSE_SESSION_IDLE_MS);
+    if fresh || !guard.contains_key(session_key) {
+        if guard.len() >= SSE_SESSION_MAX {
+            if let Some(oldest) = guard
+                .iter()
+                .min_by_key(|(_, s)| s.touched_ms)
+                .map(|(k, _)| k.clone())
+            {
+                guard.remove(&oldest);
+            }
+        }
+        guard.insert(
+            session_key.to_string(),
+            SchedSession {
+                urls: sources.iter().map(|s| s.book_source_url.clone()).collect(),
+                done: Default::default(),
+                failed: Default::default(),
+                retried: Default::default(),
+                failed_at: Default::default(),
+                touched_ms: now,
+            },
+        );
+    }
+    let sess = guard.get_mut(session_key).expect("会话刚插入");
+    // 按冻结顺序重排：下标必须跨请求稳定，否则 lastIndex 指向的源每窗都在漂移
+    // （源表每窗都按最新统计重排 → 同一台源会被多个下标重复派发，实测 dup≈16）
+    let mut by_url: Map<&str, usize> = Map::new();
+    for (i, s) in sources.iter().enumerate() {
+        by_url.entry(s.book_source_url.as_str()).or_insert(i);
+    }
+    let mut used = vec![false; sources.len()];
+    let mut ordered: Vec<crate::model::BookSource> = Vec::with_capacity(sources.len());
+    for url in &sess.urls {
+        if let Some(&i) = by_url.get(url.as_str()) {
+            if !used[i] {
+                used[i] = true;
+                ordered.push(sources[i].clone());
+            }
+        }
+    }
+    // 上一轮之后新出现/恢复的源追加到队尾（保证已有下标稳定，不插队）
+    for (i, s) in sources.iter().enumerate() {
+        if !used[i] {
+            ordered.push(s.clone());
+        }
+    }
+    sess.urls = ordered.iter().map(|s| s.book_source_url.clone()).collect();
+    sess.touched_ms = now;
+    // 账本按 url → 下标展开
+    let mut marks = SchedMarks::default();
+    for (i, url) in sess.urls.iter().enumerate() {
+        if sess.done.contains(url) {
+            marks.done.insert(i);
+        }
+        if sess.failed.contains(url) {
+            marks.failed.insert(i);
+        }
+        if sess.retried.contains(url) {
+            marks.retried.insert(i);
+        }
+        if let Some(&c) = sess.failed_at.get(url) {
+            marks.failed_at.insert(i, c);
+        }
+    }
+    (ordered, marks)
+}
+
+/// 回写本窗结论：`results` = (下标, 是否成功)。
+///
+/// 失败源**第一次**失败只记 `failed`（游标回退重连时允许重派一次）；重派后仍失败则记
+/// `retried`，从此是永久结论 —— 失败不会被当成「没搜过」（不会无限重试），也不会被当成
+/// 成功而永久跳过。
+fn sched_finish(session_key: &str, urls: &[String], results: &[(usize, bool)], last_index: i64) {
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut guard = match sse_sessions().lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let Some(sess) = guard.get_mut(session_key) else {
+        return;
+    };
+    for &(i, ok) in results {
+        let Some(url) = urls.get(i) else { continue };
+        if ok {
+            sess.done.insert(url.clone());
+            sess.failed.remove(url);
+            sess.retried.remove(url);
+            sess.failed_at.remove(url);
+        } else {
+            if sess.failed.contains(url) {
+                sess.retried.insert(url.clone()); // 重派后还是失败 → 永久结论
+            }
+            sess.failed.insert(url.clone());
+            sess.done.insert(url.clone());
+            // 记下失败时的游标：只有前端把 lastIndex 退回到它之前，才允许重派一次
+            sess.failed_at.insert(url.clone(), last_index);
+        }
+    }
+    sess.touched_ms = now;
 }
 
 fn search_timeout_param(
@@ -13648,6 +13994,125 @@ mod tests {
         // 硬上限收口(窗内源集体超时) → 整窗跳过, 不管 done 里有什么
         assert_eq!(sse_next_from(60, 70, &HashSet::new(), 59, true), 69);
         assert_eq!(sse_next_from(60, 70, &prefix, 59, true), 69);
+    }
+
+    /// 窗内派发顺序：历史成功率降序 → 平均耗时升序 → 下标升序；无历史走**中间**档
+    #[test]
+    fn order_window_cases() {
+        let st = |rate: f64, lat: i64| {
+            Some(SchedStat {
+                success_rate: rate,
+                avg_latency_ms: lat,
+            })
+        };
+        // 全无历史 → 保持源表原序（新库不该被随机打乱，也不该被当成坏源沉底）
+        let none = vec![None; 6];
+        assert_eq!(order_window(0, 6, &none), vec![0, 1, 2, 3, 4, 5]);
+        // 好坏混合：成功源在前（快的更前）→ 无历史居中 → 从未成功过的殿后
+        let stats = vec![
+            st(0.0, 800),  // 0: 有尝试但一次没成 → 最后一档
+            None,          // 1: 无历史 → 中间档
+            st(0.9, 5000), // 2: 成功但慢
+            st(0.9, 300),  // 3: 成功且快 → 第一个
+            st(0.5, 300),  // 4: 成功率低
+            st(1.0, 2000), // 5: 成功率最高
+        ];
+        assert_eq!(order_window(0, 6, &stats), vec![5, 3, 2, 4, 1, 0]);
+        // 失败源排后但**不丢弃**：窗口成员一个不少
+        assert_eq!(order_window(0, 6, &stats).len(), 6);
+        // 子窗口只排 [2,5)，不越界、不掺入窗外源
+        assert_eq!(order_window(2, 5, &stats), vec![3, 2, 4]);
+        // 空窗口
+        assert!(order_window(4, 4, &stats).is_empty());
+        // stats 比窗口短（缺记录）→ 缺的那几台按无历史居中原序
+        assert_eq!(order_window(0, 3, &[st(0.0, 1)]), vec![1, 2, 0]);
+    }
+
+    /// 派发计划：跳过已有结论的源；失败源只在游标真回退时重派一次；游标不倒退、空窗收敛
+    #[test]
+    fn plan_window_cases() {
+        // (a) 跳过已完成：一窗软收口后游标回到 1，下一窗 [2,8)：没结论的照派，已完成的跳过。
+        //     其中 3/4 上是失败结论但失败发生在 last_index=-1 那一窗 —— 游标是前进的
+        //     （1 >= -1），不算回退，所以不重派。这正是 dup 16 → 0 的关键。
+        let mut marks = SchedMarks::default();
+        marks.done.extend([0usize, 1, 3, 4]);
+        marks.failed.extend([3usize, 4]);
+        marks.failed_at.insert(3, -1);
+        marks.failed_at.insert(4, -1);
+        let (win, next) = plan_window(2, 8, &marks, 1);
+        assert_eq!(win, vec![2, 5, 6, 7]);
+        assert_eq!(next, 7, "下一游标 = 窗末，不倒退");
+        // (b) 重连回退：失败源 3/4 是在 last_index=5 那一窗失败的，前端带 lastIndex=2
+        //     重连（真退回到失败那一窗之前）→ 允许各重派一次，失败结论不是永久结论
+        let mut marks = SchedMarks::default();
+        marks.done.extend([0usize, 1, 2, 3, 4]);
+        marks.failed.extend([3usize, 4]);
+        marks.failed_at.insert(3, 5);
+        marks.failed_at.insert(4, 5);
+        assert_eq!(plan_window(3, 8, &marks, 2).0, vec![3, 4, 5, 6, 7]);
+        // (c) 只重派一次：重派后仍失败 → retried，从此是永久结论
+        marks.retried.extend([3usize, 4]);
+        assert_eq!(plan_window(3, 8, &marks, 2).0, vec![5, 6, 7]);
+        // (d) 前进（lastIndex 已到失败那一窗）不重派；退回到它之前才重派
+        let mut m3 = SchedMarks::default();
+        m3.done.extend([0usize, 1, 2, 3]);
+        m3.failed.insert(3);
+        m3.failed_at.insert(3, 1);
+        assert_eq!(plan_window(2, 8, &m3, 1).0, vec![4, 5, 6, 7]);
+        assert_eq!(plan_window(0, 8, &m3, 0).0, vec![3, 4, 5, 6, 7]);
+        // (e) 不倒退：算出来的游标低于入参 last_index 时以 last_index 为准
+        assert_eq!(plan_window(0, 3, &SchedMarks::default(), 100).1, 100);
+        // (f) 空窗口收敛：整窗都已在账本里也要前进到窗末，否则前端拿着同一游标原地打转
+        let mut all = SchedMarks::default();
+        all.done.extend(0..8);
+        let (win, next) = plan_window(0, 8, &all, 2);
+        assert!(win.is_empty());
+        assert_eq!(next, 7);
+    }
+
+    /// 会话账本：同一次走查里每台源最多派一次（真机 dup 16 → 0 的纯逻辑版本）
+    #[test]
+    fn sched_session_dedup_cases() {
+        let mk = |url: &str| crate::model::BookSource {
+            book_source_url: url.into(),
+            book_source_name: url.into(),
+            ..Default::default()
+        };
+        let urls: Vec<String> = ["u1", "u2", "u3", "u4"]
+            .iter()
+            .map(|u| u.to_string())
+            .collect();
+        let srcs: Vec<_> = urls.iter().map(|u| mk(u)).collect();
+        // 唯一 key：避免与其它用例（以及并行测试）串会话
+        let key = format!("dedup-test-{}", std::process::id());
+        // 第一窗：4 台全派，u2 失败
+        let (ordered, marks) = sched_begin(&key, srcs.clone(), true);
+        assert_eq!(ordered.len(), 4);
+        assert!(marks.done.is_empty());
+        assert_eq!(plan_window(0, 4, &marks, -1).0, vec![0, 1, 2, 3]);
+        sched_finish(
+            &key,
+            &urls,
+            &[(0, true), (1, false), (2, true), (3, true)],
+            -1,
+        );
+        // 第二窗（续接）：全都已有结论（含失败的那台，游标没回退）→ 一台都不再派
+        let (_, marks) = sched_begin(&key, srcs.clone(), false);
+        assert_eq!(marks.done.len(), 4);
+        assert!(marks.failed.contains(&1));
+        assert!(
+            plan_window(0, 4, &marks, 0).0.is_empty(),
+            "已搜过的源在一次走查里不该被重派"
+        );
+        // 源表重排（真机每窗都按最新统计重排，下标会漂移）也不能重派：
+        // 账本按 url 记，冻结顺序保证下标跨请求稳定
+        let reordered = vec![mk("u4"), mk("u2"), mk("u1"), mk("u3")];
+        let (ordered2, marks2) = sched_begin(&key, reordered, false);
+        assert_eq!(
+            ordered2[0].book_source_url, "u1",
+            "冻结顺序：已有序不被重排"
+        );
+        assert!(plan_window(0, 4, &marks2, 0).0.is_empty());
     }
 
     /// 硬上限必须长于单源超时，否则每窗只前进 1 台源(实测 15.1s/源)
