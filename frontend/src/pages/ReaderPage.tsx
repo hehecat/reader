@@ -2,6 +2,7 @@ import { ArrowLeft, CircleAlert, LibraryBig, Link2Off } from "lucide-react";
 import * as React from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
+import { GraphGenerateDialog } from "@/components/graph-demo/GraphGenerateDialog";
 import { AiChatPanel } from "@/components/reader/AiChatPanel";
 import { AnnotationsDrawer } from "@/components/reader/AnnotationsDrawer";
 import {
@@ -291,6 +292,8 @@ export default function ReaderPage() {
   const contentRef = React.useRef<HTMLDivElement>(null);
   // 批注抽屉开关 (与书签抽屉同款页面级 state; 顶栏 Highlighter 打开)
   const [annotationsOpen, setAnnotationsOpen] = React.useState(false);
+  // 关系图谱: 底栏入口打开「预估 → 生成 → 查看」弹窗 (数据与进度都在弹窗内管理)
+  const [graphOpen, setGraphOpen] = React.useState(false);
 
   // 划选批注: 只存本机 (localStorage), 按章节过滤出本章批注交给正文渲染 <mark>
   const bookAnnotations = useAnnotationsStore((state) =>
@@ -505,6 +508,7 @@ export default function ReaderPage() {
   const handleOpenSettings = React.useCallback(() => setSettingsOpen(true), [setSettingsOpen]);
   const handleOpenBookmarks = React.useCallback(() => setBookmarksOpen(true), []);
   const handleOpenAnnotations = React.useCallback(() => setAnnotationsOpen(true), []);
+  const handleOpenGraph = React.useCallback(() => setGraphOpen(true), []);
 
   // 章末块的数据与回调: memo 好整体交给 ContentView (Virtuoso 直接拿它当 context)
   const endBlock = React.useMemo<ChapterEndBlockProps>(
@@ -773,6 +777,7 @@ export default function ReaderPage() {
           index={progress.index}
           onGoToChapter={goToChapter}
           onOpenBookmarks={handleOpenBookmarks}
+          onOpenGraph={handleOpenGraph}
           chromeHidden={chromeHidden}
         />
         </div>
@@ -836,6 +841,12 @@ export default function ReaderPage() {
         currentIndex={progress.index}
         onSelect={handleSelectAnnotation}
         onDelete={handleDeleteAnnotation}
+      />
+      <GraphGenerateDialog
+        open={graphOpen}
+        onOpenChange={setGraphOpen}
+        bookUrl={bookUrl}
+        bookName={book.name}
       />
       <AddBookmarkDialog
         draft={draft}

@@ -14,6 +14,7 @@ import {
   Maximize2,
   Minimize2,
   Moon,
+  Network,
   Settings2,
   Sun,
 } from "lucide-react";
@@ -258,12 +259,14 @@ export interface ReaderChapterBarProps {
   onGoToChapter: (index: number) => void;
   /** 打开书签抽屉 */
   onOpenBookmarks: () => void;
+  /** 打开「关系图谱」生成弹窗 (整本批量生成入口, 见 GraphGenerateDialog) */
+  onOpenGraph: () => void;
   /** 点击正文隐藏工具条时: 底栏向下收起 */
   chromeHidden?: boolean;
 }
 
 /**
- * 阅读器底栏 (常显): 上一章 / 章节滑块 / 下一章 / 书签列表 / 日夜切换.
+ * 阅读器底栏 (常显): 上一章 / 章节滑块 / 下一章 / 书签列表 / 关系图谱 / 日夜切换.
  * 拖动滑块时在栏上方浮出目标章节名, 松手才真正切章.
  */
 export function ReaderChapterBar({
@@ -271,6 +274,7 @@ export function ReaderChapterBar({
   index,
   onGoToChapter,
   onOpenBookmarks,
+  onOpenGraph,
   chromeHidden = false,
 }: ReaderChapterBarProps) {
   const theme = useSettingsStore((state) => state.theme);
@@ -363,6 +367,15 @@ export function ReaderChapterBar({
           onClick={onOpenBookmarks}
         >
           <Bookmark />
+        </IconButton>
+        {/* 关系图谱入口: 顶栏图标已排满(390px 就到边了), 底栏还有横向余量, 放这里不挤书名 */}
+        <IconButton
+          variant="ghost"
+          size="sm"
+          tooltip="关系图谱"
+          onClick={onOpenGraph}
+        >
+          <Network />
         </IconButton>
         <IconButton
           variant="ghost"

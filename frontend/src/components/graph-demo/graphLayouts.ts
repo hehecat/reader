@@ -59,10 +59,15 @@ export function fitToContent(cy: cytoscape.Core, eles: cytoscape.CollectionRetur
     return cy.zoom();
   }
 
-  // 势力图的框标题是 compound 父节点的 label, 不在人物包围盒里, 给顶部留一点余量
-  const headroom = eles.nodes('[type="faction"]').length > 0 ? 44 : 0;
-  const contentW = box.w;
-  const contentH = box.h + headroom;
+  // 势力图的框(compound 父节点)比人物包围盒更宽更高 —— 框宽来自货架打包的块宽, 成员只占其中
+  // 一部分, 只按人物包围盒 fit 会把框边和框标题推到屏幕外(手机 390 下宋廷/金国的框左右都被切).
+  // compound 包围盒要下一帧才更新, 这里按「成员 bbox + 框内边距」自己算, 结果稳定.
+  const boxes = factionBoxes(eles);
+  const headroom = boxes.length > 0 ? 8 : 0;
+  const contentW = boxes.length > 0 ? Math.max(box.x2, ...boxes.map((b) => b.x2)) - Math.min(box.x1, ...boxes.map((b) => b.x1)) : box.w;
+  const contentH = boxes.length > 0 ? Math.max(box.y2, ...boxes.map((b) => b.y2)) - Math.min(box.y1, ...boxes.map((b) => b.y1)) : box.h;
+  const contentX1 = boxes.length > 0 ? Math.min(box.x1, ...boxes.map((b) => b.x1)) : box.x1;
+  const contentY1 = boxes.length > 0 ? Math.min(box.y1, ...boxes.map((b) => b.y1)) : box.y1;
   const pad = fitPadding(cy);
   const canvasW = cy.width();
   const canvasH = cy.height();
@@ -94,10 +99,36 @@ export function fitToContent(cy: cytoscape.Core, eles: cytoscape.CollectionRetur
   const zoom = Math.max(Math.min(zoomOf(avail), cy.maxZoom()), 0.02);
   cy.zoom(zoom);
   cy.pan({
-    x: avail.x1 + (avail.x2 - avail.x1 - contentW * zoom) / 2 - box.x1 * zoom,
-    y: avail.y1 + (avail.y2 - avail.y1 - contentH * zoom) / 2 - (box.y1 - headroom) * zoom,
+    x: avail.x1 + (avail.x2 - avail.x1 - contentW * zoom) / 2 - contentX1 * zoom,
+    y: avail.y1 + (avail.y2 - avail.y1 - contentH * zoom) / 2 - (contentY1 - headroom) * zoom,
   });
   return zoom;
+}
+
+/**
+ * 势力框的实体范围. 框宽由成员包围盒(含成员名字标签, 标签会往外溢出)撑开, 所以既要取 compound
+ * 自己的 boundingBox(cytoscape 已经算上 padding 和成员标签), 也要取「成员 bbox + 内边距」兜底 ——
+ * 标签是布局之后才挂上去的, 只信其中一个都会把框边估小, fit 完框就被屏幕边缘切掉.
+ */
+function factionBoxes(
+  eles: cytoscape.CollectionReturnValue,
+): { x1: number; y1: number; x2: number; y2: number }[] {
+  const inset = FACTION_PAD + 2;
+  const boxes: { x1: number; y1: number; x2: number; y2: number }[] = [];
+  eles.nodes('[type="faction"]').forEach((parent) => {
+    const kids = parent.children().filter((kid) => !kid.hasClass("gd-hidden") && !kid.hasClass("gd-mode-hidden"));
+    if (kids.empty()) return;
+    const fromKids = kids.boundingBox({ includeLabels: true, includeOverlays: false });
+    // includeLabels: 框标题也算进内容范围, 否则 390px 下标题会被视口左边缘切掉
+    const real = parent.boundingBox({ includeLabels: true, includeOverlays: false });
+    boxes.push({
+      x1: Math.min(fromKids.x1 - inset, real.x1),
+      y1: Math.min(fromKids.y1 - inset, real.y1),
+      x2: Math.max(fromKids.x2 + inset, real.x2),
+      y2: Math.max(fromKids.y2 + inset, real.y2),
+    });
+  });
+  return boxes;
 }
 
 /** 真正的「人物」节点: 排除 compound 父节点和势力图里的行分隔线 */
@@ -358,6 +389,12 @@ const FACTION_MEMBER_GAP_Y = 84;
 const FACTION_MAX_COLS_CANDIDATES = [6, 7, 8, 9, 10, 11, 12, 14, 16];
 /** 势力框之间的间距 */
 const FACTION_BLOCK_GAP = 56;
+/**
+ * 块宽额外余量: compound 框的实际宽度 = 成员 bbox + padding, 而成员名字是画在圆点边上、
+ * 会伸出去一截(缩放补偿后模型字号能有 30px, 4 字名字比 28px 的点宽出 ~80), 不留这点余量
+ * 框就会比打包预留的块宽更宽, 相邻框叠在一起.
+ */
+const FACTION_LABEL_MARGIN = 48;
 /** compound 框的内边距(与样式表里的 padding 对齐) */
 const FACTION_PAD = 26;
 /** 框内顶部留给标题(势力名 + 人数)的高度 */
@@ -407,7 +444,7 @@ function makeBlock(
   const cols = Math.min(maxCols, Math.max(1, Math.ceil(Math.sqrt(count * 1.6))));
   const rows = Math.ceil(count / cols);
   const size = maxNodeSize(members);
-  const width = (cols - 1) * FACTION_MEMBER_GAP_X + size + FACTION_PAD * 2;
+  const width = (cols - 1) * FACTION_MEMBER_GAP_X + size + FACTION_PAD * 2 + FACTION_LABEL_MARGIN;
   const height = rowOffsetY(rows - 1) + size + FACTION_PAD * 2 + FACTION_TITLE;
   return { parent, members, cols, rows, width, height, x: 0, y: 0 };
 }
@@ -495,6 +532,9 @@ export function layoutFactionMap(cy: cytoscape.Core, eles: cytoscape.CollectionR
     for (const block of blocks) {
       const originX = block.x + FACTION_PAD;
       const originY = block.y + FACTION_PAD + FACTION_TITLE;
+      // 标题只许在框内一行: 最大宽度按块宽算(留出左右各 8px 的 text-margin-x), 超了就省略号.
+      // 不这么做的话, 窄屏上相邻框的标题会连成「伪齐 · 4 人岳家军 · 1 人」
+      block.parent?.data("labelMaxWidth", Math.max(48, block.width - FACTION_PAD * 2 - 16));
       block.members.forEach((member, index) => {
         const col = index % block.cols;
         const row = Math.floor(index / block.cols);
@@ -546,9 +586,39 @@ function addFactionChunkRules(cy: cytoscape.Core, blocks: FactionBlock[]): void 
 // 全景
 // ---------------------------------------------------------------------------
 
+/** djb2: 同一个 id 永远得到同一个数 —— 全景初始坐标靠它算, 不用 Math.random */
+function hashId(text: string): number {
+  let hash = 5381;
+  for (let i = 0; i < text.length; i += 1) hash = ((hash << 5) + hash + text.charCodeAt(i)) >>> 0;
+  return hash;
+}
+
+/**
+ * 全景的初始坐标: 黄金角螺旋(点再多也不会挤在同一点) + 按 id 哈希的微扰.
+ *
+ * fcose 在 randomize:false 时完全按初始位置迭代, 所以初始位置必须是确定的:
+ * 同一份数据两次渲染 → 同样的图; 只有换视图/点重排才重新跑.
+ * 节点按 id 排序后再摆, 与数据里的顺序无关(后端换个顺序也不会让全景变样).
+ */
+function seedPanoramaPositions(nodes: cytoscape.NodeSingular[]): void {
+  const ordered = [...nodes].sort((a, b) => a.id().localeCompare(b.id()));
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  const step = 48;
+  ordered.forEach((node, index) => {
+    // 0~1 的确定性抖动: 打散螺旋的规整感, 又不会让两次渲染不同
+    const jitter = (hashId(node.id()) % 997) / 997;
+    const angle = index * goldenAngle + jitter * 0.9;
+    const radius = step * Math.sqrt(index + 1);
+    node.position({ x: Math.cos(angle) * radius, y: Math.sin(angle) * radius });
+  });
+}
+
 /** 全景: fcose 力导向, 让敌对/同盟关系的极性一眼看出来 */
 export function layoutPanorama(cy: cytoscape.Core, eles: cytoscape.CollectionReturnValue): number {
   if (eles.empty()) return cy.zoom();
+  // 确定性: 固定的初始坐标 + randomize:false + 固定 randomSeed
+  // (以前 randomize:true, 每次刷新节点位置全变、缩放 74%~79% 浮动)
+  seedPanoramaPositions(eles.nodes().toArray() as cytoscape.NodeSingular[]);
   eles.layout({
     name: "fcose",
     // 必须是 false: fcose 带 animate 时 run() 立即返回, 此时节点还在原位,
@@ -557,7 +627,9 @@ export function layoutPanorama(cy: cytoscape.Core, eles: cytoscape.CollectionRet
     // 自己 fit: 统一留白口径(要含标签)
     fit: false,
     quality: "default",
-    randomize: true,
+    // 不随机初始化: 从上面算出的稳定坐标开始迭代, 同一份数据每次结果一致
+    randomize: false,
+    randomSeed: 1,
     // 0 度/小分量的节点很多, 排斥力给太大会把整张图推到 2600×2000 以外(fit 后只剩 0.28,
     // 字全部读不出来); 1.2e5 是实测 135 人/269 关系下「节点不重叠且 fit 后仍有 0.5」的档位.
     nodeRepulsion: 120000,

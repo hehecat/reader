@@ -28,6 +28,8 @@ export const LAYOUT_OPTIONS: LayoutOption[] = [
 
 /** 势力父节点 id 前缀, 避免和人物 id 撞车 */
 const FACTION_NODE_PREFIX = "faction::";
+/** 势力框标题的兜底最大宽度(px); 布局阶段按块宽覆盖 */
+export const FACTION_LABEL_FALLBACK_WIDTH = 150;
 /** 亲缘关系: 家族树视图只渲染这几类边上的人(见 graphLayouts.layoutFamilyTree) */
 const KIN_RELATIONS = new Set(["parent", "spouse", "sibling"]);
 /** 没有势力归属的人物在势力图里攒成的一块(不是数据里的势力, 不进图例) */
@@ -113,6 +115,11 @@ export function buildGraphElements(
           label: `未归属 · ${orphans.length} 人`,
           type: "faction",
           color: NEUTRAL_COLOR,
+          // 标题最大宽度(px): 布局阶段会按块宽覆盖, 这里只是兜底(见 graphLayouts.layoutFactionMap)
+          labelMaxWidth: FACTION_LABEL_FALLBACK_WIDTH,
+          // 标题字号: 首帧兜底值, 之后由 graphTheme.syncFactionTitleFont 按框宽/缩放改写
+          labelFont: 26,
+          titleShift: 8,
         },
       });
     }
@@ -127,6 +134,11 @@ export function buildGraphElements(
           label: `${faction.name} · ${count} 人`,
           type: "faction",
           color,
+          // 同上: 兜底宽度, 真正按块宽算的值在布局阶段写入
+          labelMaxWidth: FACTION_LABEL_FALLBACK_WIDTH,
+          // 标题字号: 首帧兜底值, 之后由 graphTheme.syncFactionTitleFont 按框宽/缩放改写
+          labelFont: 26,
+          titleShift: 8,
         },
       });
     }

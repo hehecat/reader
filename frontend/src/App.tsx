@@ -71,7 +71,8 @@ export default function App() {
             </RequireAuth>
           }
         />
-        {/* 关系图谱 demo: 壳外整页, 只读一个静态 JSON, 不需要登录 */}
+        {/* 关系图谱: 壳外整页. 不带参数 = 静态 demo(演示数据), 带 ?url= 读该书的后端成品 */}
+        <Route path="/graph" element={<GraphDemoPage />} />
         <Route path="/graph-demo" element={<GraphDemoPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

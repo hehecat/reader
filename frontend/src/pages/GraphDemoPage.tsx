@@ -14,12 +14,15 @@
  *
  * 时间滑块是核心卖点: 拖到第 N 章, 只看那一刻已经出现且尚未结束的人与事.
  */
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import cytoscape from "cytoscape";
 import fcose from "cytoscape-fcose";
 import klay from "cytoscape-klay";
-import { CircleAlert, Download, Focus, Search } from "lucide-react";
+import { CircleAlert, Download, Focus, Network, RefreshCw, Search, Sparkles } from "lucide-react";
 import * as React from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
+import { GraphGenerateDialog } from "@/components/graph-demo/GraphGenerateDialog";
 import { GraphInfoPanel, type GraphSelection } from "@/components/graph-demo/GraphInfoPanel";
 import { GraphLegend } from "@/components/graph-demo/GraphLegend";
 import {
@@ -30,12 +33,19 @@ import {
   buildGraphElements,
   type LayoutMode,
 } from "@/components/graph-demo/graphElements";
+import { DETOUR_MIN_ZOOM, routeEdges } from "@/components/graph-demo/graphEdgeRoutes";
 import { labelFontScale, syncEdgeLabels, syncLabels } from "@/components/graph-demo/graphLabels";
 import { fitToContent, runLayout, visibleElements, type Occluder } from "@/components/graph-demo/graphLayouts";
-import { buildGraphStylesheet, detectGraphTheme, makeFactionColorMap } from "@/components/graph-demo/graphTheme";
+import {
+  buildGraphStylesheet,
+  detectGraphTheme,
+  makeFactionColorMap,
+  syncFactionTitleFont,
+} from "@/components/graph-demo/graphTheme";
 import { computeVisibility } from "@/components/graph-demo/graphVisibility";
-import { Button, Input, Slider, toast } from "@/components/ui";
+import { Button, EmptyState, Input, Slider, Spinner, toast } from "@/components/ui";
 import { cn } from "@/components/ui/cn";
+import { getBookGraph, type BookGraphData } from "@/services/graph";
 import { parseGraphDemoData, type GraphDemoData } from "@/types/graphDemo";
 
 /** 全景的「最少关系数」档位(默认 4: 冻结数据里 51/138 人, 正好能看清结构) */
@@ -365,7 +375,51 @@ function makeFallbackData(): GraphDemoData {
 const FALLBACK_DATA = makeFallbackData();
 
 /** 家族树剩这么点人时, 名字全开(去重叠只处理真正压住的那几个) */
+/** 来源徽标文案: 「批量生成 · 998 章 · 2026-10-28 14:03」 (source 目前只有 batch) */
+function sourceBadge(meta: BookGraphData["meta"]): string {
+  const kind = meta.source === "" || meta.source === "batch" ? "批量生成" : meta.source;
+  return [kind, `${meta.totalChapters} 章`, formatGeneratedAt(meta.generatedAt)]
+    .filter((part) => part !== "")
+    .join(" · ");
+}
+
+/**
+ * meta.cost 的一行小字. 后端现在写的是人类可读的说明字符串(「¥1.86 · 21 批 …」),
+ * 早期/内部版本写的是 {promptTokens, completionTokens} 对象 —— 两种都认, 认不出就不显示.
+ */
+function costNote(cost: unknown): string {
+  if (typeof cost === "string") {
+    return cost.trim();
+  }
+  if (typeof cost !== "object" || cost === null) {
+    return "";
+  }
+  const record = cost as Record<string, unknown>;
+  const prompt = typeof record.promptTokens === "number" ? record.promptTokens : null;
+  const completion = typeof record.completionTokens === "number" ? record.completionTokens : null;
+  if (prompt === null && completion === null) {
+    return "";
+  }
+  const format = (value: number) => (value >= 10000 ? `${Math.round(value / 1000)}k` : String(value));
+  return `成本 ${format(prompt ?? 0)} prompt + ${format(completion ?? 0)} completion tokens`;
+}
+
+/** ISO 时间 → 本地「YYYY-MM-DD HH:mm」; 解析不了返回空串(徽标里省掉这一段) */
+function formatGeneratedAt(raw: string): string {
+  if (raw === "") {
+    return "";
+  }
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 const TREE_ALL_LABEL_LIMIT = 40;
+/** 窄屏阈值(px): 与 Tailwind 的 sm 断点一致, 手机竖屏(390)算窄屏 */
+const NARROW_VIEWPORT = 640;
 /** 势力图: 单个势力框内最多摆几个名字(宋廷 83 人, 再多整框都是字) */
 const FACTION_LABELS_PER_BOX = 12;
 
@@ -417,6 +471,8 @@ function layoutAndLabel(cy: cytoscape.Core, mode: LayoutMode): number {
   syncLabelsNow(cy, null, mode);
   zoom = fitToContent(cy, visibleElements(cy));
   syncLabelsNow(cy, null, mode);
+  // 绕行要在最终缩放下算: 只有 zoom ≥ 1 的家族树才做(见 graphEdgeRoutes)
+  routeEdges(cy, { mode });
   return zoom;
 }
 
@@ -428,7 +484,19 @@ interface GraphApi {
   reapply: () => void;
 }
 
-export default function GraphDemoPage() {
+export interface GraphDemoViewProps {
+  /** 后端成品 (带 ?url= 时由 BookGraphView 注入): 传了就不再读静态 JSON */
+  injected?: BookGraphData | null;
+  /** 重新生成入口 (只有成品页传): 打开生成弹窗; 静态 demo 不传, 不显示按钮 */
+  onRegenerate?: (() => void) | null;
+}
+
+/**
+ * 画布视图本体 (原来的 demo 页). 数据来源两条:
+ *   1. 静态 JSON `/graph-demo-data.json` —— 不带 ?url= 时(演示/验收用), 行为与以前完全一致;
+ *   2. 后端整本批量成品 —— 带 ?url= 时由 BookGraphView 注入, 顶部多一行来源徽标.
+ */
+function GraphDemoView({ injected = null, onRegenerate = null }: GraphDemoViewProps) {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   // 左上角标题卡是浮层: 量给 fit 用, 免得内容铺到卡片底下
   const headerRef = React.useRef<HTMLDivElement | null>(null);
@@ -440,16 +508,24 @@ export default function GraphDemoPage() {
   const cyRef = React.useRef<cytoscape.Core | null>(null);
   const apiRef = React.useRef<GraphApi | null>(null);
 
-  const [data, setData] = React.useState<GraphDemoData>(FALLBACK_DATA);
-  const [loadNote, setLoadNote] = React.useState<string | null>("正在读取 /graph-demo-data.json…");
-  const [mode, setMode] = React.useState<LayoutMode>("tree");
+  // 注入数据与静态 JSON 二选一: 注入时首帧就带着数据, 不会闪一次兜底 demo
+  const initialData: GraphDemoData = injected ?? FALLBACK_DATA;
+  // 成品页才知道成本(静态 demo 没有): 一行小字, 字段缺失就是空串
+  const metaCost = injected === null ? "" : costNote(injected.meta.cost);
+  const [data, setData] = React.useState<GraphDemoData>(initialData);
+  const [loadNote, setLoadNote] = React.useState<string | null>(
+    injected === null ? "正在读取 /graph-demo-data.json…" : null,
+  );
+  // 首屏视图: demo 冻结数据以家族叙事为主, 默认家族树; 后端批量成品大多是师徒/敌对,
+  // 血缘边很少, 家族树会一进来就是空画布, 所以成品默认给「全景」(全员铺开)
+  const [mode, setMode] = React.useState<LayoutMode>(injected === null ? "tree" : "panorama");
   // 全景默认只铺「关系数 ≥4」的人(冻结数据里 51/138): 138 个点全上一次必然糊成毛球
-  const [minDegree, setMinDegree] = React.useState(4);
+  const [minDegree, setMinDegree] = React.useState(injected === null ? 4 : 3);
   // 势力图默认只画跨势力关系(内部关系 200+ 条)
   const [showIntraFaction, setShowIntraFaction] = React.useState(false);
   // 家族树: 一次只看一家(null = 全部). 全画时 83 人散成 29 条小链, fit 后只剩 57% 缩放
   const [treeFamily, setTreeFamily] = React.useState<string | null>(null);
-  const [chapter, setChapter] = React.useState<number>(FALLBACK_DATA.meta.totalChapters);
+  const [chapter, setChapter] = React.useState<number>(initialData.meta.totalChapters);
   const [selection, setSelection] = React.useState<GraphSelection | null>(null);
   // 图例默认收起: 常开会把画布挤窄(fit 按容器算缩放, 一挤整张图就缩到 60%)
   const [legendOpen, setLegendOpen] = React.useState(false);
@@ -554,6 +630,10 @@ export default function GraphDemoPage() {
 
   // ---- 读静态 JSON, 失败就留在兜底数据上 ----
   React.useEffect(() => {
+    // 注入数据(后端成品)时这里无事可做: 数据随 props 进来, 也不存在兜底提示
+    if (injected !== null) {
+      return;
+    }
     let cancelled = false;
     const load = async () => {
       try {
@@ -578,7 +658,7 @@ export default function GraphDemoPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [injected]);
 
   // ---- 建图: 换数据或换布局都重建一次(compound 结构不能原地改) ----
   React.useEffect(() => {
@@ -586,10 +666,13 @@ export default function GraphDemoPage() {
     if (!container) return;
 
     let fontScale = 1;
+    // 手机(390px)下势力框标题要降一档字号: 与 labelScale 一样, 只在变化时重建样式表
+    const initialWidth = container.clientWidth || window.innerWidth;
+    let narrow = initialWidth < NARROW_VIEWPORT;
     const cy = cytoscape({
       container,
       elements: buildGraphElements(data, mode),
-      style: buildGraphStylesheet(detectGraphTheme(), { labelScale: fontScale }),
+      style: buildGraphStylesheet(detectGraphTheme(), { labelScale: fontScale, width: initialWidth }),
       layout: { name: "preset" },
       textureOnViewport: true,
       wheelSensitivity: 0.2,
@@ -600,6 +683,7 @@ export default function GraphDemoPage() {
       pixelRatio: "auto",
     });
     cyRef.current = cy;
+    syncFactionTitleFont(cy, fontScale);
     modeRef.current = mode;
 
     /** 当前需要强制显示标签的节点(hover 优先于选中) */
@@ -628,9 +712,24 @@ export default function GraphDemoPage() {
     /** 缩小后模型字号放大, 屏幕上字高一直接近 11px; 只在换算结果变化时重建样式表 */
     const applyFontScale = () => {
       const next = labelFontScale(cy);
-      if (Math.abs(next - fontScale) < 0.05) return;
+      const nextNarrow = (cy.width() || container.clientWidth) < NARROW_VIEWPORT;
+      if (Math.abs(next - fontScale) < 0.05 && nextNarrow === narrow) return;
       fontScale = next;
-      cy.style(buildGraphStylesheet(detectGraphTheme(), { labelScale: fontScale }));
+      narrow = nextNarrow;
+      syncFactionTitleFont(cy, fontScale);
+      cy.style(buildGraphStylesheet(detectGraphTheme(), { labelScale: fontScale, width: cy.width() || container.clientWidth }));
+    };
+
+    /**
+     * 绕行开关: zoom 跨过 1 才值得算(见 graphEdgeRoutes), 所以只在跨门槛那一下重算,
+     * 不在每帧 zoom 里做. 排布本身已经算过一次, 这里只同步状态.
+     */
+    let routesOn = cy.zoom() >= DETOUR_MIN_ZOOM;
+    const syncEdgeRoutes = () => {
+      const next = cy.zoom() >= DETOUR_MIN_ZOOM;
+      if (next === routesOn) return;
+      routesOn = next;
+      routeEdges(cy, { mode: modeRef.current });
     };
 
     /** 推镜头: 桌面端信息面板会盖住右侧 300px, 取景中心往左让一点 */
@@ -769,6 +868,7 @@ export default function GraphDemoPage() {
 
     cy.on("zoom", () => {
       applyFontScale();
+      syncEdgeRoutes();
       syncEdgeLabelsHere();
       refreshLabels();
       const percent = Math.round(cy.zoom() * 100);
@@ -780,7 +880,8 @@ export default function GraphDemoPage() {
 
     // 主题切换(明/暗/护眼)时重建样式表: canvas 读不到 CSS 变量
     const themeObserver = new MutationObserver(() => {
-      cy.style(buildGraphStylesheet(detectGraphTheme(), { labelScale: fontScale }));
+      syncFactionTitleFont(cy, fontScale);
+      cy.style(buildGraphStylesheet(detectGraphTheme(), { labelScale: fontScale, width: cy.width() || container.clientWidth }));
     });
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-theme"] });
 
@@ -824,6 +925,7 @@ export default function GraphDemoPage() {
         });
       });
       fitZoomRef.current = layoutAndLabel(cy, mode);
+      routesOn = cy.zoom() >= DETOUR_MIN_ZOOM;
       applyFontScale();
       syncEdgeLabelsHere();
       apiRef.current?.reapply();
@@ -963,11 +1065,24 @@ export default function GraphDemoPage() {
           >
             <div className="rounded-2xl border border-border bg-surface/92 px-3 py-1.5 shadow-sm backdrop-blur sm:py-2">
               <p className="text-[10px] font-medium tracking-[0.18em] text-accent uppercase">
-                关系图谱 · DEMO
+                {injected === null ? "关系图谱 · DEMO" : "关系图谱"}
               </p>
               <h1 className="mt-0.5 truncate text-sm font-semibold text-foreground">
                 {data.meta.book}
               </h1>
+              {injected === null ? null : (
+                <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                  <p className="inline-flex max-w-full items-center rounded-full border border-border bg-surface-muted/70 px-2 py-0.5 text-[10px] text-muted-foreground">
+                    <span className="truncate">{sourceBadge(injected.meta)}</span>
+                  </p>
+                  {/* meta.cost: 后端写的成本说明, 缺失(空串)就整行不显示 */}
+                  {metaCost === "" ? null : (
+                    <span className="truncate text-[10px] text-muted-foreground" title={metaCost}>
+                      {metaCost}
+                    </span>
+                  )}
+                </div>
+              )}
               <p className="mt-0.5 text-[11px] text-muted-foreground sm:mt-1">
                 当前视图：第 {chapter} 章 · 可见 {visibility.characters.size} 人 /{" "}
                 {visibility.relations.size} 条关系
@@ -1139,6 +1254,19 @@ export default function GraphDemoPage() {
               <Focus />
               <span className="hidden sm:inline">适配视图</span>
             </Button>
+            {onRegenerate === null ? null : (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={onRegenerate}
+                aria-label="重新生成"
+                title="重新生成关系图谱"
+                className="bg-surface/92 backdrop-blur"
+              >
+                <RefreshCw />
+                <span className="hidden sm:inline">重新生成</span>
+              </Button>
+            )}
             <Button
               size="sm"
               variant="primary"
@@ -1201,5 +1329,127 @@ export default function GraphDemoPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * 页面入口: /graph 与 /graph-demo 都指到这里.
+ *   不带 ?url=  → 静态演示(上面那个视图, 行为与改造前完全一致, dev 验收要用);
+ *   带 ?url=    → 读这本书的后端成品; 没生成过就显示空态 + 「生成关系图谱」.
+ */
+export default function GraphDemoPage() {
+  const [searchParams] = useSearchParams();
+  const bookUrl = searchParams.get("url") ?? "";
+  if (bookUrl === "") {
+    return <GraphDemoView />;
+  }
+  return <BookGraphView bookUrl={bookUrl} />;
+}
+
+/** 后端成品视图: 有数据直接给画布, 没数据给生成入口(预估 → 进度都在弹窗里) */
+function BookGraphView({ bookUrl }: { bookUrl: string }) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [generateOpen, setGenerateOpen] = React.useState(false);
+  const graphQuery = useQuery({
+    queryKey: ["bookGraph", bookUrl],
+    queryFn: () => getBookGraph(bookUrl),
+    staleTime: 5 * 60 * 1000,
+    retry: 0,
+  });
+  const graph = graphQuery.data;
+  const generatedAt = graph?.data?.meta.generatedAt ?? "";
+  const bookName = graph?.data?.meta.book ?? "";
+  const goBack = React.useCallback(() => navigate("/"), [navigate]);
+  // 页头「重新生成」: 复用同一个弹窗(改动前的成品页只有空态能打开它)
+  const openRegenerate = React.useCallback(() => setGenerateOpen(true), []);
+
+  const retry = React.useCallback(() => {
+    void graphQuery.refetch();
+  }, [graphQuery]);
+
+  // 弹窗三种状态都要在: 空态点「生成关系图谱」、完成后刷新成品
+  const dialog = (
+    <GraphGenerateDialog
+      open={generateOpen}
+      onOpenChange={setGenerateOpen}
+      bookUrl={bookUrl}
+      bookName={bookName}
+      onView={() => {
+        setGenerateOpen(false);
+        void queryClient.invalidateQueries({ queryKey: ["bookGraph", bookUrl] });
+      }}
+    />
+  );
+
+  if (graphQuery.isLoading) {
+    return (
+      <main className="flex h-dvh w-full flex-col items-center justify-center gap-3 bg-background px-4 text-center text-foreground">
+        <Spinner size="lg" />
+        <p className="text-sm text-muted-foreground">正在读取关系图谱…</p>
+      </main>
+    );
+  }
+
+  if (graphQuery.isError) {
+    return (
+      <main className="relative flex h-dvh w-full items-center justify-center bg-background px-4 text-foreground">
+        <div className="absolute top-3 left-3">
+          <Button variant="ghost" onClick={goBack}>
+            返回
+          </Button>
+        </div>
+        <EmptyState
+          icon={<CircleAlert />}
+          title="关系图谱加载失败"
+          description={
+            graphQuery.error instanceof Error && graphQuery.error.message !== ""
+              ? graphQuery.error.message
+              : "请稍后重试。"
+          }
+          action={
+            <Button variant="secondary" onClick={retry} loading={graphQuery.isFetching}>
+              重试
+            </Button>
+          }
+        />
+      </main>
+    );
+  }
+
+  if (graph === undefined || !graph.hasData || graph.data === null) {
+    return (
+      <main className="relative flex min-h-dvh w-full items-center justify-center bg-background px-4 py-16 text-foreground">
+        <div className="absolute top-3 left-3">
+          <Button variant="ghost" onClick={goBack}>
+            返回
+          </Button>
+        </div>
+        <EmptyState
+          icon={<Network />}
+          title="这本书还没有关系图谱"
+          description="整本批量生成会把已缓存的章节分批交给 AI，抽出人物、势力与他们之间的关系。生成过程可随时取消。"
+          action={
+            <Button onClick={() => setGenerateOpen(true)}>
+              <Sparkles aria-hidden />
+              生成关系图谱
+            </Button>
+          }
+        />
+        {dialog}
+      </main>
+    );
+  }
+
+  // key 带上生成时间: 重新生成后整张图重建, 不必手动清状态
+  return (
+    <>
+      <GraphDemoView
+        key={`${bookUrl}@${generatedAt}`}
+        injected={graph.data}
+        onRegenerate={openRegenerate}
+      />
+      {dialog}
+    </>
   );
 }

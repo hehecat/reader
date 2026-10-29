@@ -76,7 +76,8 @@ const relationSchema = z.object({
   quote: z.string().optional(),
 });
 
-const metaSchema = z.object({
+/** 元信息: demo 静态文件与后端 /graph 共用(后者在此之上扩展 source/cost, 见 services/graph.ts) */
+export const graphMetaSchema = z.object({
   book: z.string().catch("未知作品"),
   totalChapters: counter(1),
   sampledChapters: counter(0),
@@ -93,7 +94,7 @@ const statsSchema = z
   .catch({ characters: 0, relations: 0, factions: 0 });
 
 export const graphDemoSchema = z.object({
-  meta: metaSchema,
+  meta: graphMetaSchema,
   characters: z.array(characterSchema).catch([]),
   factions: z.array(factionSchema).catch([]),
   memberships: z.array(membershipSchema).catch([]),
@@ -105,7 +106,7 @@ export type GraphCharacter = z.infer<typeof characterSchema>;
 export type GraphFaction = z.infer<typeof factionSchema>;
 export type GraphMembership = z.infer<typeof membershipSchema>;
 export type GraphRelation = z.infer<typeof relationSchema>;
-export type GraphDemoMeta = z.infer<typeof metaSchema>;
+export type GraphDemoMeta = z.infer<typeof graphMetaSchema>;
 export type GraphDemoData = z.infer<typeof graphDemoSchema>;
 
 export type ParseResult =

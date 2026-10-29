@@ -116,6 +116,36 @@ export const LABEL_FONT_STRONG = 15;
 export interface StylesheetOptions {
   /** 缩放越小, 模型字号按比例放大, 让屏幕上的字保持可读(1 = 不放大) */
   labelScale?: number;
+  /** 画布宽度(px): 窄屏(手机)下势力框标题降一档字号, 免得一个框里塞不下 */
+  width?: number;
+}
+
+/** 窄屏阈值: 与 Tailwind 的 sm 断点一致 */
+const NARROW_WIDTH = 640;
+
+/** 势力框标题的基础字号(再乘 labelScale); 手机一档更小, 否则四个框的标题会顶出框外 */
+export const FACTION_TITLE_FONT = { wide: 13, narrow: 11 } as const;
+
+/**
+ * 势力框标题的字号上限: 缩放补偿会把字号放大(手机 23% 时能到 44 模型 px), 窄框上就会撞到
+ * text-max-width 被省略号吃掉人数(「未归属 · ... 」). 这里按框宽反算一个装得下的字号写回 data,
+ * 样式表里 font-size 用 data(labelFont) —— 大框照样用缩放补偿的字号, 小框自动收一档.
+ */
+export function syncFactionTitleFont(cy: cytoscape.Core, labelScale: number): void {
+  const scale = Math.max(1, labelScale);
+  const narrow = cy.width() < NARROW_WIDTH;
+  const compFont = (narrow ? FACTION_TITLE_FONT.narrow : FACTION_TITLE_FONT.wide) * scale;
+  cy.nodes('[type="faction"]').forEach((node) => {
+    const maxWidth = Number(node.data("labelMaxWidth") ?? 150);
+    const text = String(node.data("label") ?? "");
+    // 全角字宽约等于字号, 分隔符窄一点: 按 0.98 个字宽估, 留一点余量给省略判断
+    const fitted = maxWidth / Math.max(4, text.length * 0.98);
+    const font = Math.round(Math.min(compFont, Math.max(10, fitted)) * 10) / 10;
+    if (node.data("labelFont") !== font) node.data("labelFont", font);
+    // 实测标签框一半宽度 ≈ 0.8 em/字, 再加 8px 内边距 → 标题落在框内左上角
+    const shift = Math.round(font * text.length * 0.8) + 8;
+    if (node.data("titleShift") !== shift) node.data("titleShift", shift);
+  });
 }
 
 /** 组装 cytoscape 样式表: 通用 → 形状 → 关系线型 → 交互态(class) */
@@ -167,13 +197,22 @@ export function buildGraphStylesheet(theme: GraphTheme, options: StylesheetOptio
         "border-style": "dashed",
         padding: "26px",
         label: "data(label)",
-        "font-size": Math.round(13 * scale * 10) / 10,
+        // 由 syncFactionTitleFont 按「缩放补偿字号 与 框宽装得下的字号 取小」写进 data(labelFont):
+        // 大框跟着缩放走, 窄框自动收一档, 免得人数被省略号吃掉
+        "font-size": "data(labelFont)",
         "font-weight": 700,
         color: theme.labelColor,
+        // 标题钉在框内左上角并按框宽截断: 居中时相邻框的标题会连成「伪齐 · 4 人岳家军 · 1 人」
         "text-valign": "top",
-        "text-halign": "center",
-        // 正数往里推: 标题落在框内顶部, 不压成员
-        "text-margin-y": 10,
+        "text-halign": "left",
+        "text-wrap": "ellipsis",
+        // 由 graphLayouts 按块宽写进 data(labelMaxWidth), 兜不住就省略号
+        "text-max-width": "data(labelMaxWidth)",
+        // 由 syncFactionTitleFont 按标题宽度算: compound 的 label 框是「居中贴在框左边缘」上的,
+        // 不推半个标签宽, 390px 下标题有一半画到框外, 会压到左邻居的框、或被视口切掉
+        // 类型定义里 text-margin-x 只收 number, 运行时支持 data() mapper, 这里绕过类型
+        "text-margin-x": "data(titleShift)" as unknown as number,
+        "text-margin-y": 8,
         "text-outline-width": 3,
         "min-zoomed-font-size": 5,
       },
@@ -215,6 +254,19 @@ export function buildGraphStylesheet(theme: GraphTheme, options: StylesheetOptio
       },
     });
   }
+
+  // 绕行: 同层横边被中间节点的圆点挡住时, 由 graphEdgeRoutes 挂上这两个 class,
+  // 换成带控制点的曲线从侧面绕过去(直线会从别人身上穿过去, 赵玖—吴夫人 被潘贤妃挡就是这种情况)
+  rules.push(
+    {
+      selector: "edge.gd-detour-up",
+      style: { "curve-style": "unbundled-bezier", "control-point-weights": 0.5, "control-point-distances": 64 },
+    },
+    {
+      selector: "edge.gd-detour-down",
+      style: { "curve-style": "unbundled-bezier", "control-point-weights": 0.5, "control-point-distances": -64 },
+    },
+  );
 
   // 交互态必须排在关系线型之后: cytoscape 里同特异性的规则后者胜, 否则选中高亮会被边类型规则盖掉
   rules.push(
