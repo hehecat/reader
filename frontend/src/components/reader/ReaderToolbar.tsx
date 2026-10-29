@@ -121,12 +121,15 @@ export function ReaderTopBar({
       )}
     >
       {/* 图标多, 小屏收紧间距并降一档按钮尺寸, 保住书名/章节的展示宽度 */}
-      <div className="mx-auto flex h-14 max-w-3xl items-center gap-0.5 px-2 sm:gap-2 sm:px-4">
+      {/* 390px: 10 个按钮 × 36px + 间距 + 内边距 原本要 394px, 溢出 4px 把最后一个图标切掉;
+          gap 2px→0、px 8px→4px 后降到 368px, 留 22px 余量 */}
+      <div className="mx-auto flex h-14 max-w-3xl items-center gap-0 px-1 sm:gap-2 sm:px-4">
         <IconButton variant="ghost" tooltip="返回" tooltipSide="bottom" onClick={onBack}>
           <ArrowLeft />
         </IconButton>
 
-        <div className="min-w-0 flex-1">
+        {/* 小屏 gap 归零后, 书名和右侧第一个图标会贴死, 这里留 4px 呼吸 */}
+        <div className="min-w-0 flex-1 pr-1">
           <p className="truncate font-display text-sm font-semibold">{bookName}</p>
           <p className="truncate text-xs text-muted-foreground">{chapterTitle}</p>
         </div>
