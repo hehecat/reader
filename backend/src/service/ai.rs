@@ -542,16 +542,20 @@ fn order_chapters_by_toc(
     chapters
 }
 
-/// 「当前章及前后各一章」在已排好阅读序的 `chapters` 里的下标（阅读顺序），以及其中当前章的位置。
+/// 「当前章及之前」在已排好阅读序的 `chapters` 里的下标（阅读顺序升序，最后一个就是当前章）。
+///
+/// 读者问「到现在为止发生了什么」要的是累积上文，所以窗口是 TOC 的**前缀** `titles[0..=i]`
+/// （当前章 + 之前所有已缓存章），**绝不取 `i+1` 及之后**——后一章读者还没读到，塞进去就是剧透。
+/// 前缀可能很长，具体取到第几章由 `history_snippets` 的预算决定，这里只负责给出候选。
 ///
 /// 邻章只认 TOC：书源书的行序是哈希序，`anchor ± 1` 取到的是随机章。TOC 里定位不到当前章时
 /// （老客户端没传 `titles`、章节标题对不上、当前章正文还没缓存）退回标题/章号匹配，
-/// 并按已排好的阅读序取 ±1——此时只能保证「当前章」这一档语义。
-fn window_slots(
+/// 再不行就按已排好的阅读序以最后一章为当前章——三种退路都只取「当前章及其之前」。
+fn history_slots(
     chapters: &[(i64, String, String)],
     titles: &[String],
     current_title: &str,
-) -> Option<(Vec<usize>, usize)> {
+) -> Option<Vec<usize>> {
     if chapters.is_empty() {
         return None;
     }
@@ -561,24 +565,17 @@ fn window_slots(
         .enumerate()
         .map(|(i, c)| (c.1.as_str(), i))
         .collect();
-    // 正规路径：当前章在 TOC 里 → 邻章 = TOC 的 i-1 / i+1
+    // 正规路径：当前章在 TOC 里 → 取 titles[0..=i] 中已缓存的那几章
     if !cur.is_empty() {
         if let Some(ti) = titles.iter().position(|t| t == cur) {
-            if let Some(&here) = by_title.get(cur) {
-                let mut slots: Vec<usize> = Vec::with_capacity(3);
-                if let Some(prev) = ti.checked_sub(1).and_then(|i| titles.get(i)) {
-                    if let Some(&ci) = by_title.get(prev.as_str()) {
-                        slots.push(ci);
-                    }
+            if by_title.contains_key(cur) {
+                let slots: Vec<usize> = titles[..=ti]
+                    .iter()
+                    .filter_map(|t| by_title.get(t.as_str()).copied())
+                    .collect();
+                if !slots.is_empty() {
+                    return Some(slots);
                 }
-                let focus = slots.len();
-                slots.push(here);
-                if let Some(next) = titles.get(ti + 1) {
-                    if let Some(&ci) = by_title.get(next.as_str()) {
-                        slots.push(ci);
-                    }
-                }
-                return Some((slots, focus));
             }
             tracing::debug!(
                 current_title = cur,
@@ -610,17 +607,7 @@ fn window_slots(
             );
             chapters.len() - 1
         });
-    let mut slots: Vec<usize> = Vec::with_capacity(3);
-    let mut focus = 0;
-    if anchor > 0 {
-        slots.push(anchor - 1);
-        focus = 1;
-    }
-    slots.push(anchor);
-    if anchor + 1 < chapters.len() {
-        slots.push(anchor + 1);
-    }
-    Some((slots, focus))
+    Some((0..=anchor).collect())
 }
 
 /// 没有可用关键词时的兜底取样："主角是谁""刚才发生了什么"这类泛问。
@@ -669,7 +656,7 @@ fn fallback_snippets(
 
 /// 检索范围归一化。
 ///
-/// 界面上只有两档：`current`（默认，只看当前章及前后各一章）与 `book`（全书放宽）。
+/// 界面上只有两档：`current`（默认，只看当前章及之前已缓存的章）与 `book`（全书放宽）。
 /// `auto`（全书关键词检索）保留但不暴露——少了它，用户不用猜"自动"到底偏哪边。
 pub fn scope_of(raw: &str) -> &'static str {
     match raw.trim().to_ascii_lowercase().as_str() {
@@ -681,7 +668,8 @@ pub fn scope_of(raw: &str) -> &'static str {
 
 /// 按范围取片段。
 ///
-/// - `current`（默认）：只读当前章及前后各一章，问"这段里 X 为什么"时不会被别处的高分章挤掉；
+/// - `current`（默认）：只读当前章及之前已缓存的章（按阅读顺序的前缀），问"到现在为止发生了什么"时不会
+///   被别处的高分章挤掉，也不会提前剧透下一章；
 /// - `book`：全书关键词检索，放宽到 10 段、打分门槛降到 0.2，跨章线索/全书类问题用；
 /// - `auto`：全书关键词检索的默认参数（6 段、门槛 0.4），界面上已不暴露。
 pub async fn retrieve_scoped(
@@ -694,7 +682,7 @@ pub async fn retrieve_scoped(
     scope: &str,
 ) -> Retrieval {
     match scope_of(scope) {
-        "current" => retrieve_window(storage, ns, book_url, question, titles, current_title).await,
+        "current" => retrieve_history(storage, ns, book_url, question, titles, current_title).await,
         "book" => {
             retrieve_inner(
                 storage,
@@ -861,52 +849,52 @@ async fn retrieve_inner(
 
 /// `current` 范围的片段选择（纯逻辑，便于单测）。
 ///
-/// 窗口 = TOC 里的当前章 + 前后各一章（见 `window_slots`），按阅读顺序输出。
-/// 预算：当前章 50%，各邻章平分剩下的 50%；某章没内容/用不完的份额顺延给后面的章，
-/// 所以不会出现「当前章吃满预算、邻章进不来」。
-fn window_snippets(
+/// 上下文 = TOC 里的**当前章及之前**（见 `history_slots`），按阅读顺序升序输出：最早的在前、
+/// 当前章最后。预算：总量 ≤ `CONTEXT_BUDGET`，当前章先拿 50%，其余 50% 由先前章节**由近及远**
+/// 共享（最近的一章先拿，没内容/用不完的份额顺延给更远的那章），每章另受
+/// `SNIPPET_WINDOW × MAX_WINDOWS_PER_CHAPTER` 上限约束——所以通常只装得下最近 4~5 章。
+fn history_snippets(
     chapters: Vec<(i64, String, String)>,
     titles: &[String],
     current_title: &str,
     question: &str,
 ) -> Vec<Snippet> {
     let chapters = order_chapters_by_toc(chapters, titles);
-    let Some((slots, focus)) = window_slots(&chapters, titles, current_title) else {
+    let Some(slots) = history_slots(&chapters, titles, current_title) else {
         return Vec::new();
     };
     let kws = question_keywords(question, &chapters);
     let focus_share = CONTEXT_BUDGET / 2;
-    // 当前章 50%，剩下的 50% 由邻章（最多 2 章）平分
-    let neighbor_share = (CONTEXT_BUDGET - focus_share)
-        .checked_div(slots.len().saturating_sub(1))
-        .unwrap_or(0);
-    let mut out: Vec<Snippet> = Vec::with_capacity(slots.len());
+    let chapter_cap = SNIPPET_WINDOW * MAX_WINDOWS_PER_CHAPTER;
+    let mut out: Vec<Snippet> = Vec::with_capacity(slots.len().min(8));
     let mut left = CONTEXT_BUDGET;
     let mut carry = 0usize; // 前面几章没用完的额度
-    for (k, &ci) in slots.iter().enumerate() {
-        let own = if k == focus {
+                            // 由近及远分配：先当前章（slots 的最后一个），再从最近的前一章一路往回
+    for k in (0..slots.len()).rev() {
+        let own = if k + 1 == slots.len() {
             focus_share
         } else {
-            neighbor_share
+            chapter_cap
         };
         let grant = (own + carry).min(left);
-        carry = grant;
         if grant < 200 {
-            break;
+            break; // 预算见底：更远的章只会更少
         }
-        let ch = &chapters[ci];
+        let ch = &chapters[slots[k]];
         let limit = SNIPPET_WINDOW.min(grant);
         let mut chops = best_windows(&ch.2, &kws, limit, MAX_WINDOWS_PER_CHAPTER);
         if chops.is_empty() {
             let head: String = ch.2.chars().take(limit).collect();
             if head.trim().is_empty() {
-                continue; // 空章：份额留给后面的章
+                carry = grant; // 空章：份额留给更远的章
+                continue;
             }
             chops = vec![head];
         }
         let text = chops.join("\n…\n");
         let used = text.chars().count();
         if used > grant {
+            carry = grant;
             continue;
         }
         left -= used;
@@ -918,14 +906,15 @@ fn window_snippets(
             text,
         });
     }
+    out.reverse(); // 输出按阅读顺序升序：最早的在前，当前章最后
     out
 }
 
-/// `current` 范围：只取当前章及其前后各一章，不做全书关键词排序。
+/// `current` 范围：取当前章及之前已缓存的章节，不做全书关键词排序。
 ///
-/// 读者问"这一段里 X 到底怎么想的"时，全书检索会把最相关的邻章挤下去，所以这里直接按
-/// 当前章定位；关键词只用来挑窗口，一章都命中不了就给开头一段原文。
-async fn retrieve_window(
+/// 用户问"到现在为止发生了什么"时，要的是累积上文，不是全书最相关的几章（会把刚读过的
+/// 前一章挤掉）；同时"全书检索"也不合适——按范围直接取前缀，关键词只用来挑窗口。
+async fn retrieve_history(
     storage: &Storage,
     ns: &str,
     book_url: &str,
@@ -950,7 +939,7 @@ async fn retrieve_window(
         };
     }
     let cached_chapters = chapters.len();
-    let snippets = window_snippets(chapters, titles, current_title, question);
+    let snippets = history_snippets(chapters, titles, current_title, question);
     Retrieval {
         snippets,
         cached_chapters,
@@ -1501,71 +1490,134 @@ mod tests {
         (chapters, titles)
     }
 
-    /// T1 回归：书源书行序是哈希序，`current` 档也必须取到 TOC 里的真正前后章。
+    /// 假书：n 章，`chapter_index` 为哈希（与阅读顺序错开），正文每句带「第x章标记」。
+    fn long_hash_book(n: usize) -> (Vec<(i64, String, String)>, Vec<String>) {
+        let titles: Vec<String> = (1..=n).map(|i| format!("第{i}章 测试")).collect();
+        let mut chapters: Vec<(i64, String, String)> = (0..n)
+            .map(|i| {
+                let mark = format!("第{}章标记", i + 1);
+                let mut body = String::new();
+                while body.chars().count() < 1400 {
+                    body.push_str(&format!(
+                        "{mark}。{}里赵玖看了看窗外，没有说话。",
+                        titles[i]
+                    ));
+                }
+                // 哈希序刻意与阅读顺序错开
+                let hash = ((i * 7919 + 13) % 1000) as i64 * 1_000_000_000_000;
+                (hash, titles[i].clone(), body)
+            })
+            .collect();
+        chapters.sort_by_key(|c| c.0); // 模拟 SQL 的 ORDER BY chapter_index
+        (chapters, titles)
+    }
+
+    fn titles_of(out: &[Snippet]) -> Vec<&str> {
+        out.iter().map(|s| s.title.as_str()).collect()
+    }
+
+    /// T1 回归：书源书行序是哈希序，`current` 档取的是「当前章及之前」（TOC 前缀），
+    /// 当前章排在最后，下一章不许进来（剧透）。
     #[test]
-    fn current_scope_takes_prev_and_next_by_toc_order() {
+    fn current_scope_takes_history_up_to_now_by_toc_order() {
         let (chapters, titles) = hash_ordered_book();
-        let out = window_snippets(
+        let out = history_snippets(
             chapters,
             &titles,
             &titles[2],
             "第二章里的风波到底是怎么回事",
         );
-        let got: Vec<&str> = out.iter().map(|s| s.title.as_str()).collect();
         assert_eq!(
-            got,
-            ["第二章 风波", "第三章 夜访", "第四章 转折"],
-            "当前章 + 前后各一章，按阅读顺序排"
+            titles_of(&out),
+            ["第一章 起点", "第二章 风波", "第三章 夜访"],
+            "当前章 = 第三章 → 只取第一~三章，按阅读顺序升序"
+        );
+        assert_eq!(
+            out.last().map(|s| s.title.as_str()),
+            Some("第三章 夜访"),
+            "当前章必须排在最后（最早的在前）"
         );
         assert_eq!(
             out.iter().map(|s| s.order).collect::<Vec<_>>(),
-            [2, 3, 4],
+            [1, 2, 3],
             "order 走 TOC 下标（1 起）"
         );
-        for (s, mark) in out.iter().zip(["风波标记", "夜访标记", "转折标记"]) {
+        for (s, mark) in out.iter().zip(["起点标记", "风波标记", "夜访标记"]) {
             assert!(s.text.contains(mark), "{} 片段里应有 {mark}", s.title);
         }
         assert!(
             !out.iter()
-                .any(|s| s.text.contains("起点标记") || s.text.contains("归途标记")),
-            "窗口外的第 1/5 章不该进来"
+                .any(|s| s.text.contains("转折标记") || s.text.contains("归途标记")),
+            "第四章及之后（读者还没读到）绝不许进来: {:?}",
+            titles_of(&out)
         );
     }
 
-    /// T2 边界：当前章是第一/最后一章时只取能取的那一侧；定位不到当前章也不能 panic。
+    /// T2 边界：当前章是第一章时只有它自己（没有更早的章可取）。
     #[test]
-    fn current_scope_edges_take_only_available_neighbor() {
+    fn current_scope_first_chapter_takes_only_itself() {
         let (chapters, titles) = hash_ordered_book();
-        let first = window_snippets(chapters.clone(), &titles, &titles[0], "第一章 起点");
-        assert_eq!(
-            first.iter().map(|s| s.title.as_str()).collect::<Vec<_>>(),
-            ["第一章 起点", "第二章 风波"]
-        );
-        let last = window_snippets(chapters.clone(), &titles, &titles[4], "第五章 归途");
-        assert_eq!(
-            last.iter().map(|s| s.title.as_str()).collect::<Vec<_>>(),
-            ["第四章 转折", "第五章 归途"]
-        );
-        // TOC 里没有这一章（老客户端没传 titles / 标题对不上）：退回章号匹配，不能 panic
-        let fallback = window_snippets(chapters.clone(), &titles, "第九章 不存在", "随便问问");
-        assert!(!fallback.is_empty(), "退回路径也得有内容");
-        // 完全没有 TOC、连当前章都空：仍不能 panic
-        let bare = window_snippets(chapters, &[], "", "");
-        assert!(!bare.is_empty());
+        let out = history_snippets(chapters, &titles, &titles[0], "第一章 起点");
+        assert_eq!(titles_of(&out), ["第一章 起点"]);
+        assert!(!out[0].text.contains("风波标记"), "不许取后面的章");
     }
 
-    /// T3 预算：三章在 CONTEXT_BUDGET 内都有内容时都要进来（不许当前章先吃满）。
+    /// T3 预算：装不下全部上文时，必须**由近及远**地取——绝不允许跳过最近的前一章却取了更早的章。
     #[test]
-    fn current_scope_budget_is_shared_across_window() {
-        let (chapters, titles) = hash_ordered_book();
-        // 无关键词 → 每章都以"开头一段原文"兜底，最能暴露预算饥饿
-        let out = window_snippets(chapters, &titles, &titles[2], "");
-        assert_eq!(out.len(), 3, "三章都要进来");
-        for s in &out {
-            let n = s.text.chars().count();
-            assert!(n > 300, "{} 只拿到 {n} 字，份额被前面吃光了", s.title);
-        }
+    fn current_scope_budget_prefers_nearer_history() {
+        let (chapters, titles) = long_hash_book(14);
+        // 无关键词 → 每章都退化成"开头 600 字"，最能暴露预算饥饿
+        let out = history_snippets(chapters, &titles, &titles[13], "");
+        let got = titles_of(&out);
         let total: usize = out.iter().map(|s| s.text.chars().count()).sum();
         assert!(total <= CONTEXT_BUDGET, "总预算不能超: {total}");
+        assert!(out.len() >= 2, "至少要有当前章 + 前一章: {got:?}");
+        assert_eq!(
+            got.last().copied(),
+            Some(titles[13].as_str()),
+            "当前章在最后"
+        );
+        assert!(
+            got.contains(&titles[12].as_str()),
+            "最近的上一章(第十三章)必须在内，否则就是跳章: {got:?}"
+        );
+        // 取到的必须是紧贴当前章的一段连续上文：不许中间缺章
+        let want: Vec<&str> = titles[14 - out.len()..]
+            .iter()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(got, want, "必须是「紧邻当前章的连续上文」，不能跳着取");
+        assert!(
+            !got.iter().any(|t| *t == titles[0].as_str()),
+            "太早的章装不下就该被挤掉: {got:?}"
+        );
+    }
+
+    /// T4 降级：TOC 里查不到当前章、甚至 `titles` 为空，都不能 panic，也不能返回空。
+    #[test]
+    fn current_scope_degrades_without_toc() {
+        let (chapters, titles) = hash_ordered_book();
+        // TOC 里没有这一章（老客户端没传 titles / 标题对不上）：退回章号/最后一章，取「它及之前」
+        let fallback = history_snippets(chapters.clone(), &titles, "第九章 不存在", "随便问问");
+        assert!(!fallback.is_empty(), "退回路径也得有内容");
+        assert_eq!(
+            fallback.last().map(|s| s.title.as_str()),
+            Some("第五章 归途"),
+            "定位不到当前章时以已排好的阅读序最后一章为准"
+        );
+        assert!(
+            fallback.iter().all(|s| s.order <= 5),
+            "退化路径同样只取前缀: {:?}",
+            titles_of(&fallback)
+        );
+        // 完全没有 TOC、连当前章都空：没有阅读序可言（书源书的行序是哈希序），
+        // 只能保证不 panic、不返回空
+        let bare = history_snippets(chapters, &[], "", "");
+        assert!(!bare.is_empty(), "titles 为空时也得有内容");
+        assert!(
+            bare.iter().all(|s| titles.contains(&s.title)),
+            "片段必须来自这本书: {:?}",
+            titles_of(&bare)
+        );
     }
 }

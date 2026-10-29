@@ -22,7 +22,7 @@ import { streamAiChat, type AiScope, type AiSnippet } from "@/services/ai";
 const SCOPE_KEY = "reader.aiScope";
 const SCOPE_OPTIONS: { id: AiScope; label: string; hint: string }[] = [
   // 说明压在一行内: 手机 390px 下面板底部只有 ~200px 可用, 写长会折行把发送按钮挤歪
-  { id: "current", label: "当前章", hint: "当前章及前后各一章（默认）" },
+  { id: "current", label: "当前章", hint: "当前章及之前（默认）" },
   { id: "book", label: "全书", hint: "跨章检索，线索更全，更耗 token" },
 ];
 
@@ -59,7 +59,7 @@ export interface AiChatPanelProps {
   onClose: () => void;
   bookUrl: string;
   bookName: string;
-  /** 章节标题序 + 当前章：无关键词命中时用于兜底取样 */
+  /** 章节标题序 + 当前章：后端据此定位「当前章及之前」的检索范围 */
   titles: string[];
   currentTitle: string;
   /** 是否已配置模型端点（false 时面板只显示配置提示） */

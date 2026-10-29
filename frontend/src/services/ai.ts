@@ -21,7 +21,7 @@ export interface AiSnippet {
   title: string;
 }
 
-/** 检索范围: 只看当前章及前后各一章(默认) / 全书放宽覆盖 */
+/** 检索范围: 只看当前章及之前(默认, 累积上文) / 全书放宽覆盖 */
 export type AiScope = "current" | "book";
 
 export interface AiChatRequest {
@@ -30,7 +30,7 @@ export interface AiChatRequest {
   bookName?: string;
   /** 检索范围; 缺省由后端按 current 处理 */
   scope?: AiScope;
-  /** 章节标题序（后端按它排序，无命中时取"开头两章 + 当前章附近"） */
+  /** 章节标题序（后端按它排阅读序，并据此定位「当前章及之前」） */
   titles?: string[];
   currentTitle?: string;
   history?: { role: "user" | "assistant"; content: string }[];
