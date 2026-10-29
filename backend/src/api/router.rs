@@ -10360,7 +10360,7 @@ async fn ai_chat(
         })
         .unwrap_or_default();
     let current_title = param_of(&params, body_json.as_ref(), "currentTitle");
-    // 检索范围: current(默认, 只读当前章及前后各一章) / book(全书关键词检索)
+    // 检索范围: current(默认, 当前章及之前已缓存的章) / book(全书关键词检索)
     let scope = param_of(&params, body_json.as_ref(), "scope");
     // 检索已缓存章节：毫秒级（单本几 MB 关键词扫描），不阻塞其他读写
     let retrieval = crate::service::ai::retrieve_scoped(
