@@ -1061,6 +1061,47 @@ const COOKIE_SNAPSHOT_TTL: std::time::Duration = std::time::Duration::from_secs(
 /// 容量上限（ns 数量级极小，纯防呆）
 const COOKIE_SNAPSHOT_MAX: usize = 32;
 
+/// 容量上限插入（到顶就淘汰**写入时刻最旧的那一条**，其余热条目保留）。
+///
+/// 语义（逐条对应下面 `insert_capped_evicts_at_capacity` 单测）：
+/// - 未到 `max`：直接插入，不淘汰；
+/// - 已到 `max` 且 key 已存在：原地覆盖（值 + 时刻），不淘汰、总数不增长（幂等）；
+/// - 已到 `max` 且 key 是新键：先淘汰时刻最小的那条再插入，总数恒等于 `max`；
+/// - `max == 0`：一律不插入（保持空表），不 panic；
+/// - 时刻相同（同一毫秒连插）时按 key 字典序定胜负，保证淘汰结果可复现。
+///
+/// 返回最后一条被淘汰的 key（没发生淘汰时为 `None`）。
+///
+/// 抽成纯函数是为了能脱离 sqlite / 全局单例单测：唯一调用点是
+/// `Storage::cookie_snapshot` 的快照缓存写入。
+fn insert_capped_evict_oldest<V>(
+    m: &mut std::collections::HashMap<String, (std::time::Instant, V)>,
+    key: String,
+    value: V,
+    max: usize,
+    now: std::time::Instant,
+) -> Option<String> {
+    if max == 0 {
+        return None;
+    }
+    let mut evicted = None;
+    // 用 while（不是 if）：万一表里已经「超额」（历史数据/上限被调小），一次淘汰到位，
+    // 绝不留 len > max 的状态。
+    while m.len() >= max && !m.contains_key(&key) {
+        let Some(victim) = m
+            .iter()
+            .min_by(|a, b| a.1 .0.cmp(&b.1 .0).then_with(|| a.0.cmp(b.0)))
+            .map(|(k, _)| k.clone())
+        else {
+            break; // 空表：无可淘汰（`max == 0` 已在上面拦住）
+        };
+        m.remove(&victim);
+        evicted = Some(victim);
+    }
+    m.insert(key, (now, value));
+    evicted
+}
+
 fn cookie_snapshot_peek(key: &str) -> Option<std::sync::Arc<CookieSnapshot>> {
     let m = cookie_snapshots().lock().unwrap_or_else(|e| e.into_inner());
     match m.get(key) {
@@ -1811,10 +1852,15 @@ impl Storage {
         // 因此不会出现「读到写前旧数据、却在 invalidate 之后才塞进缓存」的竞态。
         let mut m = cookie_snapshots().lock().unwrap_or_else(|e| e.into_inner());
         if COOKIE_SNAPSHOT_GEN.load(std::sync::atomic::Ordering::Acquire) == gen {
-            if m.len() >= COOKIE_SNAPSHOT_MAX && !m.contains_key(&key) {
-                m.clear();
-            }
-            m.insert(key, (std::time::Instant::now(), snap.clone()));
+            // 到顶淘汰最旧一条（原先整体 clear()：一次溢出会把其余 ns 的热快照全打掉，
+            // 之后每个 ns 都要重查一次全表，见 [`insert_capped_evict_oldest`]）。
+            insert_capped_evict_oldest(
+                &mut m,
+                key,
+                snap.clone(),
+                COOKIE_SNAPSHOT_MAX,
+                std::time::Instant::now(),
+            );
         }
         Ok(snap)
     }
@@ -11859,5 +11905,119 @@ mod tests {
         assert_eq!(storage.count_books_for_user("alice").await.unwrap(), 2);
         assert_eq!(storage.count_books_for_user("default").await.unwrap(), 0);
         cleanup(storage, "bklimit").await;
+    }
+
+    // ---------------- 缓存容量上限淘汰（insert_capped_evict_oldest） ----------------
+
+    /// `t` 秒前的时刻（构造「谁更旧」可控的输入，避免依赖真实时钟精度）
+    fn at(secs_ago: u64) -> std::time::Instant {
+        std::time::Instant::now() - std::time::Duration::from_secs(secs_ago)
+    }
+
+    type CapMap = std::collections::HashMap<String, (std::time::Instant, u32)>;
+
+    /// 未满不淘汰 / 满了插新淘汰最旧 / 重复 key 幂等 / 总数恰好等于上限 /
+    /// 被淘汰的是最旧的且最近写的还在 / max=0 与空表不 panic。
+    #[test]
+    fn insert_capped_evicts_at_capacity() {
+        // 1) 未满：不淘汰，返回 None
+        let mut m: CapMap = std::collections::HashMap::new();
+        assert_eq!(
+            insert_capped_evict_oldest(&mut m, "a".into(), 1, 3, at(10)),
+            None
+        );
+        assert_eq!(
+            insert_capped_evict_oldest(&mut m, "b".into(), 2, 3, at(9)),
+            None
+        );
+        assert_eq!(m.len(), 2, "未到上限时不该淘汰");
+
+        // 2) 重复插入同一 key：幂等——不增长、不淘汰、值被覆盖
+        assert_eq!(
+            insert_capped_evict_oldest(&mut m, "a".into(), 11, 3, at(8)),
+            None,
+            "覆盖已有 key 不该淘汰任何条目"
+        );
+        assert_eq!(m.len(), 2, "重复 key 不该让总数增长");
+        assert_eq!(m.get("a").map(|(_, v)| *v), Some(11), "重复 key 应覆盖旧值");
+
+        // 3) 填满到上限：仍不淘汰
+        assert_eq!(
+            insert_capped_evict_oldest(&mut m, "c".into(), 3, 3, at(7)),
+            None
+        );
+        assert_eq!(m.len(), 3);
+
+        // 4) 满时插新：淘汰最旧的 "b"（at(9) 是现存里最旧），总数恰好等于上限
+        assert_eq!(
+            insert_capped_evict_oldest(&mut m, "d".into(), 4, 3, at(0)),
+            Some("b".to_string()),
+            "应淘汰写入时刻最旧的那条"
+        );
+        assert_eq!(m.len(), 3, "淘汰后总数必须恰好等于上限");
+        assert!(!m.contains_key("b"), "最旧的应被淘汰");
+        assert!(m.contains_key("a") && m.contains_key("c"), "其余条目应保留");
+        assert_eq!(m.get("d").map(|(_, v)| *v), Some(4), "新写的必须还在");
+        // 最近写的（"d"）不会是淘汰对象：再插一次，被淘汰的应是当前最旧的 "a"(at(8))
+        assert_eq!(
+            insert_capped_evict_oldest(&mut m, "e".into(), 5, 3, at(0)),
+            Some("a".to_string())
+        );
+        assert!(m.contains_key("d"), "最近写的条目不该被下一轮淘汰");
+        assert_eq!(m.len(), 3);
+
+        // 5) 边界：max = 0 → 不插入、不 panic（保持空表，也不淘汰已有内容之外的任何东西）
+        let mut zero: CapMap = std::collections::HashMap::new();
+        assert_eq!(
+            insert_capped_evict_oldest(&mut zero, "a".into(), 1, 0, at(0)),
+            None
+        );
+        assert!(zero.is_empty(), "max=0 时不该插入");
+        // 空表 + max=1：正常插入，不淘汰
+        let mut one: CapMap = std::collections::HashMap::new();
+        assert_eq!(
+            insert_capped_evict_oldest(&mut one, "a".into(), 1, 1, at(1)),
+            None
+        );
+        assert_eq!(one.len(), 1);
+        // 单条上限再插 → 淘汰唯一一条，长度仍是 1
+        assert_eq!(
+            insert_capped_evict_oldest(&mut one, "b".into(), 2, 1, at(0)),
+            Some("a".to_string())
+        );
+        assert_eq!(one.len(), 1);
+    }
+
+    /// 同一时刻连续插入（`Instant` 相同）时淘汰结果可复现：按 key 字典序定胜负，
+    /// 且总数仍恰好等于上限（真实调用点在同一毫秒内连插多条就会走到这里）。
+    #[test]
+    fn insert_capped_same_instant_is_deterministic() {
+        let now = std::time::Instant::now();
+        let mut m: CapMap = std::collections::HashMap::new();
+        insert_capped_evict_oldest(&mut m, "k1".into(), 1, 2, now);
+        insert_capped_evict_oldest(&mut m, "k2".into(), 2, 2, now);
+        assert_eq!(
+            insert_capped_evict_oldest(&mut m, "k3".into(), 3, 2, now),
+            Some("k1".to_string()),
+            "同刻插入按 key 定序：k1 < k2，淘汰 k1"
+        );
+        assert!(m.contains_key("k2") && m.contains_key("k3"));
+        assert_eq!(m.len(), 2);
+    }
+
+    /// 超额历史状态（len > max）一次淘汰到位，不留 len > max；
+    /// 且上限被调小时也只会收敛到 max，不会 panic。
+    #[test]
+    fn insert_capped_shrinks_overfull_map() {
+        let mut m: CapMap = std::collections::HashMap::new();
+        for i in 0..5 {
+            m.insert(format!("old{i}"), (at(100 - i), i as u32));
+        }
+        assert_eq!(m.len(), 5);
+        // max=2：插新键时循环淘汰，直到 len < 2 再插入 → 最终恰好 2 条
+        insert_capped_evict_oldest(&mut m, "new".into(), 99, 2, at(0));
+        assert_eq!(m.len(), 2, "超额表应一次收敛到上限");
+        assert!(m.contains_key("new"));
+        assert!(m.contains_key("old4"), "最近写的旧条目应留下");
     }
 }
