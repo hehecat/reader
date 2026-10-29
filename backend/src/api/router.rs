@@ -9496,7 +9496,6 @@ async fn search_book_multi_sse(
         // 本窗命中汇总：搜索完一次写入换源候选表
         let mut discovered: Vec<crate::service::search::SearchBook> = Vec::new();
         let mut done: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        let mut last = last_index;
         // 全量模式(本窗已覆盖到最后一个源): 一连接搜完, 不做预算收口 ——
         // 分窗+每次重算源列表会让游标漂移(死源区间每窗只推进 1 个源, 实测 30s×5 才走 5 个)
         let full_scan = end >= total.max(0) as usize;
@@ -9531,27 +9530,14 @@ async fn search_book_multi_sse(
                     _ = tokio::time::sleep_until(window_deadline) => break, // 硬上限到
                 }
             };
-            last = i;
             done.insert(i as usize);
             discovered.extend(found);
             if tx.send(Ok(Bytes::from(text))).await.is_err() {
                 break; // 客户端断开
             }
         }
-        // 续接点 = 已完成连续前缀的末位(第一个未完成源下标 - 1), 且不低于本窗起点 - 1:
-        // 保证下一窗从第一个未完成源继续, 不重搜已完成的连续段, 也不会倒退成死循环
-        let next_from = match (start..end).find(|i| !done.contains(i)) {
-            Some(i) => {
-                let cand = (i as i64 - 1).max(last_index);
-                if cand <= last_index && !done.is_empty() {
-                    // 窗首源没完成: 跳过它本身, 保证游标前进(该源本窗放弃, 可加载更多重试)
-                    (i as i64).min(end as i64 - 1)
-                } else {
-                    cand
-                }
-            }
-            None => last,
-        };
+        // 续接点(纯函数, 见 sse_next_from): 第一个未完成源下标 - 1, 不倒退也不吞整窗
+        let next_from = sse_next_from(start, end, &done, last_index);
         // 搜索命中 → 换源候选表（换源面板首屏直接读它；用户实测「搜索 5 个源、换源 1 个」）
         if !discovered.is_empty() {
             persist_search_candidates(&storage, &ns, &discovered).await;
@@ -9645,6 +9631,35 @@ fn sse_should_close(
     hard_cap: std::time::Duration,
 ) -> bool {
     elapsed >= hard_cap || (done >= 8 && elapsed > window_budget)
+}
+
+/// SSE 续接点（纯函数）：下一窗的 `lastIndex`。
+///
+/// 规则：第一个未完成源的**前一台**（不重搜已完成的连续段）；窗首源就没完成时跳过它本身
+/// 保证游标前进；窗内源全部完成时取**窗末**。
+///
+/// ⚠️ 窗内全完成的分支必须是 `end - 1`，不能是「最后返回那台源的下标」——
+/// 完成顺序是 FuturesUnordered 的乱序，实测 10 源窗会返回 lastIndex≈start，
+/// 前端拿着它反复重扫同一段（每次只前进 1 台源）且 isEnd 永远 false，搜索永远收不了尾。
+fn sse_next_from(
+    start: usize,
+    end: usize,
+    done: &std::collections::HashSet<usize>,
+    last_index: i64,
+) -> i64 {
+    match (start..end).find(|i| !done.contains(i)) {
+        Some(i) => {
+            let cand = (i as i64 - 1).max(last_index);
+            if cand <= last_index && !done.is_empty() {
+                // 窗首源没完成: 跳过它本身, 保证游标前进(该源本窗放弃, 可加载更多重试)
+                (i as i64).min(end as i64 - 1)
+            } else {
+                cand
+            }
+        }
+        // 窗内全完成: 游标落到窗末, 下一窗从 end 起(最后一窗则 isEnd=true)
+        None => (end as i64 - 1).max(last_index),
+    }
 }
 
 fn search_timeout_param(
@@ -13554,6 +13569,29 @@ mod tests {
         assert_eq!(sse_ramp_delay_ms(9), 150);
         assert_eq!(sse_ramp_delay_ms(10), 300);
         assert_eq!(sse_ramp_delay_ms(usize::MAX), u64::MAX); // 饱和，不 panic
+    }
+
+    /// 续接点：窗内全完成取窗末(乱序也不能倒退)、首源卡住时前进 1、中段缺源取前一台
+    #[test]
+    fn sse_next_from_cases() {
+        use std::collections::HashSet;
+        // 窗内 10 台全完成 → 窗末 9（无论完成顺序；旧实现取「最后返回那台」会随机倒退）
+        let all: HashSet<usize> = (0..10).collect();
+        assert_eq!(sse_next_from(0, 10, &all, -1), 9);
+        // 最后一窗：全完成 + 窗末就是最后一个源 → 前端据此得到 isEnd
+        let last_win: HashSet<usize> = (40..46).collect();
+        assert_eq!(sse_next_from(40, 46, &last_win, 39), 45);
+        // 窗首源就卡住 → 跳过它本身(游标 +1)，不能原地打转
+        let first_hung: HashSet<usize> = [0usize].into_iter().collect();
+        assert_eq!(sse_next_from(0, 10, &first_hung, -1), 0);
+        // 前 5 台完成、第 6 台未完成 → 续接点 4（下一窗从 5 起）
+        let prefix: HashSet<usize> = (0..5).collect();
+        assert_eq!(sse_next_from(0, 10, &prefix, -1), 4);
+        // 完成集合乱序 + 中间缺源 → 仍取第一个未完成源的前一台
+        let gaps: HashSet<usize> = [0usize, 1, 2, 4, 7].into_iter().collect();
+        assert_eq!(sse_next_from(0, 10, &gaps, -1), 2);
+        // 不倒退：算出来的值低于入参 last_index 时以 last_index 为准
+        assert_eq!(sse_next_from(0, 3, &HashSet::new(), 100), 100);
     }
 
     /// 独立临时目录存储（避免污染真实 storage/reader.db）
