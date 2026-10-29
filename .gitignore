@@ -15,3 +15,7 @@ deploy/web-dist.old/
 deploy/storage/
 # 本地临时产物：实验脚本、python venv、临时 cargo home、验证截图
 .tmp/
+
+# Python 中间产物（scripts/graph-demo 下的分析脚本）
+__pycache__/
+*.pyc

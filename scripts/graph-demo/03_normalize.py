@@ -25,10 +25,15 @@ import re
 from collections import Counter, defaultdict, deque
 
 BOOK = "绍宋"
+# v2 覆盖层：复核专批 + 逐条核过正文的人工校正（见 scripts/graph-demo/v2_overrides.json）
+OVR_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "v2_overrides.json")
+OVR = json.load(open(OVR_PATH, encoding="utf-8")) if os.path.exists(OVR_PATH) else None
+EXTRA_KEEP = []          # 必须留到最后的人物下标（新增人物 / 有势力归属的人物）
 SCHEMA = "graph-demo-v1"
 TOTAL_CHAPTERS = 395     # 已缓存且有正文章号的章节数
 GAP = 20                 # 「>=20 章未出场」视为角色线结束
-OUT = "/home/hehecat/code/reader/frontend/public/graph-demo-data.json"
+OUT = os.environ.get("GRAPH_DEMO_OUT") or \
+    "/home/hehecat/code/reader/frontend/public/graph-demo-data.json"
 BATCH_DIR = "/home/hehecat/code/.tmp/gd/batches"
 CHAP = "/home/hehecat/code/.tmp/gd/chapters.json"
 META = "/home/hehecat/code/.tmp/gd/sample_meta.json"
@@ -54,17 +59,17 @@ FACTION_MAP = {
     "金国": "金国", "金军": "金国", "金廷": "金国", "大金": "金国", "女真": "金国",
     "伪齐": "伪齐", "齐": "伪齐", "刘齐": "伪齐", "齐国": "伪齐",
     "西夏": "西夏", "夏国": "西夏",
-    "赤心队": "赤心队",
+    "赤心队": "御营",
     "岳家军": "岳家军", "岳部": "岳家军", "岳家军部": "岳家军",
-    "常胜军": "常胜军",
+    "常胜军": "金国",
     "御营": "御营", "御营军": "御营", "御营司": "御营",
     "梁山泊": "梁山泊", "梁山": "梁山泊",
     "八字军": "八字军",
 }
 FACTION_KIND = {"宋廷": "势力", "金国": "势力", "伪齐": "势力", "西夏": "势力",
-                "御营": "组织", "赤心队": "组织", "岳家军": "组织",
-                "常胜军": "组织", "梁山泊": "组织", "八字军": "组织"}
-MAX_FACTIONS = 10
+                "御营": "组织", "岳家军": "组织",
+                "梁山泊": "组织", "八字军": "组织"}
+MAX_FACTIONS = 9        # 目标 6-9 个势力（赤心队/常胜军 已并入御营/金国）
 # ---- demo 规模收敛（父 agent 要求：人物 120-140 / 关系 240-300，最大度数 <12%）----
 TARGET_CHARS = 133          # 保留人物基准（亲缘/关键人物可顶到 MAX_CHARS）
 MAX_CHARS = 139             # 硬上限
@@ -76,8 +81,6 @@ EDGE_RANK = {"parent": 0, "spouse": 0, "sibling": 0, "master": 0, "disciple": 0,
              "enemy": 1, "ally": 2, "other": 3}
 # 势力：role 里点名的「役属势力」也算 membership（岳飞部将 -> 岳家军）
 ROLE_FACTION_CUE = [
-    ("赤心队", r"赤心队"),
-    ("常胜军", r"常胜军"),
     ("岳家军", r"岳飞部|岳飞长子|岳飞次子|岳飞之弟|岳飞帐|岳飞麾|岳家军|岳飞亲兵"),
     ("八字军", r"八字军"),
     ("御营", r"御营"),
@@ -86,10 +89,13 @@ ROLE_FACTION_CUE = [
     ("金国", r"金国|金军"),
 ]
 # 正文里存在、但模型没给 leader 的小势力：直接钉一个领袖，保证势力不消失
-SEED_FACTIONS = [("赤心队", "刘晏"), ("常胜军", "郭药师")]
+SEED_FACTIONS = [("八字军", "王彦"), ("梁山泊", "张荣")]
 
 # 名字相近但不是同一人的别名（否则会把两个人的边并到一个人头上）
-ALIAS_DROP = {"胡寅": {"胡闳休"}, "刘光世": {"刘正彦"}, "王彦": {"王彦章"}}
+ALIAS_DROP = {}
+# v2：这三条是上一轮把两个人并成一个人的错误别名，必须在并查集合并「之前」摘掉，
+# 否则胡闳休/刘正彦 会先被合并进胡寅/刘光世 的 cluster，后面再拆已经回不去了。
+BLOCKED_ALIASES = {"胡闳休": "胡寅", "刘正彦": "刘光世", "王彦章": "王彦"}
 
 # 逐条对过正文的手工校正（模型把方向/端点/类型搞错的亲缘边）
 # 键都是「无向对」：存成 a->b 还是 b->a 都能命中
@@ -102,7 +108,8 @@ KIN_RETYPE = {                   # 键 (a, b, 旧类型)；值 (新类型, label
     ("赵玖", "郑太后", "parent"): ("other", "嫡母"),          # 郑是太上道君正宫，非赵玖生母
     ("完颜挞懒", "蒲察鹘拔鲁", "parent"): ("other", "女婿"),   # 「女婿、也就是蒲察鹘拔鲁」
     ("薛元礼", "高守义", "parent"): ("other", "岳父"),         # 「他岳父薛元礼」
-    ("李光", "李经", "sibling"): ("ally", "至交"),            # 李经是李纲三弟，李光与李纲是至交
+    ("李光", "李经", "sibling"): ("ally", "至交"),            # 李纲三弟李经，李光与李纲是至交
+    ("汪伯彦", "胡闳休", "parent"): ("other", "女婿"),         # 「二女婿胡闳休」——姻亲不是亲子
 }
 KIN_LABEL = {                    # 结义兄弟：保留 sibling（留在家族树），用 label 说明是义兄弟
     ("张显", "岳飞", "sibling"): "结义兄弟",
@@ -340,7 +347,7 @@ def merge_characters(batches):
                 toks.add(extra)
             for a in c.get("aliases") or []:
                 a = clean_name(a)
-                if a and a != nm:
+                if a and a != nm and a not in BLOCKED_ALIASES:
                     toks.add(a)
             fac = c.get("faction")
             fac = FACTION_MAP.get((fac or "").strip()) if fac else None
@@ -755,6 +762,99 @@ def main():
         best2[k] = r
     rels = list(best2.values())
 
+    # --- v2 覆盖层：复核结论 + 人工校正（不改 JSON 成品，集中在这里落地）---
+    if OVR:
+        bn = {c["name"]: i for i, c in enumerate(clusters)}
+        for rec in OVR.get("add_characters") or []:
+            if rec["name"] in bn:
+                continue
+            clusters.append({"name": rec["name"],
+                             "aliases": list(rec.get("aliases") or []),
+                             "role": rec.get("role") or "",
+                             "faction": rec.get("faction"),
+                             "gender": rec.get("gender") or "未知",
+                             "records": 1})
+            bn[rec["name"]] = len(clusters) - 1
+            dropped["v2新增人物"] += 1
+        _CL_TOKS[:] = [[c["name"]] + c["aliases"] for c in clusters]
+        for nm, fac in (OVR.get("faction") or {}).items():
+            i = bn.get(nm)
+            if i is not None:
+                clusters[i]["faction"] = fac
+                EXTRA_KEEP.append(i)
+
+        # 1) 敌对复核：原 enemy 边改成正文支持的真实类型
+        idx_e = {}
+        for r in rels:
+            if r["t"] == "enemy":
+                idx_e.setdefault(frozenset((r["a"], r["b"])), r)
+        for e in OVR.get("retype") or []:
+            a, b = bn.get(e["from"]), bn.get(e["to"])
+            if a is None or b is None:
+                continue
+            r = idx_e.get(frozenset((a, b)))
+            if r is None:
+                continue
+            r["t"] = e["new"]
+            r["q"] = e.get("quote") or r["q"]
+            r["ch"] = e.get("chapter") or r["ch"]
+            if e.get("label"):
+                r["label"] = e["label"]
+            r["pin"] = True
+            dropped["v2敌对复核改判"] += 1
+
+        # 1b) 复核确认仍敌对的边钉住（不然会被度数上限当成弱边砍掉）
+        for e in OVR.get("keep_enemy") or []:
+            a, b = bn.get(e["from"]), bn.get(e["to"])
+            if a is None or b is None:
+                continue
+            r = idx_e.get(frozenset((a, b)))
+            if r is not None and r["t"] == "enemy":
+                r["pin"] = True
+
+        # 2) 人工校正 / 补抽出的边
+        for e in OVR.get("add_relations") or []:
+            a, b = bn.get(e["from"]), bn.get(e["to"])
+            if a is None or b is None or a == b:
+                continue
+            new = {"a": a, "b": b, "t": e["type"], "ch": e["chapter"],
+                   "q": e["quote"], "pin": True}
+            if e.get("label"):
+                new["label"] = e["label"]
+            rels.append(new)
+            dropped["v2人工补边"] += 1
+
+        # 3) 人工剔除
+        for e in OVR.get("drop_relations") or []:
+            a, b = bn.get(e["from"]), bn.get(e["to"])
+            if a is None or b is None:
+                continue
+            before3 = len(rels)
+            rels = [r for r in rels
+                    if not (r["t"] == e["type"]
+                            and {(r["a"], r["b"]), (r["b"], r["a"])} & {(a, b)})]
+            dropped["v2人工剔边"] += before3 - len(rels)
+
+        # 4) 改判后可能撞出重复 / 同对既是盟友又是敌人：再压一次
+        best3 = {}
+        for r in sorted(rels, key=lambda r: (0 if r.get("pin") else 1, -len(r["q"]), r["ch"])):
+            k = (frozenset((r["a"], r["b"])), r["t"]) if r["t"] in SYMMETRIC \
+                else (r["a"], r["b"], r["t"])
+            if k in best3:
+                dropped["去重"] += 1
+                continue
+            best3[k] = r
+        rels = list(best3.values())
+        ts = {}
+        for r in rels:
+            ts.setdefault(frozenset((r["a"], r["b"])), set()).add(r["t"])
+        bad3 = {k for k, v in ts.items() if {"ally", "enemy"} <= v}
+        if bad3:
+            before4 = len(rels)
+            rels = [r for r in rels
+                    if not (frozenset((r["a"], r["b"])) in bad3 and r["t"] == "ally")]
+            dropped["v2盟友/敌对冲突"] += before4 - len(rels)
+
     # --- generation：加权并查集（父子差 1 优先，夫妻/兄弟同代次之，冲突边丢弃）---
     gp = list(range(len(clusters)))
     pot = [0] * len(clusters)
@@ -835,6 +935,8 @@ def main():
         _k = resolve(_nm)
         if _k is not None:
             must_keep.add(_k)
+    for _i in EXTRA_KEEP:                     # v2 新增 / 有势力归属的人物不许被裁掉
+        must_keep.add(_i)
     clusters, rels, remap = prune_for_demo(clusters, rels, dropped, must_keep)
     old_of = [old for old, _ in sorted(remap.items(), key=lambda kv: kv[1])]
     gen_new = {new: gen_by_old[old] for new, old in enumerate(old_of)}
@@ -929,6 +1031,16 @@ def main():
         out_factions.append({"id": fid[f], "name": f, "kind": FACTION_KIND[f],
                              "leader": cid[leader] if leader is not None else None,
                              "members": [cid[i] for i in mem]})
+    if OVR and OVR.get("faction_leader"):      # 人工指定领袖（正文里点明的长官）
+        for _f, _who in OVR["faction_leader"].items():
+            if _f not in fid:
+                continue
+            _k = resolve2(_who)
+            if _k is None or _k not in fac_members.get(_f, ()):
+                continue
+            for _of in out_factions:
+                if _of["name"] == _f:
+                    _of["leader"] = cid[_k]
     mem_of = {i: sorted(fs, key=lambda f: fid[f]) for i, fs in
               ((i, {f for f in chosen if i in fac_members[f]}) for i in range(len(clusters)))}
 

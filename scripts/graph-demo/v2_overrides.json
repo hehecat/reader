@@ -1,0 +1,1783 @@
+{
+ "retype": [
+  {
+   "from": "赵玖",
+   "to": "黄潜善",
+   "old": "enemy",
+   "new": "other",
+   "quote": "黄相公与汪枢相准备让官家巡幸扬州",
+   "chapter": 3,
+   "label": "同僚",
+   "why": "政见不同同朝官"
+  },
+  {
+   "from": "黄潜善",
+   "to": "李纲",
+   "old": "enemy",
+   "new": "other",
+   "quote": "李相公准备让官家巡幸南阳",
+   "chapter": 3,
+   "label": "政见",
+   "why": "政见之争"
+  },
+  {
+   "from": "汪伯彦",
+   "to": "宗泽",
+   "old": "enemy",
+   "new": "other",
+   "quote": "为副枢密使",
+   "chapter": 98,
+   "label": "同僚",
+   "why": "同僚上下级"
+  },
+  {
+   "from": "康履",
+   "to": "李纲",
+   "old": "enemy",
+   "new": "other",
+   "quote": "那老头比李纲还臭还硬",
+   "chapter": 5,
+   "label": "同僚",
+   "why": "同朝为官不合"
+  },
+  {
+   "from": "康履",
+   "to": "宗泽",
+   "old": "enemy",
+   "new": "other",
+   "quote": "宗泽表面上和他们一样出身大元帅府",
+   "chapter": 5,
+   "label": "同僚",
+   "why": "同僚不合"
+  },
+  {
+   "from": "赵玖",
+   "to": "张邦昌",
+   "old": "enemy",
+   "new": "other",
+   "quote": "张邦昌便请回了",
+   "chapter": 6,
+   "label": "旧识",
+   "why": "仅提及旧事"
+  },
+  {
+   "from": "赵玖",
+   "to": "李纲",
+   "old": "enemy",
+   "new": "other",
+   "quote": "当时在位的李相公……也就是李纲",
+   "chapter": 3,
+   "label": "君臣",
+   "why": "君臣"
+  },
+  {
+   "from": "李纲",
+   "to": "张邦昌",
+   "old": "enemy",
+   "new": "other",
+   "quote": "最想杀张邦昌的，不是别人，正是李相公",
+   "chapter": 6,
+   "label": "政见",
+   "why": "政见仇怨非交战"
+  },
+  {
+   "from": "陈东",
+   "to": "赵玖",
+   "old": "enemy",
+   "new": "other",
+   "quote": "陈东被自己杀了",
+   "chapter": 5,
+   "label": "旧识",
+   "why": "原主所为非两人敌对"
+  },
+  {
+   "from": "张浚",
+   "to": "黄潜善",
+   "old": "enemy",
+   "new": "other",
+   "quote": "弹劾宰相黄潜善、枢相汪伯彦",
+   "chapter": 7,
+   "label": "政见",
+   "why": "弹劾政争"
+  },
+  {
+   "from": "张浚",
+   "to": "李纲",
+   "old": "enemy",
+   "new": "other",
+   "quote": "新的御史中丞虽然挺讨厌李纲",
+   "chapter": 12,
+   "label": "政见",
+   "why": "政见不合"
+  },
+  {
+   "from": "张浚",
+   "to": "康履",
+   "old": "enemy",
+   "new": "other",
+   "quote": "内侍省押班康履",
+   "chapter": 7,
+   "label": "政见",
+   "why": "弹劾政争"
+  },
+  {
+   "from": "李纲",
+   "to": "汪伯彦",
+   "old": "enemy",
+   "new": "other",
+   "quote": "黄相公与汪枢相准备让官家巡幸扬州",
+   "chapter": 3,
+   "label": "政见",
+   "why": "政见之争"
+  },
+  {
+   "from": "李纲",
+   "to": "宇文虚中",
+   "old": "enemy",
+   "new": "other",
+   "quote": "被李纲逐出了后殿",
+   "chapter": 15,
+   "label": "政见",
+   "why": "贬斥政争"
+  },
+  {
+   "from": "赵鼎",
+   "to": "韩世忠",
+   "old": "enemy",
+   "new": "other",
+   "quote": "负责去迎接联系韩世忠",
+   "chapter": 15,
+   "label": "同僚",
+   "why": "同僚联系"
+  },
+  {
+   "from": "张悫",
+   "to": "吕好问",
+   "old": "enemy",
+   "new": "other",
+   "quote": "官家与太尉说话，无事须避宰相",
+   "chapter": 23,
+   "label": "同僚",
+   "why": "同朝政见之争"
+  },
+  {
+   "from": "刘光世",
+   "to": "王渊",
+   "old": "enemy",
+   "new": "other",
+   "quote": "上面还有一个王渊是御营都统制",
+   "chapter": 23,
+   "label": "同僚",
+   "why": "上下级同僚"
+  },
+  {
+   "from": "刘光世",
+   "to": "张俊",
+   "old": "enemy",
+   "new": "other",
+   "quote": "刘光世、后军统制张俊、左军统制韩世忠",
+   "chapter": 12,
+   "label": "同僚",
+   "why": "同僚部将"
+  },
+  {
+   "from": "赵玖",
+   "to": "范琼",
+   "old": "enemy",
+   "new": "other",
+   "quote": "南面襄阳范琼且不提",
+   "chapter": 89,
+   "label": "旧识",
+   "why": "仅提及无敌对"
+  },
+  {
+   "from": "王德",
+   "to": "刘光世",
+   "old": "enemy",
+   "new": "other",
+   "quote": "跟在刘光世身后",
+   "chapter": 30,
+   "label": "上下级",
+   "why": "部将随主公"
+  },
+  {
+   "from": "傅庆",
+   "to": "刘光世",
+   "old": "enemy",
+   "new": "other",
+   "quote": "跟在刘光世身后",
+   "chapter": 30,
+   "label": "上下级",
+   "why": "部将随主公"
+  },
+  {
+   "from": "完颜兀术",
+   "to": "张俊",
+   "old": "enemy",
+   "new": "other",
+   "quote": "与张俊彻夜讨论",
+   "chapter": 26,
+   "label": "旧识",
+   "why": "议事非敌对"
+  },
+  {
+   "from": "赵玖",
+   "to": "刘光世",
+   "old": "enemy",
+   "new": "other",
+   "quote": "突破了刘光世的京东西路防线",
+   "chapter": 21,
+   "label": "君臣",
+   "why": "金军攻宋非君臣"
+  },
+  {
+   "from": "张俊",
+   "to": "赵球",
+   "old": "enemy",
+   "new": "other",
+   "quote": "老乡兼故人异地相见",
+   "chapter": 39,
+   "label": "旧识",
+   "why": "旧识会面"
+  },
+  {
+   "from": "赵玖",
+   "to": "王渊",
+   "old": "enemy",
+   "new": "other",
+   "quote": "他杨沂中和那个王渊，其实根本不值一提",
+   "chapter": 4,
+   "label": "君臣",
+   "why": "君臣上下级"
+  },
+  {
+   "from": "阿里",
+   "to": "完颜兀术",
+   "old": "enemy",
+   "new": "other",
+   "quote": "见到是阿里出言，兀术翻身坐起",
+   "chapter": 37,
+   "label": "同僚",
+   "why": "同僚议事"
+  },
+  {
+   "from": "完颜塞里",
+   "to": "刘麟",
+   "old": "enemy",
+   "new": "ally",
+   "quote": "让儿子靠近完颜兀术",
+   "chapter": 64,
+   "label": "同盟",
+   "why": "随侍效力"
+  },
+  {
+   "from": "张浚",
+   "to": "张俊",
+   "old": "enemy",
+   "new": "other",
+   "quote": "张浚的命中贵人张俊",
+   "chapter": 22,
+   "label": "同僚",
+   "why": "同僚"
+  },
+  {
+   "from": "张浚",
+   "to": "韩世忠",
+   "old": "enemy",
+   "new": "other",
+   "quote": "旁边赵鼎、张浚、杨沂中等人",
+   "chapter": 19,
+   "label": "同僚",
+   "why": "同朝为官"
+  },
+  {
+   "from": "张浚",
+   "to": "赵鼎",
+   "old": "enemy",
+   "new": "other",
+   "quote": "年轻的张浚直接昂首相对",
+   "chapter": 7,
+   "label": "同僚",
+   "why": "同僚"
+  },
+  {
+   "from": "杨沂中",
+   "to": "许景衡",
+   "old": "enemy",
+   "new": "other",
+   "quote": "赵玖在杨沂中的护送下走出",
+   "chapter": 88,
+   "label": "旧识",
+   "why": "护从关系"
+  },
+  {
+   "from": "赵玖",
+   "to": "王德",
+   "old": "enemy",
+   "new": "other",
+   "quote": "又看了看立在帷帐边缘一言不发的王德",
+   "chapter": 30,
+   "label": "君臣",
+   "why": "君臣"
+  },
+  {
+   "from": "汪伯彦",
+   "to": "张浚",
+   "old": "enemy",
+   "new": "other",
+   "quote": "臣殿中侍御史张浚弹劾宰相",
+   "chapter": 7,
+   "label": "政见",
+   "why": "弹劾"
+  },
+  {
+   "from": "赵鼎",
+   "to": "汪伯彦",
+   "old": "enemy",
+   "new": "other",
+   "quote": "让汪伯彦拟了道旨意，着赵鼎",
+   "chapter": 28,
+   "label": "同僚",
+   "why": "同朝为官"
+  },
+  {
+   "from": "赵玖",
+   "to": "许景衡",
+   "old": "enemy",
+   "new": "other",
+   "quote": "许大参所领士民队伍",
+   "chapter": 22,
+   "label": "同僚",
+   "why": "同朝为官"
+  },
+  {
+   "from": "完颜兀术",
+   "to": "完颜粘罕",
+   "old": "enemy",
+   "new": "other",
+   "quote": "金军中粘罕、挞懒、兀术三人必然争权",
+   "chapter": 9,
+   "label": "政见",
+   "why": "同国争权"
+  },
+  {
+   "from": "吕颐浩",
+   "to": "林景默",
+   "old": "enemy",
+   "new": "other",
+   "quote": "吕颐浩呵斥的对象乃是户部尚书林杞",
+   "chapter": 120,
+   "label": "政见",
+   "why": "政见之争"
+  },
+  {
+   "from": "张所",
+   "to": "张浚",
+   "old": "enemy",
+   "new": "other",
+   "quote": "张所这个人也随时能让",
+   "chapter": 55,
+   "label": "政见",
+   "why": "政争"
+  },
+  {
+   "from": "吕颐浩",
+   "to": "陈规",
+   "old": "enemy",
+   "new": "other",
+   "quote": "一旁枢密副使吕颐浩直接板着脸",
+   "chapter": 121,
+   "label": "同僚",
+   "why": "同僚"
+  },
+  {
+   "from": "赵玖",
+   "to": "汪伯彦",
+   "old": "enemy",
+   "new": "other",
+   "quote": "汪伯彦因为支持撤往襄阳",
+   "chapter": 131,
+   "label": "君臣",
+   "why": "君臣"
+  },
+  {
+   "from": "万俟卨",
+   "to": "李纲",
+   "old": "enemy",
+   "new": "other",
+   "quote": "李纲李公相即刻发御营中军往前线而去",
+   "chapter": 127,
+   "label": "同僚",
+   "why": "同朝官员非敌对"
+  },
+  {
+   "from": "完颜兀术",
+   "to": "完颜拔离速",
+   "old": "enemy",
+   "new": "other",
+   "quote": "完颜拔离速这些将星相比",
+   "chapter": 119,
+   "label": "同僚",
+   "why": "同僚比较非敌对"
+  },
+  {
+   "from": "吕好问",
+   "to": "赵玖",
+   "old": "enemy",
+   "new": "other",
+   "quote": "赵玖放下了资政殿学士吕好问的奏疏",
+   "chapter": 6,
+   "label": "君臣",
+   "why": "君臣"
+  },
+  {
+   "from": "吕好问",
+   "to": "胡寅",
+   "old": "enemy",
+   "new": "other",
+   "quote": "赵玖还在吕好问、张浚、杨沂中等人",
+   "chapter": 9,
+   "label": "同僚",
+   "why": "同朝举荐非敌对"
+  },
+  {
+   "from": "李纲",
+   "to": "李彦仙",
+   "old": "enemy",
+   "new": "other",
+   "quote": "李孝忠并非是昔日靖康中弹劾李相公不知用兵",
+   "chapter": 55,
+   "label": "旧识",
+   "why": "旧怨已改名投军"
+  },
+  {
+   "from": "李纲",
+   "to": "宗泽",
+   "old": "enemy",
+   "new": "other",
+   "quote": "李纲、宗泽、岳飞他知道是谁",
+   "chapter": 4,
+   "label": "同僚",
+   "why": "同朝官员非敌对"
+  },
+  {
+   "from": "刘子羽",
+   "to": "马扩",
+   "old": "enemy",
+   "new": "other",
+   "quote": "刘参军与马总管有私仇",
+   "chapter": 143,
+   "label": "旧识",
+   "why": "私仇但片段非敌对"
+  },
+  {
+   "from": "万俟卨",
+   "to": "刘子羽",
+   "old": "enemy",
+   "new": "other",
+   "quote": "刘子羽、万俟卨、胡闳休等中下层官吏",
+   "chapter": 120,
+   "label": "同僚",
+   "why": "同朝为官"
+  },
+  {
+   "from": "王彦",
+   "to": "张宪",
+   "old": "enemy",
+   "new": "other",
+   "quote": "这厮是羞辱你",
+   "chapter": 146,
+   "label": "旧识",
+   "why": "口角非敌对"
+  },
+  {
+   "from": "王德",
+   "to": "韩世忠",
+   "old": "enemy",
+   "new": "other",
+   "quote": "仗还得韩世忠、张俊、王德三个人来打",
+   "chapter": 47,
+   "label": "同僚",
+   "why": "同僚部将协同"
+  },
+  {
+   "from": "赵玖",
+   "to": "李光",
+   "old": "enemy",
+   "new": "other",
+   "quote": "李光本能向前，且言语恳切",
+   "chapter": 148,
+   "label": "君臣",
+   "why": "君臣奏对"
+  },
+  {
+   "from": "胡寅",
+   "to": "吕颐浩",
+   "old": "enemy",
+   "new": "other",
+   "quote": "张浚跟赵官家是不懂规矩的",
+   "chapter": 117,
+   "label": "旧识",
+   "why": "议事荐人非敌对"
+  },
+  {
+   "from": "杜充",
+   "to": "岳飞",
+   "old": "enemy",
+   "new": "other",
+   "quote": "杜充与岳飞相处不赖",
+   "chapter": 141,
+   "label": "同僚",
+   "why": "同僚相处不错"
+  },
+  {
+   "from": "范宗尹",
+   "to": "刘子羽",
+   "old": "enemy",
+   "new": "other",
+   "quote": "范宗尹、刘子羽二人名下划了横线",
+   "chapter": 203,
+   "label": "同僚",
+   "why": "同朝并列被考量"
+  },
+  {
+   "from": "岳飞",
+   "to": "郦琼",
+   "old": "enemy",
+   "new": "other",
+   "quote": "与岳飞隐隐不对付的郦琼",
+   "chapter": 146,
+   "label": "旧识",
+   "why": "不和但非敌对"
+  },
+  {
+   "from": "李逵",
+   "to": "张荣",
+   "old": "enemy",
+   "new": "other",
+   "quote": "流浪降服于张荣的李逵李统制",
+   "chapter": 123,
+   "label": "旧识",
+   "why": "旧部降服非敌对"
+  },
+  {
+   "from": "李逵",
+   "to": "岳飞",
+   "old": "enemy",
+   "new": "other",
+   "quote": "岳飞此时微微一振",
+   "chapter": 123,
+   "label": "上下级",
+   "why": "部将禀报主帅"
+  },
+  {
+   "from": "岳飞",
+   "to": "孔彦舟",
+   "old": "enemy",
+   "new": "ally",
+   "quote": "张所下令岳飞",
+   "chapter": 122,
+   "label": "同盟",
+   "why": "奉命合力"
+  },
+  {
+   "from": "完颜挞懒",
+   "to": "韩世忠",
+   "old": "enemy",
+   "new": "other",
+   "quote": "受制于当今金国国主嫡属完颜挞懒",
+   "chapter": 70,
+   "label": "上下级",
+   "why": "金内归属非宋将敌"
+  },
+  {
+   "from": "吕颐浩",
+   "to": "汪伯彦",
+   "old": "enemy",
+   "new": "other",
+   "quote": "吕颐浩与汪伯彦、王渊都有些想说话",
+   "chapter": 121,
+   "label": "同僚",
+   "why": "同朝枢臣"
+  },
+  {
+   "from": "李光",
+   "to": "万俟卨",
+   "old": "enemy",
+   "new": "other",
+   "quote": "主动邀他一同前往",
+   "chapter": 136,
+   "label": "同僚",
+   "why": "同朝邻里友善"
+  },
+  {
+   "from": "吕好问",
+   "to": "李纲",
+   "old": "enemy",
+   "new": "other",
+   "quote": "既不趁机攻击李纲也不多言",
+   "chapter": 7,
+   "label": "政见",
+   "why": "政见之争非敌对"
+  },
+  {
+   "from": "许景衡",
+   "to": "李纲",
+   "old": "enemy",
+   "new": "other",
+   "quote": "李相公（李纲）、许大参（许景衡）他们毕竟",
+   "chapter": 44,
+   "label": "同僚",
+   "why": "同朝宰相并列"
+  },
+  {
+   "from": "合不勒",
+   "to": "完颜吴乞买",
+   "old": "enemy",
+   "new": "other",
+   "quote": "与金人进行外交斡旋",
+   "chapter": 170,
+   "label": "旧识",
+   "why": "外交斡旋非敌对"
+  },
+  {
+   "from": "赵玖",
+   "to": "刘豫",
+   "old": "enemy",
+   "new": "other",
+   "quote": "刘豫一个正经进士",
+   "chapter": 171,
+   "label": "旧识",
+   "why": "无直接敌对片段"
+  },
+  {
+   "from": "吴玠",
+   "to": "万俟卨",
+   "old": "enemy",
+   "new": "other",
+   "quote": "吴玠小心遣人来打扫",
+   "chapter": 177,
+   "label": "旧识",
+   "why": "照料囚犯非敌对"
+  },
+  {
+   "from": "胡寅",
+   "to": "曲端",
+   "old": "enemy",
+   "new": "other",
+   "quote": "曲端跋扈日久，已不可用",
+   "chapter": 173,
+   "label": "政见",
+   "why": "政见之争"
+  },
+  {
+   "from": "吕好问",
+   "to": "潘贤妃",
+   "old": "enemy",
+   "new": "other",
+   "quote": "力劝刚刚登基的官家不要立潘贤妃为后",
+   "chapter": 178,
+   "label": "政见",
+   "why": "政见之争"
+  },
+  {
+   "from": "赵玖",
+   "to": "曲端",
+   "old": "enemy",
+   "new": "other",
+   "quote": "赵官家也没看出来曲端",
+   "chapter": 119,
+   "label": "君臣",
+   "why": "君臣"
+  },
+  {
+   "from": "韩世忠",
+   "to": "张俊",
+   "old": "enemy",
+   "new": "other",
+   "quote": "刘光世、后军统制张俊、左军统制韩世忠",
+   "chapter": 12,
+   "label": "同僚",
+   "why": "同僚"
+  },
+  {
+   "from": "杨沂中",
+   "to": "张荣",
+   "old": "enemy",
+   "new": "other",
+   "quote": "是友非敌，格外欣赏",
+   "chapter": 186,
+   "label": "旧识",
+   "why": "友非敌"
+  },
+  {
+   "from": "李经",
+   "to": "岳飞",
+   "old": "enemy",
+   "new": "other",
+   "quote": "受到李光、李经弹劾",
+   "chapter": 262,
+   "label": "政见",
+   "why": "弹劾算政见之争"
+  },
+  {
+   "from": "胡寅",
+   "to": "李光",
+   "old": "enemy",
+   "new": "other",
+   "quote": "两位殿中侍御史，一个胡寅，一个",
+   "chapter": 102,
+   "label": "同僚",
+   "why": "同僚"
+  },
+  {
+   "from": "张俊",
+   "to": "岳飞",
+   "old": "enemy",
+   "new": "other",
+   "quote": "与岳飞、韩世忠齐名的张俊",
+   "chapter": 23,
+   "label": "同僚",
+   "why": "同僚"
+  },
+  {
+   "from": "李彦仙",
+   "to": "王彦",
+   "old": "enemy",
+   "new": "ally",
+   "quote": "打通了与八字军王彦部的联络",
+   "chapter": 113,
+   "label": "同盟",
+   "why": "联络协同"
+  },
+  {
+   "from": "李光",
+   "to": "吕好问",
+   "old": "enemy",
+   "new": "other",
+   "quote": "李光、翰林学士李若朴等人都置若罔闻",
+   "chapter": 139,
+   "label": "政见",
+   "why": "政见不同"
+  },
+  {
+   "from": "胡铨",
+   "to": "汪伯彦",
+   "old": "enemy",
+   "new": "other",
+   "quote": "状元赵伯药为枢相汪伯彦所捉",
+   "chapter": 201,
+   "label": "旧识",
+   "why": "榜下捉婿非敌对"
+  },
+  {
+   "from": "许景衡",
+   "to": "王渊",
+   "old": "enemy",
+   "new": "other",
+   "quote": "王渊依次赶到",
+   "chapter": 93,
+   "label": "同僚",
+   "why": "同朝议事"
+  },
+  {
+   "from": "完颜讹里朵",
+   "to": "完颜吴乞买",
+   "old": "enemy",
+   "new": "other",
+   "quote": "吴乞买也罢",
+   "chapter": 218,
+   "label": "君臣",
+   "why": "同族君臣"
+  },
+  {
+   "from": "完颜讹里朵",
+   "to": "完颜娄室",
+   "old": "enemy",
+   "new": "other",
+   "quote": "与完颜娄室一文一武",
+   "chapter": 113,
+   "label": "同僚",
+   "why": "同僚"
+  },
+  {
+   "from": "完颜吴乞买",
+   "to": "完颜粘罕",
+   "old": "enemy",
+   "new": "other",
+   "quote": "完颜吴乞买也好，完颜粘罕也罢",
+   "chapter": 10,
+   "label": "同僚",
+   "why": "同朝权势之争"
+  },
+  {
+   "from": "完颜斡本",
+   "to": "完颜粘罕",
+   "old": "enemy",
+   "new": "other",
+   "quote": "完颜斡本居左，移赉勃极烈完颜宗翰居右",
+   "chapter": 117,
+   "label": "同僚",
+   "why": "同朝并坐"
+  },
+  {
+   "from": "吴玠",
+   "to": "曲端",
+   "old": "enemy",
+   "new": "other",
+   "quote": "和下属吴玠一起",
+   "chapter": 117,
+   "label": "上下级",
+   "why": "上下级"
+  },
+  {
+   "from": "王德",
+   "to": "刘錡",
+   "old": "enemy",
+   "new": "other",
+   "quote": "王德资历如何能指挥的动",
+   "chapter": 72,
+   "label": "同僚",
+   "why": "同僚议事"
+  },
+  {
+   "from": "吴玠",
+   "to": "刘锡",
+   "old": "enemy",
+   "new": "other",
+   "quote": "刘锡拦住",
+   "chapter": 230,
+   "label": "同僚",
+   "why": "同僚护持"
+  },
+  {
+   "from": "吕颐浩",
+   "to": "吕好问",
+   "old": "enemy",
+   "new": "other",
+   "quote": "吕颐浩根本不需要吕好问来插嘴",
+   "chapter": 120,
+   "label": "政见",
+   "why": "政见之争"
+  },
+  {
+   "from": "张浚",
+   "to": "赵玖",
+   "old": "enemy",
+   "new": "other",
+   "quote": "殿中侍御史张浚的奏疏",
+   "chapter": 6,
+   "label": "君臣",
+   "why": "君臣议事"
+  },
+  {
+   "from": "赵鼎",
+   "to": "赵玖",
+   "old": "enemy",
+   "new": "other",
+   "quote": "赵玖出帐后更是即刻起身",
+   "chapter": 4,
+   "label": "君臣",
+   "why": "君臣"
+  },
+  {
+   "from": "马伸",
+   "to": "岳飞",
+   "old": "enemy",
+   "new": "other",
+   "quote": "马伸的札子上",
+   "chapter": 120,
+   "label": "同僚",
+   "why": "同朝为官"
+  },
+  {
+   "from": "马伸",
+   "to": "杨沂中",
+   "old": "enemy",
+   "new": "other",
+   "quote": "马伸只能弹劾杨沂中",
+   "chapter": 259,
+   "label": "政见",
+   "why": "弹劾非敌对"
+  },
+  {
+   "from": "李光",
+   "to": "岳飞",
+   "old": "enemy",
+   "new": "other",
+   "quote": "补李光为御史中丞",
+   "chapter": 182,
+   "label": "同僚",
+   "why": "同朝任职"
+  },
+  {
+   "from": "朱胜非",
+   "to": "吕好问",
+   "old": "enemy",
+   "new": "other",
+   "quote": "首相吕好问、礼部尚书朱胜非",
+   "chapter": 184,
+   "label": "同僚",
+   "why": "同僚"
+  },
+  {
+   "from": "吕颐浩",
+   "to": "李纲",
+   "old": "enemy",
+   "new": "other",
+   "quote": "吕颐浩呵斥的对象乃是",
+   "chapter": 120,
+   "label": "政见",
+   "why": "上官训斥"
+  },
+  {
+   "from": "李光",
+   "to": "朱胜非",
+   "old": "enemy",
+   "new": "other",
+   "quote": "引得李光、朱胜非、刘子羽等",
+   "chapter": 198,
+   "label": "同僚",
+   "why": "同朝为官"
+  },
+  {
+   "from": "岳飞",
+   "to": "田师中",
+   "old": "enemy",
+   "new": "other",
+   "quote": "田师中各引岳飞、张俊所部",
+   "chapter": 232,
+   "label": "同僚",
+   "why": "同僚部将"
+  },
+  {
+   "from": "完颜兀术",
+   "to": "完颜活女",
+   "old": "enemy",
+   "new": "ally",
+   "quote": "此番明摆着是去夺活女兄弟的兵权",
+   "chapter": 300,
+   "label": "同盟",
+   "why": "协同作战"
+  },
+  {
+   "from": "耶律余睹",
+   "to": "耶律马五",
+   "old": "enemy",
+   "new": "other",
+   "quote": "耶律余睹兵权转移",
+   "chapter": 126,
+   "label": "同僚",
+   "why": "同僚夺权"
+  },
+  {
+   "from": "耶律余睹",
+   "to": "耶律大石",
+   "old": "enemy",
+   "new": "other",
+   "quote": "耶律余睹恍恍惚惚",
+   "chapter": 301,
+   "label": "旧识",
+   "why": "同族非同阵营"
+  },
+  {
+   "from": "赵玖",
+   "to": "李乾顺",
+   "old": "enemy",
+   "new": "other",
+   "quote": "询问：“眼下西夏国主是谁",
+   "chapter": 273,
+   "label": "旧识",
+   "why": "非敌对"
+  },
+  {
+   "from": "耶律大石",
+   "to": "李乾顺",
+   "old": "enemy",
+   "new": "other",
+   "quote": "被李乾顺制止了而已",
+   "chapter": 308,
+   "label": "旧识",
+   "why": "非直接敌对"
+  },
+  {
+   "from": "完颜兀术",
+   "to": "突合速",
+   "old": "enemy",
+   "new": "other",
+   "quote": "纷纷向兀术抱怨",
+   "chapter": 302,
+   "label": "同僚",
+   "why": "同僚抱怨"
+  },
+  {
+   "from": "薛元礼",
+   "to": "岳飞",
+   "old": "enemy",
+   "new": "other",
+   "quote": "朝薛元礼远远随意一拱手",
+   "chapter": 306,
+   "label": "旧识",
+   "why": "外交会面"
+  },
+  {
+   "from": "岳飞",
+   "to": "李乾顺",
+   "old": "enemy",
+   "new": "other",
+   "quote": "劝夏主李乾顺妥善处置",
+   "chapter": 298,
+   "label": "旧识",
+   "why": "书信劝说"
+  },
+  {
+   "from": "完颜兀术",
+   "to": "合不勒",
+   "old": "enemy",
+   "new": "other",
+   "quote": "又是许诺乞颜部的合不勒汗为蒙兀国王",
+   "chapter": 322,
+   "label": "旧识",
+   "why": "拉拢并非敌对"
+  },
+  {
+   "from": "耶律大石",
+   "to": "赵玖",
+   "old": "enemy",
+   "new": "other",
+   "quote": "几乎算是与大宋官家一般的利害人物",
+   "chapter": 301,
+   "label": "旧识",
+   "why": "类比非敌对"
+  },
+  {
+   "from": "李经",
+   "to": "赵玖",
+   "old": "enemy",
+   "new": "other",
+   "quote": "御史李经忽然上书弹劾",
+   "chapter": 336,
+   "label": "政见",
+   "why": "弹劾属政见之争"
+  },
+  {
+   "from": "王彦",
+   "to": "曲端",
+   "old": "enemy",
+   "new": "other",
+   "quote": "也就是王渊、曲端，也各自失态",
+   "chapter": 198,
+   "label": "同僚",
+   "why": "同僚非敌对"
+  },
+  {
+   "from": "张浚",
+   "to": "吕颐浩",
+   "old": "enemy",
+   "new": "other",
+   "quote": "但胡明仲似乎更妥帖",
+   "chapter": 117,
+   "label": "政见",
+   "why": "政见之争"
+  },
+  {
+   "from": "赵鼎",
+   "to": "吕颐浩",
+   "old": "enemy",
+   "new": "other",
+   "quote": "首相吕好问、枢相吕颐浩却是主动出列",
+   "chapter": 148,
+   "label": "同僚",
+   "why": "同朝为官"
+  },
+  {
+   "from": "韩世忠",
+   "to": "李彦仙",
+   "old": "enemy",
+   "new": "other",
+   "quote": "韩世忠带着刘晏、杨沂中、胡寅等人匆匆折返",
+   "chapter": 97,
+   "label": "同僚",
+   "why": "同僚"
+  },
+  {
+   "from": "高景山",
+   "to": "王伯龙",
+   "old": "enemy",
+   "new": "other",
+   "quote": "东路军之高景山、阿里、讹鲁补、王伯龙",
+   "chapter": 382,
+   "label": "同僚",
+   "why": "同军同僚"
+  }
+ ],
+ "keep_enemy": [
+  {
+   "from": "田师中",
+   "to": "赵球"
+  },
+  {
+   "from": "韩世忠",
+   "to": "完颜兀术"
+  },
+  {
+   "from": "岳飞",
+   "to": "大挞不野"
+  },
+  {
+   "from": "完颜塞里",
+   "to": "岳飞"
+  },
+  {
+   "from": "岳飞",
+   "to": "刘麟"
+  },
+  {
+   "from": "蒲卢浑",
+   "to": "王胜"
+  },
+  {
+   "from": "解元",
+   "to": "蒲卢浑"
+  },
+  {
+   "from": "韩世忠",
+   "to": "范琼"
+  },
+  {
+   "from": "林景默",
+   "to": "范琼"
+  },
+  {
+   "from": "完颜讹里朵",
+   "to": "马扩"
+  },
+  {
+   "from": "完颜兀术",
+   "to": "赵玖"
+  },
+  {
+   "from": "张遇",
+   "to": "赵玖"
+  },
+  {
+   "from": "张遇",
+   "to": "王德"
+  },
+  {
+   "from": "高景山",
+   "to": "王彦"
+  },
+  {
+   "from": "岳飞",
+   "to": "完颜兀术"
+  },
+  {
+   "from": "岳飞",
+   "to": "李成"
+  },
+  {
+   "from": "张荣",
+   "to": "孔彦舟"
+  },
+  {
+   "from": "张荣",
+   "to": "刘麟"
+  },
+  {
+   "from": "李成",
+   "to": "杨沂中"
+  },
+  {
+   "from": "孔彦舟",
+   "to": "张宪"
+  },
+  {
+   "from": "李彦仙",
+   "to": "完颜娄室"
+  },
+  {
+   "from": "赵玖",
+   "to": "完颜娄室"
+  },
+  {
+   "from": "完颜娄室",
+   "to": "吴玠"
+  },
+  {
+   "from": "张浚",
+   "to": "钟相"
+  },
+  {
+   "from": "完颜活女",
+   "to": "赵玖"
+  },
+  {
+   "from": "吴玠",
+   "to": "李乾顺"
+  },
+  {
+   "from": "岳飞",
+   "to": "嵬名察哥"
+  },
+  {
+   "from": "耶律大石",
+   "to": "合不勒"
+  },
+  {
+   "from": "耶律大石",
+   "to": "完颜兀术"
+  },
+  {
+   "from": "合不勒",
+   "to": "完颜粘罕"
+  },
+  {
+   "from": "高景山",
+   "to": "岳飞"
+  },
+  {
+   "from": "突合速",
+   "to": "韩世忠"
+  },
+  {
+   "from": "韩世忠",
+   "to": "完颜拔离速"
+  },
+  {
+   "from": "完颜拔离速",
+   "to": "李彦仙"
+  },
+  {
+   "from": "耶律马五",
+   "to": "韩世忠"
+  },
+  {
+   "from": "岳飞",
+   "to": "王伯龙"
+  },
+  {
+   "from": "王伯龙",
+   "to": "田师中"
+  },
+  {
+   "from": "高景山",
+   "to": "田师中"
+  }
+ ],
+ "faction": {
+  "郭药师": "金国",
+  "张邦昌": "宋廷",
+  "周同": "岳家军",
+  "刘韐": "宋廷",
+  "李清照": "宋廷",
+  "钟相": null,
+  "范秀娘": "宋廷",
+  "耶律大石": null,
+  "合不勒": null,
+  "吴近": "宋廷",
+  "胡宏": "宋廷",
+  "杨时": "宋廷",
+  "罗丛彦": "宋廷",
+  "刘晏": "御营",
+  "王彦": "八字军",
+  "傅选": "八字军",
+  "张荣": "梁山泊",
+  "李逵": "梁山泊",
+  "胡闳休": "岳家军",
+  "刘正彦": "御营",
+  "刘法": "宋廷",
+  "岳雷": "岳家军",
+  "岳霖": "岳家军",
+  "小梁后": "西夏",
+  "完颜乌野": "金国",
+  "张九成": "宋廷",
+  "李侗": "宋廷",
+  "程颐": "宋廷",
+  "赵佶": "宋廷",
+  "吴益": "宋廷",
+  "韦太后": "宋廷",
+  "郑太后": "宋廷"
+ },
+ "faction_leader": {
+  "御营": "王渊",
+  "八字军": "王彦",
+  "梁山泊": "张荣"
+ },
+ "add_characters": [
+  {
+   "name": "胡闳休",
+   "aliases": [
+    "胡兄弟"
+   ],
+   "gender": "男",
+   "role": "岳飞幕府谋主、岳家军某军正将",
+   "faction": "岳家军"
+  },
+  {
+   "name": "刘正彦",
+   "aliases": [],
+   "gender": "男",
+   "role": "御营右营副统制",
+   "faction": "御营"
+  },
+  {
+   "name": "刘法",
+   "aliases": [
+    "刘节度"
+   ],
+   "gender": "男",
+   "role": "西军旧将、刘正彦之父",
+   "faction": "宋廷"
+  },
+  {
+   "name": "岳雷",
+   "aliases": [],
+   "gender": "男",
+   "role": "岳飞次子",
+   "faction": "岳家军"
+  },
+  {
+   "name": "岳霖",
+   "aliases": [],
+   "gender": "男",
+   "role": "岳飞三子",
+   "faction": "岳家军"
+  },
+  {
+   "name": "小梁后",
+   "aliases": [],
+   "gender": "女",
+   "role": "西夏太后、李乾顺生母",
+   "faction": "西夏"
+  },
+  {
+   "name": "完颜乌野",
+   "aliases": [
+    "秀才"
+   ],
+   "gender": "男",
+   "role": "金国宗室、挞懒亲弟",
+   "faction": "金国"
+  },
+  {
+   "name": "张九成",
+   "aliases": [
+    "无垢先生",
+    "小张学士"
+   ],
+   "gender": "男",
+   "role": "太学生、杨时弟子",
+   "faction": "宋廷"
+  },
+  {
+   "name": "李侗",
+   "aliases": [
+    "延平先生"
+   ],
+   "gender": "男",
+   "role": "道学延平先生、杨时罗丛彦弟子",
+   "faction": "宋廷"
+  },
+  {
+   "name": "程颐",
+   "aliases": [
+    "伊川先生"
+   ],
+   "gender": "男",
+   "role": "洛阳道学宗师",
+   "faction": "宋廷"
+  },
+  {
+   "name": "赵佶",
+   "aliases": [
+    "道君皇帝",
+    "太上道君皇帝",
+    "太上皇帝"
+   ],
+   "gender": "男",
+   "role": "太上道君皇帝",
+   "faction": "宋廷"
+  },
+  {
+   "name": "吴益",
+   "aliases": [],
+   "gender": "男",
+   "role": "吴近之子、吴贵妃胞弟",
+   "faction": "宋廷"
+  }
+ ],
+ "add_relations": [
+  {
+   "from": "完颜阿骨打",
+   "to": "完颜讹里朵",
+   "type": "parent",
+   "quote": "阿骨打三子完颜讹里朵",
+   "chapter": 118,
+   "label": null
+  },
+  {
+   "from": "刘法",
+   "to": "刘正彦",
+   "type": "parent",
+   "quote": "刘正彦身为刘法之子",
+   "chapter": 61,
+   "label": null
+  },
+  {
+   "from": "岳飞",
+   "to": "岳雷",
+   "type": "parent",
+   "quote": "他还有个次子岳雷",
+   "chapter": 288,
+   "label": null
+  },
+  {
+   "from": "岳飞",
+   "to": "岳霖",
+   "type": "parent",
+   "quote": "还有个三子岳霖",
+   "chapter": 288,
+   "label": null
+  },
+  {
+   "from": "小梁后",
+   "to": "李乾顺",
+   "type": "parent",
+   "quote": "李乾顺生母小梁后",
+   "chapter": 305,
+   "label": null
+  },
+  {
+   "from": "赵佶",
+   "to": "赵玖",
+   "type": "parent",
+   "quote": "为父在北国数载",
+   "chapter": 282,
+   "label": null
+  },
+  {
+   "from": "胡安国",
+   "to": "胡宏",
+   "type": "parent",
+   "quote": "胡安国次子胡宏",
+   "chapter": 201,
+   "label": null
+  },
+  {
+   "from": "胡安国",
+   "to": "胡寅",
+   "type": "parent",
+   "quote": "胡寅的养父兼亲叔叔胡安国",
+   "chapter": 197,
+   "label": null
+  },
+  {
+   "from": "吕好问",
+   "to": "吕本中",
+   "type": "parent",
+   "quote": "其父吕好问闻得赵玖言语",
+   "chapter": 252,
+   "label": null
+  },
+  {
+   "from": "吴近",
+   "to": "吴益",
+   "type": "parent",
+   "quote": "跪在自己身前的儿子",
+   "chapter": 253,
+   "label": null
+  },
+  {
+   "from": "岳飞",
+   "to": "岳云",
+   "type": "parent",
+   "quote": "长子却已经十三了",
+   "chapter": 288,
+   "label": null
+  },
+  {
+   "from": "完颜娄室",
+   "to": "完颜谋衍",
+   "type": "parent",
+   "quote": "二十来岁的次子",
+   "chapter": 216,
+   "label": null
+  },
+  {
+   "from": "完颜阿骨打",
+   "to": "完颜吴乞买",
+   "type": "sibling",
+   "quote": "这是阿骨打之弟",
+   "chapter": 10,
+   "label": null
+  },
+  {
+   "from": "完颜活女",
+   "to": "完颜谋衍",
+   "type": "sibling",
+   "quote": "完颜活女之弟",
+   "chapter": 216,
+   "label": null
+  },
+  {
+   "from": "完颜挞懒",
+   "to": "完颜乌野",
+   "type": "sibling",
+   "quote": "完颜乌野乃是挞懒的亲弟弟",
+   "chapter": 271,
+   "label": null
+  },
+  {
+   "from": "胡寅",
+   "to": "胡宏",
+   "type": "sibling",
+   "quote": "胡寅的堂弟兼养弟胡宏",
+   "chapter": 197,
+   "label": null
+  },
+  {
+   "from": "赵佶",
+   "to": "郑太后",
+   "type": "spouse",
+   "quote": "郑太后是太上道君皇帝的正宫",
+   "chapter": 281,
+   "label": null
+  },
+  {
+   "from": "周同",
+   "to": "岳飞",
+   "type": "master",
+   "quote": "恩师周同那里学骑射武艺",
+   "chapter": 11,
+   "label": null
+  },
+  {
+   "from": "岳飞",
+   "to": "周同",
+   "type": "disciple",
+   "quote": "恩师周同那里学骑射武艺",
+   "chapter": 11,
+   "label": null
+  },
+  {
+   "from": "周同",
+   "to": "张显",
+   "type": "master",
+   "quote": "恩师周同那里学骑射武艺",
+   "chapter": 11,
+   "label": null
+  },
+  {
+   "from": "张显",
+   "to": "周同",
+   "type": "disciple",
+   "quote": "恩师周同那里学骑射武艺",
+   "chapter": 11,
+   "label": null
+  },
+  {
+   "from": "周同",
+   "to": "汤怀",
+   "type": "master",
+   "quote": "恩师周同那里学骑射武艺",
+   "chapter": 11,
+   "label": null
+  },
+  {
+   "from": "汤怀",
+   "to": "周同",
+   "type": "disciple",
+   "quote": "恩师周同那里学骑射武艺",
+   "chapter": 11,
+   "label": null
+  },
+  {
+   "from": "周同",
+   "to": "王贵",
+   "type": "master",
+   "quote": "恩师周同那里学骑射武艺",
+   "chapter": 11,
+   "label": null
+  },
+  {
+   "from": "王贵",
+   "to": "周同",
+   "type": "disciple",
+   "quote": "恩师周同那里学骑射武艺",
+   "chapter": 11,
+   "label": null
+  },
+  {
+   "from": "宗泽",
+   "to": "郦琼",
+   "type": "master",
+   "quote": "郦琼天然就可以自称是宗泽的弟子",
+   "chapter": 150,
+   "label": null
+  },
+  {
+   "from": "郦琼",
+   "to": "宗泽",
+   "type": "disciple",
+   "quote": "郦琼天然就可以自称是宗泽的弟子",
+   "chapter": 150,
+   "label": null
+  },
+  {
+   "from": "杨时",
+   "to": "罗丛彦",
+   "type": "master",
+   "quote": "此人是龟山先生（杨时）弟子",
+   "chapter": 258,
+   "label": null
+  },
+  {
+   "from": "罗丛彦",
+   "to": "杨时",
+   "type": "disciple",
+   "quote": "此人是龟山先生（杨时）弟子",
+   "chapter": 258,
+   "label": null
+  },
+  {
+   "from": "杨时",
+   "to": "张九成",
+   "type": "master",
+   "quote": "正是道学宗师杨时的弟子",
+   "chapter": 358,
+   "label": null
+  },
+  {
+   "from": "张九成",
+   "to": "杨时",
+   "type": "disciple",
+   "quote": "正是道学宗师杨时的弟子",
+   "chapter": 358,
+   "label": null
+  },
+  {
+   "from": "杨时",
+   "to": "李侗",
+   "type": "master",
+   "quote": "算是龟山先生子弟",
+   "chapter": 258,
+   "label": null
+  },
+  {
+   "from": "李侗",
+   "to": "杨时",
+   "type": "disciple",
+   "quote": "算是龟山先生子弟",
+   "chapter": 258,
+   "label": null
+  },
+  {
+   "from": "罗丛彦",
+   "to": "李侗",
+   "type": "master",
+   "quote": "也算是豫章先生子弟",
+   "chapter": 258,
+   "label": null
+  },
+  {
+   "from": "李侗",
+   "to": "罗丛彦",
+   "type": "disciple",
+   "quote": "也算是豫章先生子弟",
+   "chapter": 258,
+   "label": null
+  },
+  {
+   "from": "程颐",
+   "to": "马伸",
+   "type": "master",
+   "quote": "程颐嫡传弟子",
+   "chapter": 55,
+   "label": null
+  },
+  {
+   "from": "马伸",
+   "to": "程颐",
+   "type": "disciple",
+   "quote": "程颐嫡传弟子",
+   "chapter": 55,
+   "label": null
+  },
+  {
+   "from": "韩世忠",
+   "to": "耶律余睹",
+   "type": "enemy",
+   "quote": "若非韩世忠到底是击退了耶律余睹",
+   "chapter": 113,
+   "label": null
+  },
+  {
+   "from": "韩世忠",
+   "to": "完颜活女",
+   "type": "enemy",
+   "quote": "完颜活女夹击韩世忠",
+   "chapter": 226,
+   "label": null
+  },
+  {
+   "from": "张宪",
+   "to": "李成",
+   "type": "enemy",
+   "quote": "被张宪大股杀伤的李成部步卒",
+   "chapter": 286,
+   "label": null
+  },
+  {
+   "from": "吴玠",
+   "to": "突合速",
+   "type": "enemy",
+   "quote": "射穿了突合速的脚",
+   "chapter": 376,
+   "label": null
+  },
+  {
+   "from": "李成",
+   "to": "李逵",
+   "type": "enemy",
+   "quote": "李成击败，最后流浪降服于张荣的李逵",
+   "chapter": 123,
+   "label": null
+  },
+  {
+   "from": "岳飞",
+   "to": "胡闳休",
+   "type": "other",
+   "quote": "胡闳休则是岳飞的总参谋长",
+   "chapter": 105,
+   "label": "幕僚"
+  },
+  {
+   "from": "辛永宗",
+   "to": "胡闳休",
+   "type": "other",
+   "quote": "胡兄弟看在咱们一起颠沛流离一年的份上",
+   "chapter": 105,
+   "label": "同僚"
+  },
+  {
+   "from": "王渊",
+   "to": "刘正彦",
+   "type": "other",
+   "quote": "右营副统制刘正彦正在营中",
+   "chapter": 12,
+   "label": "上下级"
+  },
+  {
+   "from": "赵玖",
+   "to": "赵佶",
+   "type": "other",
+   "quote": "二位太上皇帝一路辛苦",
+   "chapter": 282,
+   "label": "太上皇"
+  }
+ ],
+ "drop_relations": [],
+ "gaps": [],
+ "notes": []
+}

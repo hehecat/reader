@@ -191,6 +191,33 @@ for r in rels:
 check("parent 边方向与 quote 亲缘字眼一致（无「其父/乃父/生母/长子/次子」反例）",
       not bad_dir, str(bad_dir[:6]))
 
+# ---------------------------------------------------------------- v2 追加断言
+# 上一版的三处硬伤：enemy 占 56% 过度偏斜、势力碎成单成员、亲缘/师承太少。
+# 这里把「改好之后应达到」的指标也钉住，防止下一轮又滑回去。
+tc = Counter(r["type"] for r in rels)
+n_rel = len(rels)
+check("v2: enemy 占比 ≤40%（原来 56%）",
+      tc["enemy"] <= 0.40 * n_rel, f"{tc['enemy']}/{n_rel} = {tc['enemy'] / n_rel:.1%}")
+check("v2: parent ≥30", tc["parent"] >= 30, str(tc["parent"]))
+check("v2: master+disciple ≥18（师承双向编码）",
+      tc["master"] + tc["disciple"] >= 18, f"{tc['master']}+{tc['disciple']}")
+check("v2: sibling ≥20", tc["sibling"] >= 20, str(tc["sibling"]))
+check("v2: spouse ≥6", tc["spouse"] >= 6, str(tc["spouse"]))
+check("v2: 关系总数 240–300", 240 <= n_rel <= 300, str(n_rel))
+check("v2: 人物 130–150", 130 <= len(chars) <= 150, str(len(chars)))
+
+facs = data["factions"]
+check("v2: 势力数 6–9", 6 <= len(facs) <= 9, str(len(facs)))
+BIG = {"宋廷", "金国", "御营", "岳家军", "西夏", "伪齐"}
+small = [(f["name"], len(f["members"])) for f in facs
+         if f["name"] not in BIG and len(f["members"]) < 2]
+check("v2: 没有单成员小势力（宋廷/金国/御营/岳家军/西夏/伪齐 除外）", not small, str(small))
+nm = {f["id"]: f["name"] for f in facs}
+dist = Counter(nm[c["faction"]] for c in chars if c.get("faction"))
+print("      势力人数:", dict(dist.most_common()))
+nulls = [c["name"] for c in chars if not c.get("faction")]
+check("v2: 无势力归属的人物 ≤3", len(nulls) <= 3, str(nulls))
+
 print()
 if fails:
     print(f"FAILED {len(fails)}: {fails}")
