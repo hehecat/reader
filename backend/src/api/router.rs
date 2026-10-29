@@ -9506,6 +9506,9 @@ async fn search_book_multi_sse(
         // 绝对截止时刻：用 sleep_until 而不是「每次 next() 前后取样」——
         // 否则下一次检查点要等到某个源返回，实测会拖到 56s 才收口。
         let window_deadline = tokio::time::Instant::from_std(window_t0) + hard_cap;
+        // 是否被硬上限强行收口: 窗内源集体巨慢(死源区间)时整窗跳过, 否则每窗只前进 1 台源
+        // (实测 17s/台, 尾部几十台死源要十几分钟)。跳过的源下次全新搜索(从 0 起)还会再试。
+        let mut hard_capped = false;
         loop {
             if !full_scan
                 && sse_should_close(done.len(), window_t0.elapsed(), window_budget, hard_cap)
@@ -9528,7 +9531,10 @@ async fn search_book_multi_sse(
                         Some(v) => v,
                         None => break, // 全部源搜完
                     },
-                    _ = tokio::time::sleep_until(window_deadline) => break, // 硬上限到
+                    _ = tokio::time::sleep_until(window_deadline) => {
+                        hard_capped = true;
+                        break; // 硬上限到: 整窗放弃, 见 next_from
+                    }
                 }
             };
             done.insert(i as usize);
@@ -9537,8 +9543,9 @@ async fn search_book_multi_sse(
                 break; // 客户端断开
             }
         }
-        // 续接点(纯函数, 见 sse_next_from): 第一个未完成源下标 - 1, 不倒退也不吞整窗
-        let next_from = sse_next_from(start, end, &done, last_index);
+        // 续接点(纯函数, 见 sse_next_from): 第一个未完成源下标 - 1, 不倒退也不吞整窗;
+        // 被硬上限强行收口时整窗前进(窗内源都太慢, 留着只会把游标卡在窗首)
+        let next_from = sse_next_from(start, end, &done, last_index, hard_capped);
         // 搜索命中 → 换源候选表（换源面板首屏直接读它；用户实测「搜索 5 个源、换源 1 个」）
         if !discovered.is_empty() {
             persist_search_candidates(&storage, &ns, &discovered).await;
@@ -9661,7 +9668,12 @@ fn sse_next_from(
     end: usize,
     done: &std::collections::HashSet<usize>,
     last_index: i64,
+    hard_capped: bool,
 ) -> i64 {
+    // 硬上限收口 = 窗内源全部超时, 整窗跳过(否则游标被窗首那台慢源钉住, 实测 17s/台)
+    if hard_capped {
+        return (end as i64 - 1).max(last_index);
+    }
     match (start..end).find(|i| !done.contains(i)) {
         Some(i) => {
             let cand = (i as i64 - 1).max(last_index);
@@ -13592,21 +13604,24 @@ mod tests {
         use std::collections::HashSet;
         // 窗内 10 台全完成 → 窗末 9（无论完成顺序；旧实现取「最后返回那台」会随机倒退）
         let all: HashSet<usize> = (0..10).collect();
-        assert_eq!(sse_next_from(0, 10, &all, -1), 9);
+        assert_eq!(sse_next_from(0, 10, &all, -1, false), 9);
         // 最后一窗：全完成 + 窗末就是最后一个源 → 前端据此得到 isEnd
         let last_win: HashSet<usize> = (40..46).collect();
-        assert_eq!(sse_next_from(40, 46, &last_win, 39), 45);
+        assert_eq!(sse_next_from(40, 46, &last_win, 39, false), 45);
         // 窗首源就卡住 → 跳过它本身(游标 +1)，不能原地打转
         let first_hung: HashSet<usize> = [0usize].into_iter().collect();
-        assert_eq!(sse_next_from(0, 10, &first_hung, -1), 0);
+        assert_eq!(sse_next_from(0, 10, &first_hung, -1, false), 0);
         // 前 5 台完成、第 6 台未完成 → 续接点 4（下一窗从 5 起）
         let prefix: HashSet<usize> = (0..5).collect();
-        assert_eq!(sse_next_from(0, 10, &prefix, -1), 4);
+        assert_eq!(sse_next_from(0, 10, &prefix, -1, false), 4);
         // 完成集合乱序 + 中间缺源 → 仍取第一个未完成源的前一台
         let gaps: HashSet<usize> = [0usize, 1, 2, 4, 7].into_iter().collect();
-        assert_eq!(sse_next_from(0, 10, &gaps, -1), 2);
+        assert_eq!(sse_next_from(0, 10, &gaps, -1, false), 2);
         // 不倒退：算出来的值低于入参 last_index 时以 last_index 为准
-        assert_eq!(sse_next_from(0, 3, &HashSet::new(), 100), 100);
+        assert_eq!(sse_next_from(0, 3, &HashSet::new(), 100, false), 100);
+        // 硬上限收口(窗内源集体超时) → 整窗跳过, 不管 done 里有什么
+        assert_eq!(sse_next_from(60, 70, &HashSet::new(), 59, true), 69);
+        assert_eq!(sse_next_from(60, 70, &prefix, 59, true), 69);
     }
 
     /// 硬上限必须长于单源超时，否则每窗只前进 1 台源(实测 15.1s/源)
