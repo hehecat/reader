@@ -6226,14 +6226,57 @@ async fn save_book_group_order(
     }
 }
 
+/// 搜索顺手留下「同书多源」候选。
+///
+/// 换源面板首屏只读 `book_source_candidates`（快），搜索只把多源命中塞进前端 state
+/// 的 `origins`（没入库）——于是搜到 5 个源的书，点开换源只剩 1 个（用户实测）。
+/// 这里把搜索命中的每一本按 `书名_作者` 合并进候选表：旧候选保留，按 origin 去重
+/// （新命中覆盖旧的 bookUrl——书中途换过 url 时以最新为准）。
+async fn persist_search_candidates(
+    storage: &crate::storage::Storage,
+    ns: &str,
+    books: &[crate::service::search::SearchBook],
+) {
+    /// 单次搜索最多落多少本（搜索页可能有几百条，候选表只服务换源）
+    const MAX_BOOKS: usize = 200;
+    let mut by_key: std::collections::HashMap<String, Vec<crate::service::search::SearchBook>> =
+        std::collections::HashMap::new();
+    for b in books.iter().take(MAX_BOOKS) {
+        let name = b.name.trim();
+        let author = b.author.trim();
+        if name.is_empty() || b.origin.is_empty() {
+            continue;
+        }
+        by_key
+            .entry(format!("{name}_{author}"))
+            .or_default()
+            .push(b.clone());
+    }
+    for (key, fresh) in by_key {
+        let old = storage
+            .get_book_candidates(ns, &key)
+            .await
+            .unwrap_or_default();
+        let mut merged = fresh;
+        for o in old {
+            if !merged.iter().any(|n| n.origin == o.origin) {
+                merged.push(o);
+            }
+        }
+        if let Err(e) = storage.save_book_candidates(ns, &key, &merged).await {
+            tracing::debug!("搜索候选写入失败 [{key}]: {e}");
+        }
+    }
+}
+
 /// GET/POST /reader3/getAvailableBookSource：换源候选列表（legacy getAvailableBookSource 对齐）
 ///
 /// 参数：url（书籍链接）+ refresh（>0 强制重搜）
 /// 行为：
-/// - 书架书按 `{name}_{author}` 读取持久化候选；非空且 refresh<=0 → 原样返回
-/// - refresh>0 → 按候选 origin 重搜（书名等值过滤）并回写持久化；
-///   无候选时回退**全部启用可搜索源**精确搜索（对 legacy 空结果的超集增强——
-///   使该端点可独立驱动换源流程，不依赖 searchBookSource 先行）
+/// - 书架书按 `{name}_{author}` 读取持久化候选；refresh<=0 → 原样返回（快路径）
+/// - refresh>0 → **全部启用可搜索源**并发精确搜索（书名等值过滤），结果与旧候选取
+///   并集后回写持久化。搜索阶段（searchBookMultiSSE）也会持续把命中并进这张表，
+///   所以「搜索能看到的源」与「换源能看到的源」口径一致。
 async fn get_available_book_source(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
@@ -6279,10 +6322,10 @@ async fn get_available_book_source(
         ));
     }
 
-    // 重搜源集合：优先候选 origin 集；无候选 → 全部启用可搜索源（超集增强）
-    let origins: std::collections::HashSet<String> =
-        cached.iter().map(|c| c.origin.clone()).collect();
-    let mut sources: Vec<crate::model::BookSource> =
+    // 重搜源集合：全部启用可搜索源。
+    // 曾按「已缓存候选的 origin」收窄，结果是候选只能缩不能涨：用户搜到 5 个源，
+    // 换源面板里永远只有当初那 1 个。重搜=重搜，旧候选另以并集保留（见下方 merge）。
+    let sources: Vec<crate::model::BookSource> =
         match state.storage.get_book_sources(&namespace).await {
             Ok(s) => s
                 .into_iter()
@@ -6290,9 +6333,6 @@ async fn get_available_book_source(
                 .collect(),
             Err(_) => return Json(ReturnData::err("系统错误")),
         };
-    if !origins.is_empty() {
-        sources.retain(|s| origins.contains(&s.book_source_url));
-    }
     if sources.is_empty() {
         return Json(ReturnData::ok(serde_json::Value::Array(vec![])));
     }
@@ -6350,11 +6390,17 @@ async fn get_available_book_source(
         }
     }
     let mut seen = std::collections::HashSet::new();
-    let matched: Vec<crate::service::search::SearchBook> = all
+    let mut matched: Vec<crate::service::search::SearchBook> = all
         .into_iter()
         .filter(|b| crate::service::search::exact_match(b, &name))
         .filter(|b| seen.insert(b.origin.clone()))
         .collect();
+    // 并集保留旧候选：本次有源超时/临时失效不代表它没这本书，别把用户已有的源抹掉
+    for c in cached {
+        if !matched.iter().any(|n| n.origin == c.origin) {
+            matched.push(c);
+        }
+    }
 
     let _ = state
         .storage
@@ -9375,13 +9421,16 @@ async fn search_book_multi_sse(
                     }
                 }
                 let payload = serde_json::json!({ "lastIndex": idx as i64, "data": unique });
-                (idx as i64, format!("data: {payload}\n\n"))
+                // 第三项回传给外层：本窗全部命中（搜索完统一写换源候选表，避免并发覆盖）
+                (idx as i64, format!("data: {payload}\n\n"), unique)
             }));
         }
         // 窗口预算：到点提前收口(不再被窗内最慢源拖满整窗), 并把
         // 「未完成源的最小下标 - 1」回报给前端续接 → 提前收口不漏源
         let window_budget = std::time::Duration::from_secs(sse_window_budget_secs());
         let window_t0 = std::time::Instant::now();
+        // 本窗命中汇总：搜索完一次写入换源候选表
+        let mut discovered: Vec<crate::service::search::SearchBook> = Vec::new();
         let mut done: std::collections::HashSet<usize> = std::collections::HashSet::new();
         let mut last = last_index;
         // 全量模式(本窗已覆盖到最后一个源): 一连接搜完, 不做预算收口 ——
@@ -9390,7 +9439,7 @@ async fn search_book_multi_sse(
         let hard_cap = window_budget * 3; // 慢源区间上限(默认 30s)
         loop {
             // timeout 包住 next(): 窗内长时间无源返回时也能按时收口(否则检查点稀疏, 实测拖到 56s)
-            let (i, text) = if full_scan {
+            let (i, text, found) = if full_scan {
                 match tasks.next().await {
                     Some(v) => v,
                     None => break, // 全部源搜完
@@ -9410,6 +9459,7 @@ async fn search_book_multi_sse(
             };
             last = i;
             done.insert(i as usize);
+            discovered.extend(found);
             if tx.send(Ok(Bytes::from(text))).await.is_err() {
                 break; // 客户端断开
             }
@@ -9434,6 +9484,10 @@ async fn search_book_multi_sse(
             }
             None => last,
         };
+        // 搜索命中 → 换源候选表（换源面板首屏直接读它；用户实测「搜索 5 个源、换源 1 个」）
+        if !discovered.is_empty() {
+            persist_search_candidates(&storage, &ns, &discovered).await;
+        }
         let end_payload =
             serde_json::json!({ "lastIndex": next_from, "isEnd": next_from >= total - 1 });
         let _ = tx
