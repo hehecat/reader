@@ -87,13 +87,21 @@ export function fitToContent(cy: cytoscape.Core, eles: cytoscape.CollectionRetur
       x2: canvasW - pad,
       y2: canvasH - pad - bottomInset,
     };
-    const beside = {
-      x1: Math.min(cardRight + GAP, canvasW * 0.6),
-      y1: pad,
-      x2: canvasW - pad,
-      y2: canvasH - pad - bottomInset,
-    };
-    avail = zoomOf(below) >= zoomOf(beside) ? below : beside;
+    // 「让到旁边」只在浮层确实是一条窄的左侧栏时才成立. 现在的 measureOccluders 登记的是
+    // 一条横贯画布顶部的矩形(x1=0, x2=canvasW), 此时 cardRight === canvasW, 按比例算出的
+    // beside 会被逼到右边 40%: 实测 1440×900 的全景只剩 0.55 缩放, 内容缩在右侧、左半屏全空
+    // (静态 demo 因为包围盒比例不同恰好没触发). 所以窄栏之外只允许「让到下面」.
+    if (cardRight < canvasW * 0.4) {
+      const beside = {
+        x1: Math.min(cardRight + GAP, canvasW * 0.6),
+        y1: pad,
+        x2: canvasW - pad,
+        y2: canvasH - pad - bottomInset,
+      };
+      avail = zoomOf(below) >= zoomOf(beside) ? below : beside;
+    } else {
+      avail = below;
+    }
   }
 
   const zoom = Math.max(Math.min(zoomOf(avail), cy.maxZoom()), 0.02);
