@@ -1,6 +1,7 @@
 import { CircleAlert, Grid2X2, List, Search as SearchIcon } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { Virtuoso } from "react-virtuoso";
 
 import { BookDetailDialog } from "@/components/book/BookDetailDialog";
 import { SearchBar } from "@/components/search/SearchBar";
@@ -56,6 +57,80 @@ function LayoutToggle({ active, label, onClick, children }: LayoutToggleProps) {
 
 /** 首批结果到达前的骨架卡数 */
 const SKELETON_COUNT = 8;
+
+/** 结果区滚动容器: 页面自身不滚动, 滚动发生在 AppShell 的 <main> 里 */
+const SCROLL_PARENT_SELECTOR = "main";
+
+/** 断点对应的网格列数 (与 GRID_CLASS 的 sm/lg/xl 一致): 虚拟化按"行"喂数据 */
+const COLUMN_BREAKPOINTS = [
+  { query: "(min-width: 1280px)", columns: 4 },
+  { query: "(min-width: 1024px)", columns: 3 },
+  { query: "(min-width: 640px)", columns: 2 },
+] as const;
+
+/** 结果区列数: 网格 1/2/3/4 列自适应, 列表恒 1 列 (移动端也是行卡) */
+function useResultColumns(layout: SearchLayout): number {
+  const [columns, setColumns] = useState(1);
+  useEffect(() => {
+    const media = COLUMN_BREAKPOINTS.map((item) => ({
+      list: window.matchMedia(item.query),
+      columns: item.columns,
+    }));
+    const sync = (): void => {
+      if (layout === "list") {
+        setColumns(1);
+        return;
+      }
+      setColumns(media.find((item) => item.list.matches)?.columns ?? 1);
+    };
+    sync();
+    for (const item of media) {
+      item.list.addEventListener("change", sync);
+    }
+    return () => {
+      for (const item of media) {
+        item.list.removeEventListener("change", sync);
+      }
+    };
+  }, [layout]);
+  return columns;
+}
+
+interface ResultRowProps {
+  row: readonly SearchBook[];
+  layout: SearchLayout;
+  keyword: string;
+  shelfKeys: ReadonlySet<string>;
+  onSelect: (book: SearchBook) => void;
+  onAdded: (saved: Book) => void;
+}
+
+/** 虚拟列表的一行: 网格布局里并排 1~4 张卡, 列表布局里 1 张行卡 */
+function ResultRow({ row, layout, keyword, shelfKeys, onSelect, onAdded }: ResultRowProps) {
+  return (
+    <div
+      className={cn(
+        layout === "grid" ? GRID_CLASS : "flex flex-col",
+        // 行间距取代 grid 的 gap-y (虚拟化按行渲染, 行间空隙由行底内边距给)
+        layout === "grid" ? "pb-3 sm:pb-8" : "pb-2",
+      )}
+    >
+      {row.map((book) => (
+        <SearchResultCard
+          layout={layout}
+          key={`${book.bookUrl}|${book.origin}`}
+          book={book}
+          keyword={keyword}
+          inShelf={
+            shelfKeys.has(book.bookUrl) || shelfKeys.has(shelfTitleKey(book.name, book.author))
+          }
+          onSelect={onSelect}
+          onAdded={onAdded}
+        />
+      ))}
+    </div>
+  );
+}
 
 /** 搜索页: URL 参数 q 驱动 SSE 流式多源搜索, 结果聚合去重后按砚台网格渲染, 点卡片进详情. */
 export default function SearchPage() {
@@ -174,6 +249,28 @@ export default function SearchPage() {
 
   const visibleResults = results;
 
+  /** 虚拟化: 结果按「行」喂给 Virtuoso, DOM 里只保留可视区附近的卡片 */
+  const columns = useResultColumns(layout);
+  const resultRows = useMemo(() => {
+    const rows: SearchBook[][] = [];
+    for (let i = 0; i < visibleResults.length; i += columns) {
+      rows.push(visibleResults.slice(i, i + columns));
+    }
+    return rows;
+  }, [visibleResults, columns]);
+
+  // 页面自身不滚动, 滚动发生在 AppShell 的 <main> 里: 把同一个滚动容器交给 Virtuoso,
+  // 吸顶搜索栏与整页滚动行为保持不变, 只是结果区改成按可视行渲染.
+  const pageRef = useRef<HTMLDivElement | null>(null);
+  const [scrollParent, setScrollParent] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    setScrollParent(pageRef.current?.closest<HTMLElement>(SCROLL_PARENT_SELECTOR) ?? null);
+  }, []);
+
+  const handleAdded = useCallback((saved: Book) => {
+    setPendingShelf((prev) => [...prev, saved]);
+  }, []);
+
   const initial = q.length === 0 && !searching && results.length === 0 && error === null;
   const showResults = visibleResults.length > 0;
   // q 就绪但搜索还没发起(发起在绘制后的 effect 里): 这一帧继续按加载中渲染,
@@ -197,7 +294,7 @@ export default function SearchPage() {
   }, [books, pendingShelf]);
 
   return (
-    <div className="flex min-h-full flex-col bg-background">
+    <div ref={pageRef} className="flex min-h-full flex-col bg-background">
       <div className="mx-auto w-full max-w-3xl px-4 pb-10 pt-5 sm:px-6 md:px-10 md:pt-8 lg:max-w-5xl xl:max-w-6xl">
         <PageIntro
           eyebrow="SEARCH"
@@ -289,21 +386,29 @@ export default function SearchPage() {
             ) : null}
 
             {showResults ? (
-              <div className={layout === "grid" ? GRID_CLASS : "flex flex-col gap-2"}>
-                {visibleResults.map((book) => (
-                  <SearchResultCard
-                    layout={layout}
-                    key={`${book.bookUrl}|${book.origin}`}
-                    book={book}
-                    keyword={keyword}
-                    inShelf={
-                      shelfKeys.has(book.bookUrl) ||
-                      shelfKeys.has(shelfTitleKey(book.name, book.author))
+              // 结果虚拟化: 200 条结果不再一次性塞进 DOM (基线单次长任务 2.2s 全在挂卡片上)
+              <div className="shrink-0">
+                {scrollParent !== null ? (
+                  <Virtuoso
+                    data={resultRows}
+                    customScrollParent={scrollParent}
+                    // 卡片高度随简介行数/断点变化, 交给 Virtuoso 实测; 上下各多挂一屏, 滚动不露白
+                    increaseViewportBy={600}
+                    computeItemKey={(_index, row) =>
+                      row.map((book) => `${book.bookUrl}|${book.origin}`).join(",")
                     }
-                    onSelect={openDetail}
-                    onAdded={(saved) => setPendingShelf((prev) => [...prev, saved])}
+                    itemContent={(_index, row) => (
+                      <ResultRow
+                        row={row}
+                        layout={layout}
+                        keyword={keyword}
+                        shelfKeys={shelfKeys}
+                        onSelect={openDetail}
+                        onAdded={handleAdded}
+                      />
+                    )}
                   />
-                ))}
+                ) : null}
               </div>
             ) : searching || pendingStart ? (
               // 骨架与结果同网格: 移动端是行卡形状, sm 起是封面卡形状

@@ -48,6 +48,9 @@ export interface UseSearchSSEResult {
  * 死源区间实测每窗只推进 1 个源(30s×5 窗才走 5 个) —— 改为一次连接边搜边推, 直到搜完 */
 const SEARCH_WINDOW = 100_000;
 
+/** 增量回写窗口: 100ms 内的批次合并提交 (实测 200 条 × 200 批时省掉绝大部分重排) */
+const FLUSH_INTERVAL_MS = 100;
+
 /**
  * 聚合累加器.
  *
@@ -192,6 +195,56 @@ export function useSearchSSE(): UseSearchSSEResult {
   /** 本轮连接起始游标: 收口时对比判断空轮 */
   const roundFromRef = useRef(-1);
 
+  /** 增量回写窗口 (ms): 窗口内到达的所有批次合并成「一次排序 + 一次 setResults」 */
+  const flushTimerRef = useRef<number | null>(null);
+  /** 本轮窗口里是否有待提交的变化 (新条目 / 简介补全 / 游标推进) */
+  const dirtyRef = useRef(false);
+  /** 窗口里攒下的最大游标 (批次乱序到达, 取 max) */
+  const pendingIndexRef = useRef(-1);
+  const flushRef = useRef<() => void>(() => {});
+  const enqueueEnrichRef = useRef<() => void>(() => {});
+
+  const clearFlushTimer = useCallback(() => {
+    if (flushTimerRef.current !== null) {
+      window.clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+  }, []);
+
+  /**
+   * 立即冲刷增量: 把窗口里攒的结果一次性提交.
+   *
+   * 流结束 / 出错 / 停止 / 卸载时兜底调用 —— 最后一批不依赖定时器, 不会丢.
+   */
+  const flushNow = useCallback(() => {
+    clearFlushTimer();
+    const nextIndex = pendingIndexRef.current;
+    pendingIndexRef.current = -1;
+    if (nextIndex >= 0 && nextIndex !== lastIndexRef.current) {
+      lastIndexRef.current = nextIndex;
+      setLastIndex(nextIndex);
+    }
+    if (!dirtyRef.current) {
+      return;
+    }
+    dirtyRef.current = false;
+    // 先补全跨搜索的简介缓存(不必回源), 再一次性提交, 避免「补一条渲染一次」
+    enqueueEnrichRef.current();
+    setResults(rankResults(accRef.current.items, keyRef.current ?? ""));
+  }, [clearFlushTimer]);
+  flushRef.current = flushNow;
+
+  /** 开一个 flush 窗口: 已有窗口则让它自然到期 (攒批的关键) */
+  const scheduleFlush = useCallback(() => {
+    if (flushTimerRef.current !== null) {
+      return;
+    }
+    flushTimerRef.current = window.setTimeout(() => {
+      flushTimerRef.current = null;
+      flushRef.current();
+    }, FLUSH_INTERVAL_MS);
+  }, []);
+
   // 书源总数: 进度 total 与 hasMore 判断依据; 与书源页共享 ["sources"] 缓存
   const { data: sources } = useQuery({
     queryKey: ["sourcesLite"],
@@ -205,13 +258,27 @@ export function useSearchSSE(): UseSearchSSEResult {
     [sources],
   );
 
-  /** 简介补全: 搜索规则常不给 intro, 详情规则给 — 按当前排序序回源回填, 并发上限 3 */
+  /**
+   * 简介补全: 搜索规则常不给 intro, 详情规则给 — 按当前排序序回源回填.
+   * 并发上限 4; `enrichedRef` = 已入队/进行中/已回源的书, 同一本不重复请求.
+   */
   const enrichedRef = useRef<Set<string>>(new Set());
   const enrichQueueRef = useRef<string[]>([]);
   const inflightRef = useRef(0);
   const pumpEnrichRef = useRef<() => void>(() => {});
+
+  /** 把简介回填进累加器: 单次遍历聚合索引就地改条目 (渲染交给 flush 统一提交) */
+  const applyIntro = useCallback((bookUrl: string, intro: string): void => {
+    for (const agg of accRef.current.entries.values()) {
+      if (agg.book.bookUrl === bookUrl && (agg.book.intro ?? "") !== intro) {
+        agg.book = { ...agg.book, intro };
+        accRef.current.items[agg.index] = agg.book;
+      }
+    }
+  }, []);
+
   const pumpEnrich = useCallback(() => {
-    const MAX_INFLIGHT = 6;
+    const MAX_INFLIGHT = 4;
     while (inflightRef.current < MAX_INFLIGHT && enrichQueueRef.current.length > 0) {
       const bookUrl = enrichQueueRef.current.shift();
       if (bookUrl === undefined) {
@@ -229,18 +296,15 @@ export function useSearchSSE(): UseSearchSSEResult {
           inflightRef.current -= 1;
           if (intro.length > 0) {
             introCache.set(bookUrl, intro);
-            for (const agg of accRef.current.entries.values()) {
-              if (agg.book.bookUrl === bookUrl) {
-                agg.book = { ...agg.book, intro };
-                accRef.current.items[agg.index] = agg.book;
-              }
-            }
-            setResults(rankResults(accRef.current.items, keyRef.current ?? ""));
+            applyIntro(bookUrl, intro);
+            // 回写合并进同一个 flush 窗口: 不再「每来一条简介就全表重排」
+            dirtyRef.current = true;
+            scheduleFlush();
           }
           pumpEnrichRef.current();
         });
     }
-  }, []);
+  }, [applyIntro, scheduleFlush]);
   pumpEnrichRef.current = pumpEnrich;
 
   /** 把缺简介的结果按当前相关性序入队 (顶部卡片优先补) */
@@ -252,14 +316,10 @@ export function useSearchSSE(): UseSearchSSEResult {
       }
       const cached = introCache.get(item.bookUrl);
       if (cached !== undefined) {
-        for (const agg of accRef.current.entries.values()) {
-          if (agg.book.bookUrl === item.bookUrl) {
-            agg.book = { ...agg.book, intro: cached };
-            accRef.current.items[agg.index] = agg.book;
-          }
-        }
+        applyIntro(item.bookUrl, cached);
         continue;
       }
+      // 去重: 已请求过(排队/进行/已回源)的书不再入队
       if (enrichedRef.current.has(item.bookUrl)) {
         continue;
       }
@@ -267,7 +327,8 @@ export function useSearchSSE(): UseSearchSSEResult {
       enrichQueueRef.current.push(item.bookUrl);
     }
     pumpEnrich();
-  }, [pumpEnrich]);
+  }, [applyIntro, pumpEnrich]);
+  enqueueEnrichRef.current = enqueueEnrich;
 
   const connectRef = useRef<(key: string, fromIndex: number, concurrentCount?: number) => void>(
     () => {},
@@ -303,18 +364,20 @@ export function useSearchSSE(): UseSearchSSEResult {
           if (!parsed.success) {
             return; // 无法解析的批次直接忽略
           }
-          // 批次按并发完成顺序到达, lastIndex 可能乱序: 游标取历史最大值,
+          // 批次按并发完成顺序到达, lastIndex 可能乱序: 游标攒到 flush 时取最大值,
           // 避免 loadMore 从偏小的游标重搜已覆盖的书源
-          const nextIndex = Math.max(lastIndexRef.current, parsed.data.lastIndex);
-          lastIndexRef.current = nextIndex;
-          setLastIndex(nextIndex);
+          pendingIndexRef.current = Math.max(pendingIndexRef.current, parsed.data.lastIndex);
           const relevant = parsed.data.data.filter((item) =>
             matchesSearchKey(item, keyRef.current ?? ""),
           );
           if (mergeBatch(accRef.current, relevant)) {
-            setResults(rankResults(accRef.current.items, keyRef.current ?? ""));
-            enqueueEnrich();
+            dirtyRef.current = true;
           }
+          // 游标推进也要反映到进度条上 → 同样走 flush (批次仍按 100ms 窗口合并)
+          if (pendingIndexRef.current >= 0) {
+            dirtyRef.current = true;
+          }
+          scheduleFlush();
         },
         onEnd: (payload) => {
           // 服务端提前收口的续接点(未完成源起点 - 1): 优先于批次游标, 保证不漏源;
@@ -323,9 +386,12 @@ export function useSearchSSE(): UseSearchSSEResult {
           if (typeof cursor === "number") {
             endCursorRef.current = cursor;
           }
+          // 流结束: 立即冲刷最后一批, 不等 100ms 窗口
+          flushRef.current();
         },
         onError: (err) => {
           cancelRef.current = null;
+          flushRef.current();
           if (err.message.includes("没有更多")) {
             noMoreRef.current = true;
             setNoMore(true);
@@ -338,6 +404,8 @@ export function useSearchSSE(): UseSearchSSEResult {
           }
         },
         onClose: () => {
+          // 断流兜底: 已聚合的结果先落地, 再决定续接
+          flushRef.current();
           if (!autoRef.current || keyRef.current === null || noMoreRef.current) {
             setSearching(false);
             return;
@@ -374,7 +442,7 @@ export function useSearchSSE(): UseSearchSSEResult {
         },
       },
     );
-  }, [enqueueEnrich]);
+  }, [scheduleFlush]);
 
   connectRef.current = connect;
 
@@ -385,6 +453,10 @@ export function useSearchSSE(): UseSearchSSEResult {
         setError("请输入搜索关键词");
         return;
       }
+      // 清掉上一轮的窗口: 旧批次不能被 flush 到新一轮结果里
+      clearFlushTimer();
+      dirtyRef.current = false;
+      pendingIndexRef.current = -1;
       accRef.current = { items: [], seen: new Set(), entries: new Map() };
       enrichedRef.current = new Set();
       enrichQueueRef.current = [];
@@ -396,15 +468,17 @@ export function useSearchSSE(): UseSearchSSEResult {
       concurrentRef.current = opts?.concurrentCount;
       connect(trimmed, opts?.lastIndex ?? -1, opts?.concurrentCount);
     },
-    [connect],
+    [clearFlushTimer, connect],
   );
 
   const stop = useCallback(() => {
     autoRef.current = false;
     cancelRef.current?.();
     cancelRef.current = null;
+    // 停止也要把窗口里最后一批结果落地, 不能丢
+    flushNow();
     setSearching(false);
-  }, []);
+  }, [flushNow]);
 
   const loadMore = useCallback(() => {
     const key = keyRef.current;
@@ -422,6 +496,9 @@ export function useSearchSSE(): UseSearchSSEResult {
     (key: string, items: SearchBook[], fromIndex: number) => {
       cancelRef.current?.();
       cancelRef.current = null;
+      clearFlushTimer();
+      dirtyRef.current = false;
+      pendingIndexRef.current = -1;
       // 旧快照可能存于过滤规则上线前: 恢复时同样收口
       const clean = items.filter((item) => matchesSearchKey(item, key));
       const seen = new Set<string>();
@@ -441,7 +518,7 @@ export function useSearchSSE(): UseSearchSSEResult {
       setError(null);
       setResults(clean);
     },
-    [],
+    [clearFlushTimer],
   );
 
   // 离开页面自动断开
@@ -450,8 +527,9 @@ export function useSearchSSE(): UseSearchSSEResult {
       autoRef.current = false;
       cancelRef.current?.();
       cancelRef.current = null;
+      clearFlushTimer();
     },
-    [],
+    [clearFlushTimer],
   );
 
   const progress = useMemo<SearchProgress | null>(() => {
