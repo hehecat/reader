@@ -14,6 +14,7 @@ import {
   Spinner,
 } from "@/components/ui";
 import { sanitizeChapterHtml } from "@/hooks/useChapterContent";
+import { decorateReaderImages } from "@/lib/readerImages";
 import type { RssArticle, RssSource } from "@/services/rss";
 
 import { rssErrorMessage, useRssArticleContent } from "./useRss";
@@ -66,6 +67,16 @@ export function ArticleReaderDialog({
     [content.content, baseUrl],
   );
 
+  // 正文里的远程图片包一层带 aspect-ratio 的容器, 占位高度先撑好, 加载完不再把下文顶走 (CLS)
+  const articleRef = React.useRef<HTMLElement | null>(null);
+  React.useEffect(() => {
+    const host = articleRef.current;
+    if (host === null) {
+      return;
+    }
+    return decorateReaderImages(host);
+  }, [sanitized]);
+
   const title = article !== null && article.title.length > 0 ? article.title : "文章";
   const pubDate = article !== null ? formatPubDate(article.pubDate) : "";
   const link = article?.link ?? "";
@@ -112,7 +123,8 @@ export function ArticleReaderDialog({
             />
           ) : (
             <article
-              className="rss-article-content mx-auto w-full max-w-(--reader-content-width) py-2 text-foreground [&_h1]:mt-5 [&_h1]:mb-2 [&_h1]:text-xl [&_h1]:font-semibold [&_h2]:mt-5 [&_h2]:mb-2 [&_h2]:text-lg [&_h2]:font-semibold [&_h3]:mt-4 [&_h3]:mb-2 [&_h3]:font-semibold [&_img]:my-3 [&_img]:h-auto [&_img]:max-w-full [&_img]:rounded-lg [&_p]:mb-(--reader-paragraph-gap) [&_p:last-child]:mb-0"
+              ref={articleRef}
+              className="rss-article-content mx-auto w-full max-w-(--reader-content-width) py-2 text-foreground [&_h1]:mt-5 [&_h1]:mb-2 [&_h1]:text-xl [&_h1]:font-semibold [&_h2]:mt-5 [&_h2]:mb-2 [&_h2]:text-lg [&_h2]:font-semibold [&_h3]:mt-4 [&_h3]:mb-2 [&_h3]:font-semibold [&_img]:my-3 [&_img]:rounded-lg [&_p]:mb-(--reader-paragraph-gap) [&_p:last-child]:mb-0"
               style={{
                 fontSize: "var(--reader-font-size)",
                 lineHeight: "var(--reader-line-height)",

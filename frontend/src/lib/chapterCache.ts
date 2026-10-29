@@ -61,17 +61,49 @@ interface ContentRecord extends CachedContent {
   ts: number;
 }
 
-let dbPromise: Promise<IDBDatabase | undefined> | undefined;
+/**
+ * open 失败后的冷却窗口 (ms): 失败一次就记住, 这段时间内所有读写直接按「无缓存」降级,
+ * 不再重复 open —— 隐私模式/被策略禁用/库被别的标签页锁住时, 反复 open 只会反复报错,
+ * 并把首屏的读写全部拖到失败之后才返回. 冷却到期后允许再试一次, 让临时故障能自愈.
+ */
+const OPEN_FAILURE_COOLDOWN_MS = 5 * 60_000;
 
-/** 打开/建库 (幂等): 不可用或出错一律解析为 undefined, 绝不 reject */
+/** 已连上的库 (成功后长期复用; 版本变化/被关闭时清空, 下次操作重开) */
+let openDbHandle: IDBDatabase | undefined;
+/** 进行中的 open: 并发调用合并成一次 */
+let openRequest: Promise<IDBDatabase | undefined> | undefined;
+/** 上次 open 失败的时间戳; 0 = 本会话还没有失败记录 */
+let openFailedAt = 0;
+
+/** 冷却窗口内不再尝试 open */
+function inFailureCooldown(now: number): boolean {
+  return openFailedAt > 0 && now - openFailedAt < OPEN_FAILURE_COOLDOWN_MS;
+}
+
+/**
+ * 打开/建库 (幂等): 不可用或出错一律解析为 undefined, 绝不 reject.
+ * 失败态进 TTL 缓存 (OPEN_FAILURE_COOLDOWN_MS), 成功态长期复用.
+ */
 function openDb(): Promise<IDBDatabase | undefined> {
-  if (dbPromise !== undefined) {
-    return dbPromise;
+  if (openDbHandle !== undefined) {
+    return Promise.resolve(openDbHandle);
   }
-  dbPromise = new Promise((resolve) => {
+  if (openRequest !== undefined) {
+    return openRequest;
+  }
+  if (inFailureCooldown(Date.now())) {
+    return Promise.resolve(undefined);
+  }
+  const promise = new Promise<IDBDatabase | undefined>((resolve) => {
+    // 任何失败路径都走这里: 记下失败时间戳, 之后冷却期内的调用直接降级
+    const fail = (): void => {
+      openDbHandle = undefined;
+      openFailedAt = Date.now();
+      resolve(undefined);
+    };
     try {
       if (typeof indexedDB === "undefined") {
-        resolve(undefined);
+        fail();
         return;
       }
       const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -86,16 +118,42 @@ function openDb(): Promise<IDBDatabase | undefined> {
           store.createIndex(CONTENT_BY_BOOK_TS, ["bookUrl", "ts"]);
         }
       };
-      request.onsuccess = () => resolve(request.result);
+      request.onsuccess = () => {
+        const handle = request.result;
+        // 另一个标签页要做 schema 升级: 让出连接, 下次操作重新 open (不算失败, 不进冷却)
+        handle.onversionchange = () => {
+          handle.close();
+          openDbHandle = undefined;
+        };
+        openDbHandle = handle;
+        openFailedAt = 0;
+        resolve(handle);
+      };
       // 隐私模式/配额拒绝/被策略禁用: 静默降级为无缓存
-      request.onerror = () => resolve(undefined);
-      // 另一个标签页占着旧版本库: 不阻塞, 本次会话按无缓存处理
-      request.onblocked = () => resolve(undefined);
+      request.onerror = fail;
+      // 另一个标签页占着旧版本库: 不阻塞, 本次按无缓存处理并进冷却
+      request.onblocked = fail;
     } catch {
-      resolve(undefined);
+      fail();
     }
   });
-  return dbPromise;
+  openRequest = promise;
+  // 失败后清掉「进行中」标记, 冷却到期时才能重新尝试; 成功则靠 openDbHandle 直接复用
+  void promise.then(() => {
+    if (openDbHandle === undefined && openRequest === promise) {
+      openRequest = undefined;
+    }
+  });
+  return promise;
+}
+
+/** 仅供测试/诊断: 清空模块级的连接与失败态缓存 (生产代码不要调用) */
+export function resetChapterCacheState(): void {
+  openDbHandle = undefined;
+  openRequest = undefined;
+  openFailedAt = 0;
+  writtenChapterHash.clear();
+  writtenContent.clear();
 }
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T | undefined> {

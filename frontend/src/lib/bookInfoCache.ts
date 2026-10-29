@@ -36,6 +36,15 @@ function save(cache: Cache): void {
 
 /** 命中且未过期返回 Book, 否则 undefined */
 export function getBookInfoCache(url: string): Book | undefined {
+  return getBookInfoCacheEntry(url)?.book;
+}
+
+/**
+ * 命中且未过期返回「书籍 + 写入时间」.
+ * 时间戳给 react-query 的 `initialDataUpdatedAt` 用: 只有报了真实年龄, 缓存才能
+ * 「立刻出画面 + 立刻 stale 后台刷新」, 否则会被当成刚取到的新数据而挡住刷新.
+ */
+export function getBookInfoCacheEntry(url: string): { book: Book; ts: number } | undefined {
   if (url.length === 0) {
     return undefined;
   }
@@ -43,7 +52,7 @@ export function getBookInfoCache(url: string): Book | undefined {
   if (entry === undefined || Date.now() - entry.ts > TTL_MS) {
     return undefined;
   }
-  return entry.book;
+  return entry;
 }
 
 /** 写入/更新缓存, 超容量按最旧淘汰 */

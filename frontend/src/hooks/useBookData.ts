@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useCallback, useMemo, useEffect, useRef, useState } from "react";
 
-import { getBookInfoCache, rememberBookInfo } from "@/lib/bookInfoCache";
+import { getBookInfoCache, getBookInfoCacheEntry, rememberBookInfo } from "@/lib/bookInfoCache";
 import { getChapters, putChapters } from "@/lib/chapterCache";
 import { getBookInfo, getChapterList } from "@/services/book";
 import {
@@ -85,6 +85,30 @@ export function useBookData(bookUrl: string, sourceHint?: string): UseBookDataRe
   const originWaitOver = originWaitBookUrl === bookUrl;
   const ready = enabled && (bookSourceUrl !== undefined || !shelfQuery.isPending || originWaitOver);
 
+  // 24h 客户端详情缓存: 只当「占位」用, 且必须书源对得上 —— 换源后的封面/书名/简介
+  // 与当前源无关, 拿来占位等于先闪一份错内容, 再把正确数据换上去.
+  const cachedInfo = useMemo(() => {
+    const entry = getBookInfoCacheEntry(bookUrl);
+    if (entry === undefined) {
+      return undefined;
+    }
+    const cachedOrigin = entry.book.origin;
+    if (
+      bookSourceUrl !== undefined &&
+      cachedOrigin !== undefined &&
+      cachedOrigin !== "" &&
+      cachedOrigin !== bookSourceUrl
+    ) {
+      return undefined;
+    }
+    return entry;
+  }, [bookUrl, bookSourceUrl]);
+
+  /** initialData 与它的「真实年龄」: 书架记录取书架列表的取回时间, 其余取缓存写入时间 */
+  const initialBook = shelfBook ?? cachedInfo?.book;
+  const initialBookUpdatedAt =
+    shelfBook !== undefined ? shelfQuery.dataUpdatedAt : cachedInfo?.ts;
+
   const bookQuery = useQuery({
     queryKey: ["bookInfo", bookUrl],
     queryFn: () => {
@@ -98,7 +122,11 @@ export function useBookData(bookUrl: string, sourceHint?: string): UseBookDataRe
     // 缓存新鲜期内直接复用, 不再「每次挂载必回源」—— 详情要 1~2s 且会和目录抢带宽;
     // 只有过期 (staleTime) 后才在后台刷新, initialData 兜着, 刷新不阻塞渲染。
     // 跨设备的最新进度不靠它: 进度只认书架记录 (见 shelfQuery / ReaderPage 的补取)。
-    initialData: shelfBook ?? getBookInfoCache(bookUrl),
+    initialData: initialBook,
+    // 必须一起给: 只给 initialData 时 react-query 把这份数据当成「刚刚取回的」,
+    // 于是 24h 前的缓存也白拿 5 分钟新鲜期, 期间网络新数据回不来 (改了封面/书名也不刷新).
+    // 报上真实年龄后, 旧数据照样立刻出画面, 但立刻是 stale → 挂载即后台静默刷新.
+    initialDataUpdatedAt: initialBookUpdatedAt,
     staleTime: 5 * 60_000,
   });
 
@@ -159,9 +187,10 @@ export function useBookData(bookUrl: string, sourceHint?: string): UseBookDataRe
   });
   const queryClient = useQueryClient();
 
-  // origin 迟到自愈: 起跑时如果还没拿到选源提示 (书架接口慢 / 冷启动深链 / 断网),
-  // 那次目录可能是服务端默认源的。origin 一到就失效重取, 避免「错源目录 + staleTime
+  // origin 迟到/换源自愈: 起跑时如果还没拿到选源提示 (书架接口慢 / 冷启动深链 / 断网),
+  // 那次目录可能是服务端默认源的; origin 到了就失效重取, 避免「错源目录 + staleTime
   // 内不再回源」的僵死状态 (配合上面"origin 未知不落盘")。
+  // origin 从 A 直接换成 B 也要重取: 换了书源后目录/详情都是另一个源的, 旧缓存不能留着。
   const originStateRef = useRef<{ bookUrl: string; origin: string | undefined }>({
     bookUrl,
     origin: bookSourceUrl,
@@ -169,11 +198,13 @@ export function useBookData(bookUrl: string, sourceHint?: string): UseBookDataRe
   useEffect(() => {
     const prev = originStateRef.current;
     originStateRef.current = { bookUrl, origin: bookSourceUrl };
-    // 只在「同一本书内 origin 由未知变已知」时重取
-    if (prev.bookUrl === bookUrl && prev.origin === undefined && bookSourceUrl !== undefined) {
-      void queryClient.invalidateQueries({ queryKey: ["chapters", bookUrl] });
-      void queryClient.invalidateQueries({ queryKey: ["bookInfo", bookUrl] });
+    const sameBook = prev.bookUrl === bookUrl;
+    const originChanged = prev.origin !== bookSourceUrl;
+    if (!sameBook || bookSourceUrl === undefined || !originChanged) {
+      return;
     }
+    void queryClient.invalidateQueries({ queryKey: ["chapters", bookUrl] });
+    void queryClient.invalidateQueries({ queryKey: ["bookInfo", bookUrl] });
   }, [bookSourceUrl, bookUrl, queryClient]);
   const refreshChapters = useCallback(async (): Promise<BookChapter[]> => {
     const list = await getChapterList(bookUrl, true, { bookSourceUrl });

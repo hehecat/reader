@@ -14,6 +14,7 @@ import { injectAnnotationMarks } from "@/components/reader/annotation-marks";
 import { Button, EmptyState, Spinner } from "@/components/ui";
 import type { ReaderParagraph } from "@/hooks/useChapterContent";
 import { humanizeError } from "@/lib/errors";
+import { decorateReaderImages } from "@/lib/readerImages";
 import { NO_ANNOTATIONS, type Annotation } from "@/stores/annotations-store";
 import { useReaderUIStore } from "@/stores/reader-ui-store";
 import { useSettingsStore, type ReadMode } from "@/stores/settings-store";
@@ -75,6 +76,36 @@ function offscreenSkipStyle(text: string, estimate: ParagraphEstimate): React.CS
     contentVisibility: "auto",
     containIntrinsicSize: `auto ${Math.round(lines * estimate.lineHeight + estimate.paragraphGap)}px`,
   };
+}
+
+/**
+ * 首帧项高估算 (交给 Virtuoso 的 defaultItemHeight).
+ *
+ * 还没渲染任何段落时量不到真文本, 就用排版设置 + 视口宽推「一行几个字」, 再按本章平均段长
+ * 折算平均段高. 不这么做, Virtuoso 会用它自己的兜底估算算 initialTopMostItemIndex 的滚动
+ * 偏移: 手机 390px 宽下正文一行只有 ~19 字, 一段 100 字是 5~6 行 (~200px), 兜底值远小于此,
+ * 首帧就落在目标段之前很远的位置. 这里给的是「本章自己的」估算, 与屏外跳过同一套口径.
+ */
+function estimateAverageItemHeight(items: ReaderParagraph[]): number {
+  const rootStyle = getComputedStyle(document.documentElement);
+  const fontSize = Number.parseFloat(rootStyle.getPropertyValue("--reader-font-size")) || 18;
+  const lineHeightRatio = Number.parseFloat(rootStyle.getPropertyValue("--reader-line-height")) || 1.8;
+  const lineHeight = fontSize * lineHeightRatio;
+  const gapEm = Number.parseFloat(rootStyle.getPropertyValue("--reader-paragraph-gap")) || 0.75;
+  const paragraphGap = gapEm * fontSize;
+  // 栏宽 = min(视口宽, 42em 内容宽), 再减掉段落左右各 20px 的内边距
+  const columnWidth = Math.max(120, Math.min(window.innerWidth, fontSize * 42) - 40);
+  const charsPerLine = Math.max(8, Math.floor(columnWidth / fontSize));
+  if (items.length === 0) {
+    return Math.round(lineHeight + paragraphGap);
+  }
+  let total = 0;
+  for (const item of items) {
+    const chars = item.text.replace(/<[^>]*>/g, "").length;
+    const lines = Math.max(1, Math.ceil(chars / charsPerLine));
+    total += lines * lineHeight + paragraphGap;
+  }
+  return Math.round(total / items.length);
 }
 
 /** 批注抽屉的跳转请求: 滚动到目标段落并闪烁; nonce 区分对同一段落的连续两次跳转 */
@@ -231,6 +262,41 @@ const paragraphBlockPadding: React.CSSProperties = {
 };
 
 /**
+ * 图片段: 给每张远程图套定比例容器 (见 lib/readerImages), 图片解码完成后不再把后面正文顶下去.
+ * 之所以在挂载后动 DOM 而不是在净化后的 HTML 里塞容器标记: 段落 pos 按清洗后 HTML 的字符
+ * 偏移计算, 塞标记会让后续段落的 pos 全部漂移, 进度恢复跟着偏.
+ */
+const ImageBlock = React.memo(function ImageBlock({
+  item,
+  estimate,
+}: {
+  item: ReaderParagraph;
+  estimate: ParagraphEstimate | null;
+}) {
+  const hostRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    const host = hostRef.current;
+    if (host === null) {
+      return;
+    }
+    return decorateReaderImages(host);
+  }, [item.text]);
+  return (
+    <div
+      ref={hostRef}
+      data-pos={item.pos}
+      className="break-inside-avoid px-5"
+      style={{
+        ...paragraphBlockPadding,
+        // 整块屏外时连容器估算一起跳过布局 (容器自带 aspect-ratio, 不需要再猜高度)
+        ...(estimate === null ? null : { contentVisibility: "auto" }),
+      }}
+      dangerouslySetInnerHTML={{ __html: item.text }}
+    />
+  );
+});
+
+/**
  * 段落渲染: memo 化 —— 顶栏进度条随滚动逐帧更新, 不该带着整章段落一起重渲染.
  * 章头 (title) 是「书名 · 作者」小字 + 衬线章节标题, 字号随正文字号缩放.
  * 划选批注: 正文段落带 data-para-index (段落序号, 选区工具条据此定位),
@@ -292,20 +358,7 @@ const ParagraphItem = React.memo(function ParagraphItem({
         />
       );
     case "image":
-      return (
-        <div
-          data-pos={item.pos}
-          className="break-inside-avoid px-5 [&_img]:mx-auto [&_img]:block [&_img]:h-auto [&_img]:max-w-full"
-          style={{
-            ...paragraphBlockPadding,
-            // 图片真实高度要等解码, 屏外时给个占位高度免得滚动位置来回跳
-            ...(estimate === null
-              ? null
-              : { contentVisibility: "auto", containIntrinsicSize: "auto 260px" }),
-          }}
-          dangerouslySetInnerHTML={{ __html: item.text }}
-        />
-      );
+      return <ImageBlock item={item} estimate={estimate} />;
     case "paragraph":
       return (
         <p
@@ -390,6 +443,28 @@ function VirtualScrollList({
     () => findRestoreItemIndex(items, restorePos),
     [items, restorePos],
   );
+  /**
+   * 首帧项高估算: Virtuoso 在没实测过任何项时用它算 initialTopMostItemIndex 对应的滚动偏移。
+   * 不给的话它按自己的兜底行高估, 而手机 390px 宽下一段正文有 5~6 行, 估算值只有零头 ——
+   * 首帧就落在目标段之前很远, 表现为「恢复位置不准」。
+   */
+  const defaultItemHeight = React.useMemo(() => estimateAverageItemHeight(items), [items]);
+  /**
+   * 首帧进度上报闸门: Virtuoso 应用 initialTopMostItemIndex 之前会先报一次「第 0 段」的区间,
+   * 那次上报会把 pos=0 写进进度 (600ms 后落盘) —— 读者明明在第 120 段, 下次进章却回到章首,
+   * 进度条也先闪到 0。恢复位置落定前不认这个区间。
+   */
+  const restoreSettledRef = React.useRef(restoreIndex === 0);
+  React.useEffect(() => {
+    if (restoreSettledRef.current) {
+      return;
+    }
+    // 兜底: 目标区间迟迟不来 (restorePos 超出本章长度等异常) 也不能永远不上报进度
+    const timer = window.setTimeout(() => {
+      restoreSettledRef.current = true;
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, []);
   const scrollerRef = React.useRef<HTMLElement | null>(null);
   const frameRef = React.useRef(0);
   const onPosChangeRef = React.useRef(onPosChange);
@@ -411,6 +486,14 @@ function VirtualScrollList({
 
   const handleRangeChanged = React.useCallback(
     (range: ListRange) => {
+      // 恢复位置没落定前, 先到的「第 0 段」区间是 Virtuoso 应用 initialTopMostItemIndex 之前的
+      // 过渡帧: 既不能报 pos (会被当成回到章首并落盘), 也不能报比例 (进度条闪 0)
+      if (!restoreSettledRef.current) {
+        if (range.startIndex < restoreIndex - 1) {
+          return;
+        }
+        restoreSettledRef.current = true;
+      }
       // 可视区间变化也意味着进度变化 (含 Virtuoso 应用 initialTopMostItemIndex 的那一次)
       reportRatio();
       for (let i = range.startIndex; i <= range.endIndex && i < items.length; i += 1) {
@@ -421,7 +504,7 @@ function VirtualScrollList({
         }
       }
     },
-    [items, reportRatio],
+    [items, reportRatio, restoreIndex],
   );
 
   // Virtuoso 自己持有滚动容器: 拿到它才算得出比例, 自动滚动也才能驱动它
@@ -451,8 +534,12 @@ function VirtualScrollList({
     };
     scroller.addEventListener("scroll", onScroll, { passive: true });
     reportRatio();
-    // Virtuoso 应用初始位置/图片撑开高度后再校正一次
-    const timer = window.setTimeout(reportRatio, 250);
+    // Virtuoso 应用初始位置/图片撑开高度后再校正一次 (恢复位置落定前不校正: 那一帧 scrollTop 还在 0)
+    const timer = window.setTimeout(() => {
+      if (restoreSettledRef.current) {
+        reportRatio();
+      }
+    }, 250);
     return () => {
       scroller.removeEventListener("scroll", onScroll);
       window.clearTimeout(timer);
@@ -493,6 +580,7 @@ function VirtualScrollList({
         context={endBlock}
         components={VIRTUOSO_COMPONENTS}
         initialTopMostItemIndex={restoreIndex}
+        defaultItemHeight={defaultItemHeight}
         itemContent={(_position, item) => (
           <ParagraphItem
             item={item}

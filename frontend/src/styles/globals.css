@@ -158,3 +158,35 @@
     background: color-mix(in oklab, var(--accent) 60%, transparent);
   }
 }
+
+/* 正文远程图片: 容器按 aspect-ratio 预先占住高度, 图片解码完成后不再把下面的正文顶下去 (CLS).
+   --reader-img-ratio 由 lib/readerImages.ts 写入: 源 HTML 声明的宽高优先, 否则加载后按真实像素校正;
+   3 / 2 只是加载前的占位比例 (没有写死任何像素尺寸). */
+.reader-figure {
+  display: block;
+  position: relative;
+  width: 100%;
+  margin-inline: auto;
+  aspect-ratio: var(--reader-img-ratio, 3 / 2);
+  overflow: hidden;
+  border-radius: 0.5rem;
+  background: color-mix(in oklab, var(--surface-muted) 80%, transparent);
+}
+/* 加载完成后撤掉占位底色: 图片自己就是内容, 透明/带留白的图不该被灰底框住 */
+.reader-figure[data-loaded] {
+  background: transparent;
+}
+.reader-figure > img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  object-fit: contain;
+}
+/* 加载失败的图: 不留空格子 */
+.reader-figure[data-failed] {
+  aspect-ratio: auto;
+  display: none;
+}
