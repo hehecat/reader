@@ -33,10 +33,16 @@ const text = (fallback: string) => z.string().catch(fallback);
 export const graphEstimateSchema = z.object({
   /** 已缓存(可离线送模型的)章数 */
   cachedChapters: int(0),
+  /** 本次增量要覆盖的章数(不含已抽取过且没变的章) */
+  selectedChapters: int(0),
   /** 要送模型的分批数 */
   batches: int(0),
-  /** 预估 prompt token 总量 */
+  /** 已是最新: 没有新章/变章, 且成品已覆盖台账 —— 点生成也不会跑 */
+  upToDate: z.boolean().catch(false),
+  /** 预估 prompt token 总量(按真实分批 prompt 累加, 不是"章数 × 系数") */
   estPromptTokens: int(0),
+  /** 预估输出 token 总量 */
+  estCompletionTokens: int(0),
   /** 花费说明的人话(每批大概多少钱), 由后端给, 前端只展示 */
   estCostNote: text(""),
 });
@@ -146,6 +152,8 @@ export async function startGraphGeneration(input: {
   bookName?: string;
   /** 调试用: 只跑前 N 批 */
   maxBatches?: number;
+  /** 强制重跑: 清空本书台账回到首次生成(会重抽, 花费同首次) */
+  force?: boolean;
 }): Promise<string> {
   const result = parseWith(
     graphStartResultSchema,
@@ -154,6 +162,7 @@ export async function startGraphGeneration(input: {
       bookName: input.bookName ?? "",
       confirm: true,
       maxBatches: input.maxBatches,
+      force: input.force === true,
     }),
   );
   if (result.jobId === "") {
@@ -252,7 +261,7 @@ export interface GraphGeneration {
   /** 启动失败原文 */
   error: string | null;
   /** 确认后启动任务并附着进度流 */
-  start: (options?: { bookName?: string; maxBatches?: number }) => Promise<void>;
+  start: (options?: { bookName?: string; maxBatches?: number; force?: boolean }) => Promise<void>;
   /** 取消服务端任务(流本身留在原位等 cancelled 帧) */
   cancel: () => Promise<void>;
   /** 收尾: 断开流 + 清空状态(关对话框时调) */
@@ -278,7 +287,7 @@ export function useGraphGeneration(bookUrl: string): GraphGeneration {
   React.useEffect(() => detach, [detach]);
 
   const start = React.useCallback(
-    async (options: { bookName?: string; maxBatches?: number } = {}) => {
+    async (options: { bookName?: string; maxBatches?: number; force?: boolean } = {}) => {
       if (bookUrl === "") {
         return;
       }

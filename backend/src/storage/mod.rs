@@ -802,6 +802,48 @@ pub async fn init(config: &AppConfig) -> Result<Storage> {
     .execute(&pool)
     .await?;
 
+    // 增量生成台账：哪些章已经被模型抽过。`chapter_key` = `book_chapters.chapter_index`
+    // （书源书是 md5(chapterUrl)，跨「目录重排 / 每次重新编号」稳定，不会因为 TOC 变动错位）。
+    // `content_hash` 存正文哈希——老章正文被改写时要重抽，所以哈希变了就等于「没覆盖」。
+    // 只增表、不改已有列：旧库升级时建出来的空表 = 全部未覆盖，第一次生成仍是全量。
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS book_graph_chapters (
+            book_url TEXT NOT NULL,
+            user_namespace TEXT NOT NULL DEFAULT 'default',
+            chapter_key INTEGER NOT NULL,
+            ordinal INTEGER NOT NULL DEFAULT 0,
+            title TEXT NOT NULL DEFAULT '',
+            content_hash INTEGER NOT NULL DEFAULT 0,
+            done_at INTEGER,
+            job_id TEXT,
+            PRIMARY KEY (book_url, user_namespace, chapter_key)
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    // 批次沉淀：一批的原始模型输出 + 它覆盖的 chapter_key 列表（JSON 数组）。
+    // 归并吃这本书的**全部** unit（历史 + 本次）：归并是纯代码，不花 token，
+    // 历史批留着只会让家族归并更准。
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS book_graph_units (
+            book_url TEXT NOT NULL,
+            user_namespace TEXT NOT NULL DEFAULT 'default',
+            seq INTEGER NOT NULL,
+            raw_json TEXT NOT NULL,
+            chapter_keys TEXT NOT NULL DEFAULT '[]',
+            job_id TEXT,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (book_url, user_namespace, seq)
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
     // 幂等补列（兼容旧库：缺列则 ALTER TABLE 补上）
     let columns = [
         ("users", &["token_map", "raw_json"][..]),
@@ -2771,6 +2813,19 @@ impl Storage {
         Ok(())
     }
 
+    /// 成品里记的「已扫描章数」（没成品返回 0）——用来判断台账是否比成品新
+    pub async fn graph_chapters_scanned(&self, ns: &str, book_url: &str) -> Result<i64> {
+        let scanned = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT chapters_scanned FROM book_graphs WHERE user_namespace = ?1 AND book_url = ?2",
+        )
+        .bind(ns)
+        .bind(book_url)
+        .fetch_optional(&self.pool)
+        .await?
+        .flatten();
+        Ok(scanned.unwrap_or(0))
+    }
+
     /// 读成品 JSON（没生成过返回 None）
     pub async fn graph_get(&self, ns: &str, book_url: &str) -> Result<Option<String>> {
         let row = sqlx::query_as::<_, (String,)>(
@@ -2781,6 +2836,137 @@ impl Storage {
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(|r| r.0))
+    }
+
+    // ---- 增量生成：章节覆盖台账 + 批次沉淀 ----
+
+    /// 读台账：该书每个已抽取章的 (chapter_key, ordinal, title, content_hash, done_at)
+    /// （`done_at` 是毫秒时间戳，NULL 视作 0 = 最久远，排在最前面被优先补抽）
+    pub async fn graph_ledger(
+        &self,
+        ns: &str,
+        book_url: &str,
+    ) -> Result<Vec<(i64, i64, String, i64, i64)>> {
+        let rows = sqlx::query_as::<_, (i64, i64, String, i64, Option<i64>)>(
+            "SELECT chapter_key, ordinal, title, content_hash, done_at FROM book_graph_chapters \
+             WHERE user_namespace = ?1 AND book_url = ?2",
+        )
+        .bind(ns)
+        .bind(book_url)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(k, o, t, h, d)| (k, o, t, h, d.unwrap_or(0)))
+            .collect())
+    }
+
+    /// 台账覆盖章数（「台账覆盖数没变」的判定依据）
+    pub async fn graph_ledger_count(&self, ns: &str, book_url: &str) -> Result<i64> {
+        let count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM book_graph_chapters WHERE user_namespace = ?1 AND book_url = ?2",
+        )
+        .bind(ns)
+        .bind(book_url)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count)
+    }
+
+    /// 一批成功后**一次性**落 unit + 标台账（同一事务：要么都记、要么都不记）。
+    ///
+    /// `chapters` = (chapter_key, ordinal, title, content_hash)。台账写 `done_at`/`job_id`，
+    /// 重复标同一章是幂等的（`INSERT OR REPLACE`，不会多出行）。
+    /// 失败/取消的批不会走到这里，下次自然重抽这一批。
+    pub async fn graph_unit_commit(
+        &self,
+        ns: &str,
+        book_url: &str,
+        job_id: &str,
+        seq: i64,
+        raw_json: &str,
+        chapters: &[(i64, i64, String, i64)],
+    ) -> Result<()> {
+        let now = chrono::Utc::now().timestamp_millis();
+        let keys: Vec<serde_json::Value> = chapters
+            .iter()
+            .map(|(key, ..)| serde_json::json!(key))
+            .collect();
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT OR REPLACE INTO book_graph_units \
+             (book_url, user_namespace, seq, raw_json, chapter_keys, job_id, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .bind(book_url)
+        .bind(ns)
+        .bind(seq)
+        .bind(raw_json)
+        .bind(serde_json::Value::Array(keys).to_string())
+        .bind(job_id)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+        for (key, ordinal, title, content_hash) in chapters {
+            sqlx::query(
+                "INSERT OR REPLACE INTO book_graph_chapters \
+                 (book_url, user_namespace, chapter_key, ordinal, title, content_hash, done_at, job_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )
+            .bind(book_url)
+            .bind(ns)
+            .bind(key)
+            .bind(ordinal)
+            .bind(title)
+            .bind(content_hash)
+            .bind(now)
+            .bind(job_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// 该书已沉淀的最大 unit 序号（没有 unit 返回 0）
+    pub async fn graph_unit_max_seq(&self, ns: &str, book_url: &str) -> Result<i64> {
+        let seq = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT MAX(seq) FROM book_graph_units WHERE user_namespace = ?1 AND book_url = ?2",
+        )
+        .bind(ns)
+        .bind(book_url)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(seq.unwrap_or(0))
+    }
+
+    /// 读该书**全部** unit 的原始输出（按 seq 升序）——归并吃历史 + 本次
+    pub async fn graph_units(&self, ns: &str, book_url: &str) -> Result<Vec<String>> {
+        let rows = sqlx::query_scalar::<_, String>(
+            "SELECT raw_json FROM book_graph_units WHERE user_namespace = ?1 AND book_url = ?2 \
+             ORDER BY seq",
+        )
+        .bind(ns)
+        .bind(book_url)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// 删掉这本书的全部 unit + 台账（「全量重来」用；当前无生产调用点，供排查/测试）
+    pub async fn graph_ledger_reset(&self, ns: &str, book_url: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for table in ["book_graph_units", "book_graph_chapters"] {
+            sqlx::query(&format!(
+                "DELETE FROM {table} WHERE user_namespace = ?1 AND book_url = ?2"
+            ))
+            .bind(ns)
+            .bind(book_url)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
     /// 删除本地书（含章节）

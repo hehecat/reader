@@ -1,10 +1,12 @@
 //! 后台生成任务：逐批调用模型、落库、报进度、可取消。仿 `service/cache_job.rs`。
 //!
-//! 链路：已缓存章节 → [`super::plan_batches`] 分批 → 逐批 `ai::chat_once` → 原始 JSON 落
-//! `book_graph_batches` → 全部批完成后 [`super::normalize`] 合并 → `book_graphs` 成品。
+//! 链路（增量）：已缓存章节 → 台账对账 → [`super::plan_incremental`] 只挑「这次该跑的章」→
+//! 逐批 `ai::chat_once` → 每批成功后**立即**落 `book_graph_units` + 标
+//! `book_graph_chapters.done_at` → 全部批完成后 [`super::normalize`] 合并该书**全部** unit
+//! （历史 + 本次）→ `book_graphs` 成品。
 //! 进度双写：内存任务表（SSE 每 300ms 读）+ `book_graph_jobs` 行（进程重启后仍可回显）。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
@@ -16,8 +18,11 @@ use crate::service::ai::{self, AiConfig};
 use crate::storage::Storage;
 
 use super::normalize::BookHints;
-use super::plan::{number_chapters, parse_toc};
-use super::{build_batch_messages, normalize, plan_batches, Chapter, MAX_BATCH_TOKENS};
+use super::plan::{number_chapters_keyed, parse_toc};
+use super::{
+    build_batch_messages, content_hash, normalize, plan_incremental, BatchPlan, Chapter,
+    ChapterEntry, Covered, MAX_BATCH_TOKENS,
+};
 
 /// 任务状态机：queued → running → done | failed | cancelled
 /// （cancelled/failed 都保留已完成批次的落库结果，便于排查与续跑）
@@ -119,6 +124,14 @@ fn block_on<F: Future>(fut: F) -> F::Output {
     }
 }
 
+/// 归并结果为空时是否保留原成品。
+///
+/// 模型偶尔会输出一堆「quote 在正文里找不到」的关系，全被校验丢掉后归并结果就是
+/// 0 人 0 关系；这种情况下把已有的好成品覆盖掉是纯损失。
+fn keep_old_on_empty(characters: usize, relations: usize, old_characters: usize) -> bool {
+    characters == 0 && relations == 0 && old_characters > 0
+}
+
 fn array_len(value: &Value, key: &str) -> usize {
     value.get(key).and_then(Value::as_array).map_or(0, Vec::len)
 }
@@ -133,16 +146,19 @@ const TOC_MAX_AGE_MS: i64 = 10 * 365 * 24 * 3600 * 1000;
 /// 1e18 量级。原样喂模型，页面就显示「1151345960693571501 章」、prompt 里也成了
 /// 【第1151345960693571501章】。权威阅读序在 `toc_cache.chapters_json`。
 /// Bug 2：书名/总章数别问模型，`books` 表里现成就有。
+///
+/// 增量：排序时把**原 `chapter_index`**一起带出来当 `chapter_key`（跨生成稳定，TOC 重排也不变），
+/// 并给每章算正文哈希 —— 台账靠这两个键判断「新章 / 变章 / 已覆盖」。
 fn prepare_chapters(
     storage: &Storage,
     ns: &str,
     book_url: &str,
     requested_name: &str,
-) -> Result<(Vec<Chapter>, BookHints)> {
+) -> Result<PreparedBook> {
     let cached = block_on(storage.list_cached_chapters(ns, book_url))
         .map_err(|e| anyhow!("读取已缓存章节失败: {e}"))?;
     if cached.is_empty() {
-        return Ok((Vec::new(), BookHints::default()));
+        return Ok(PreparedBook::default());
     }
 
     let book = block_on(storage.find_book(ns, book_url)).ok().flatten();
@@ -157,8 +173,14 @@ fn prepare_chapters(
         .flatten()
         .map(|json| parse_toc(&json))
         .unwrap_or_default();
-    let chapters = number_chapters(&cached, &toc);
-
+    let entries: Vec<ChapterEntry> = number_chapters_keyed(&cached, &toc)
+        .into_iter()
+        .map(|(chapter, key)| ChapterEntry {
+            content_hash: content_hash(&chapter.2),
+            chapter,
+            key,
+        })
+        .collect();
     // 书名优先级：books.name > 调用方给的名字 > book_info_cache > 空（normalize 退模型输出）
     let mut book_name = book
         .as_ref()
@@ -184,25 +206,63 @@ fn prepare_chapters(
         .map(|b| b.total_chapter_num)
         .unwrap_or(0)
         .max(toc.len() as i64);
-    Ok((
-        chapters,
-        BookHints {
+    Ok(PreparedBook {
+        entries,
+        hints: BookHints {
             book_name,
             total_chapters: total,
         },
-    ))
+    })
+}
+
+/// 一次生成要用的全部章节数据（章身 + 增量台账要用的两个稳定键）
+#[derive(Debug, Clone, Default)]
+struct PreparedBook {
+    /// 已按阅读序重编号 1..N
+    entries: Vec<ChapterEntry>,
+    hints: BookHints,
+}
+
+impl PreparedBook {
+    /// normalize 要的「(序数, 标题, 正文)」视图
+    fn chapters(&self) -> Vec<Chapter> {
+        self.entries.iter().map(|e| e.chapter.clone()).collect()
+    }
 }
 
 // ---------------- 对外接口 ----------------
 
-/// 启动一次生成任务，返回 job_id
+/// 启动的结果
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartOutcome {
+    /// 启动了任务（或在跑的任务被复用）
+    Started {
+        job_id: String,
+        /// 本次要跑的批数（不含历史批）
+        total_batches: usize,
+        /// 本次入选章数
+        chapters_selected: usize,
+        /// 是否复用了一个正在跑的任务
+        reused: bool,
+    },
+    /// 已是最新：不建任务、不花 token（用户重复点「生成」不该烧钱）
+    UpToDate {
+        /// 台账里已覆盖的章数
+        covered_chapters: usize,
+    },
+}
+
+/// 启动一次生成任务（增量）
+///
+/// 选章在**建任务行之前**就算完：这样才能在「没有新章、没有变章、成品已存在」时
+/// 直接返回 [`StartOutcome::UpToDate`]，一个 token 都不花、也不留任务行。
 pub fn start_job(
     storage: Storage,
     ns: String,
     book_url: String,
     opts: JobOptions,
     cfg: AiConfig,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<StartOutcome> {
     if book_url.trim().is_empty() {
         return Err(anyhow!("缺少书籍地址"));
     }
@@ -210,40 +270,90 @@ pub fn start_job(
 
     // 同一本书已有在跑的任务 → 复用，绝不重复烧 token
     if let Some(existing) = mem_progress(&book_url) {
-        let running_job = {
+        let (running_job, total_batches, done) = {
             let p = lock_progress(&existing);
             if is_terminal(&p.status) {
-                String::new()
+                (String::new(), 0, 0)
             } else {
-                p.job_id.clone()
+                (p.job_id.clone(), p.total_batches, p.chapters_scanned)
             }
         };
         if !running_job.is_empty() {
-            return Ok(running_job);
+            return Ok(StartOutcome::Started {
+                job_id: running_job,
+                total_batches,
+                chapters_selected: done,
+                reused: true,
+            });
         }
     }
 
     // 已缓存章节是整条链路的前置条件：没有缓存就不必建行。
     // 章节在这里就按目录排成阅读序、重编号 1..N（书源书的 chapter_index 是 md5 哈希，
     // 既是哈希序又是天文数字，见 `plan::number_chapters`），书名/总章数顺手从库里查实。
-    let (chapters, hints) = prepare_chapters(&storage, &ns, &book_url, &opts.book_name)?;
-    if chapters.is_empty() {
+    let prepared = prepare_chapters(&storage, &ns, &book_url, &opts.book_name)?;
+    if prepared.entries.is_empty() {
         return Err(anyhow!(
             "本书还没有已缓存章节, 先读几章(或先缓存章节)再生成关系图"
         ));
     }
     // 提示词与成品都用库里的权威书名（模型批次 JSON 里通常没有 book 字段）
     let mut opts = opts;
-    if !hints.book_name.is_empty() {
-        opts.book_name = hints.book_name.clone();
+    if !prepared.hints.book_name.is_empty() {
+        opts.book_name = prepared.hints.book_name.clone();
     }
+
+    // ---- 增量选章：先跟台账对账，只挑「这次真的该跑」的章 ----
+    // 放在建任务行之前：这样「没新章 / 没变章 / 成品已在」时能直接返回已是最新，
+    // 既不留任务行、也不花一个 token。
+    let covered = load_covered(&storage, &ns, &book_url)?;
+    let product_exists = block_on(storage.graph_get(&ns, &book_url))
+        .map_err(|e| anyhow!("读取已有关系图失败: {e}"))?
+        .is_some();
+    let product_scanned = if product_exists {
+        block_on(storage.graph_chapters_scanned(&ns, &book_url))
+            .map_err(|e| anyhow!("读取已有关系图失败: {e}"))?
+    } else {
+        0
+    };
+    let inc = plan_incremental(&prepared.entries, &covered);
+    let mut plans = inc.batches;
+    // 没有新章、没有变章、成品已在 → 已是最新：不建任务、不烧 token。
+    // （选章函数在这种情况下会用「最久没覆盖的老章」把预算填满，所以这里必须先拦住，
+    //  否则用户每点一次「生成」都要重抽 240 章。）
+    if inc.fresh == 0 && inc.changed == 0 && product_exists {
+        if product_scanned.max(0) as usize >= covered.len() {
+            return Ok(StartOutcome::UpToDate {
+                covered_chapters: covered.len(),
+            });
+        }
+        // 台账比成品多：上次跑到一半就失败/取消了。历史 unit 都在，
+        // 0 批跑一次纯代码重归并（不花 token）就能把成品补齐。
+        plans.clear();
+    }
+    if let Some(cap) = opts.max_batches {
+        plans.truncate(cap);
+    }
+    if plans.is_empty() && !product_exists {
+        let units = block_on(storage.graph_unit_max_seq(&ns, &book_url))
+            .map_err(|e| anyhow!("读取批次沉淀失败: {e}"))?;
+        // 没成品也没历史批次 → 真的没东西可做
+        if units == 0 {
+            return Ok(StartOutcome::UpToDate {
+                covered_chapters: covered.len(),
+            });
+        }
+    }
+    let total_batches = plans.len();
+    let chapters_selected: usize = plans.iter().map(|p| p.chapters.len()).sum();
 
     let job_id = uuid::Uuid::new_v4().simple().to_string();
     let progress = Arc::new(Mutex::new(GraphProgress {
         job_id: job_id.clone(),
         status: ST_QUEUED.to_string(),
-        // 批数要等 plan_batches 算完才知道；先用上界估计填着，run_job 里回写真实值
-        total_batches: estimate_batches(chapters.len()),
+        // 选章已在建行前算完，这里是本次**真实**批数（历史批不计入）
+        total_batches,
+        chapters_scanned: 0,
         ..Default::default()
     }));
     let total_hint = progress_batches(&progress);
@@ -263,7 +373,6 @@ pub fn start_job(
     let url_for_run = book_url.clone();
     let job_for_run = job_id.clone();
     let progress_for_run = progress.clone();
-    let hints_for_run = hints.clone();
     tokio::spawn(async move {
         // 内层再 spawn 一层：plan/normalize 还在并行开发（todo!() 会 panic），
         // 靠 JoinError 把 panic 也收成 failed，否则任务永远停在 running、SSE 永不关流。
@@ -274,8 +383,8 @@ pub fn start_job(
             job_for_run.clone(),
             opts,
             cfg,
-            chapters,
-            hints_for_run,
+            prepared,
+            plans,
             progress_for_run.clone(),
         ));
         let err = match inner.await {
@@ -287,11 +396,40 @@ pub fn start_job(
         mark_failed(&storage_for_finish, &job_for_run, &progress_for_run, &err).await;
     });
 
-    Ok(job_id)
+    Ok(StartOutcome::Started {
+        job_id,
+        total_batches,
+        chapters_selected,
+        reused: false,
+    })
 }
 
 fn progress_batches(p: &Arc<Mutex<GraphProgress>>) -> usize {
     lock_progress(p).total_batches
+}
+
+/// 读台账 → `chapter_key → (content_hash, done_at)`（增量选章的唯一输入）
+///
+/// `content_hash` 库里存 i64（SQLite 只有有符号整数），这里按位回 u64。
+fn load_covered(
+    storage: &Storage,
+    ns: &str,
+    book_url: &str,
+) -> anyhow::Result<BTreeMap<i64, Covered>> {
+    let rows = block_on(storage.graph_ledger(ns, book_url))
+        .map_err(|e| anyhow!("读取章节覆盖台账失败: {e}"))?;
+    Ok(rows
+        .into_iter()
+        .map(|(key, _ordinal, _title, hash, done_at)| {
+            (
+                key,
+                Covered {
+                    content_hash: hash as u64,
+                    done_at,
+                },
+            )
+        })
+        .collect())
 }
 
 /// 查询进度：优先内存态；进程重启后回落到 `book_graph_jobs` 最近一行
@@ -337,8 +475,7 @@ pub fn estimate(cached_chapters: usize, batches: usize) -> (u64, u64) {
 
 /// 批数上界估计：`plan.rs` 的口径是「`BATCHES` 批、每批最多 `PER_BATCH` 章」。
 ///
-/// `plan_batches` 现在是 `todo!()`（并行开发中），估算接口与任务行先用它兜底；
-/// 真正开跑时以 `plan_batches` 的实际批数为准（`run_job` 会回写）。
+/// 只作为没有台账数据时的兜底（真选章走 [`plan_incremental`]）。
 pub fn estimate_batches(cached_chapters: usize) -> usize {
     if cached_chapters == 0 {
         return 0;
@@ -346,6 +483,85 @@ pub fn estimate_batches(cached_chapters: usize) -> usize {
     cached_chapters
         .div_ceil(super::PER_BATCH)
         .min(super::BATCHES)
+}
+
+/// 生成前预估的结果（只读本地库，不调用模型、不花钱）
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Preview {
+    /// 该书已缓存章数
+    pub cached: usize,
+    /// 台账里已抽取过（且正文没变）的章数：本次不会再送模型
+    pub covered: usize,
+    /// 本次要覆盖的章数（增量口径：已覆盖且没变的不算）
+    pub chapters: usize,
+    /// 本次要跑的批数
+    pub batches: usize,
+    /// 本次进 prompt 的 token 估计（按真实批次消息的字符数算，不是「章数 × 系数」）
+    pub prompt_tokens: u64,
+    /// 本次输出 token 估计
+    pub completion_tokens: u64,
+}
+
+/// 生成前预估：走真选章 + 真拼提示词，再按**实际字符数**估 token。
+///
+/// 之前按「已缓存章数 × 4300 token」拍，把全书正文都算了进去，虚高约 7 倍——
+/// 实际进 prompt 的只有本次选的 ≤ `BATCHES*PER_BATCH` 章、且每批 ≤ `BUDGET` 字。
+pub fn preview(storage: &Storage, ns: &str, book_url: &str) -> Result<Preview> {
+    let prepared = prepare_chapters(storage, ns, book_url, "")?;
+    let cached = prepared.entries.len();
+    if cached == 0 {
+        return Ok(Preview::default());
+    }
+    let covered = load_covered(storage, ns, book_url)?;
+    // 与 `start_job` 同一套「已是最新」判定：没新章、没变章、成品已在且扫够
+    // → 预估也必须报 0 批，否则前端显示「6 批 240 章」而真点下去返回 upToDate，
+    //   两个接口自相矛盾（实测过：全覆盖后预估仍报 240 章/6 批）。
+    let product_exists = block_on(storage.graph_get(ns, book_url))
+        .map_err(|e| anyhow!("读取已有关系图失败: {e}"))?
+        .is_some();
+    let product_scanned = if product_exists {
+        block_on(storage.graph_chapters_scanned(ns, book_url))
+            .map_err(|e| anyhow!("读取已有关系图失败: {e}"))?
+    } else {
+        0
+    };
+    if product_exists && product_scanned.max(0) as usize >= covered.len() {
+        let inc_probe = plan_incremental(&prepared.entries, &covered);
+        if inc_probe.fresh == 0 && inc_probe.changed == 0 {
+            return Ok(Preview {
+                cached,
+                covered: covered.len(),
+                ..Default::default()
+            });
+        }
+    }
+    let inc = plan_incremental(&prepared.entries, &covered);
+    // 中文≈1 token/字（略保守），英文与 JSON 骨架占得更少，不再另做换算
+    let prompt_chars: usize = inc
+        .batches
+        .iter()
+        .flat_map(|plan| {
+            build_batch_messages(
+                &prepared.hints.book_name,
+                plan,
+                prepared.hints.total_chapters,
+            )
+        })
+        .filter_map(|m| {
+            m.get("content")
+                .and_then(Value::as_str)
+                .map(str::chars)
+                .map(Iterator::count)
+        })
+        .sum();
+    Ok(Preview {
+        cached,
+        covered: covered.len(),
+        chapters: inc.chapter_count(),
+        batches: inc.batches.len(),
+        prompt_tokens: prompt_chars as u64,
+        completion_tokens: (inc.batches.len() as u64).saturating_mul(3_500),
+    })
 }
 
 // ---------------- 任务执行 ----------------
@@ -360,39 +576,59 @@ async fn run_job(
     job_id: String,
     opts: JobOptions,
     cfg: AiConfig,
-    chapters: Vec<Chapter>,
-    hints: BookHints,
+    prepared: PreparedBook,
+    plans: Vec<BatchPlan>,
     progress: Arc<Mutex<GraphProgress>>,
 ) -> Result<()> {
-    let mut plans = plan_batches(&chapters);
-    if let Some(max) = opts.max_batches.filter(|n| *n > 0) {
-        plans.truncate(max);
-    }
-    if plans.is_empty() {
-        return Err(anyhow!("选章结果为空（已缓存 {} 章）", chapters.len()));
-    }
+    // 选章已在 start_job 里做完（要据此决定「要不要建任务」），这里只负责跑。
     let total = plans.len();
     set_total_batches(&storage, &job_id, total).await?;
     {
         let mut p = lock_progress(&progress);
         p.status = ST_RUNNING.to_string();
+        // 进度按**本次**批数报，历史批不计入
         p.total_batches = total;
     }
+    // 序数 → 章条目：批次里只有 (序数, 标题, 正文)，落台账还要章键与正文哈希
+    let by_ordinal: HashMap<i64, &ChapterEntry> =
+        prepared.entries.iter().map(|e| (e.chapter.0, e)).collect();
+    // unit 序号接在历史之后，历史 unit 永不被覆盖
+    let mut seq = block_on(storage.graph_unit_max_seq(&ns, &book_url))?;
 
     let mut done = 0usize;
     let mut fed = 0usize;
     let mut usage = (0u64, 0u64);
     for plan in &plans {
-        // 每批之间检查取消：已完成的批留在 book_graph_batches，不丢
+        // 每批之间检查取消：已完成的批已沉淀成 unit + 台账，不丢
         if is_cancelled(&progress) {
             return finish_cancelled(&storage, &job_id, &progress, done, fed).await;
         }
-        let messages = build_batch_messages(&opts.book_name, plan, hints.total_chapters);
+        let messages = build_batch_messages(&opts.book_name, plan, prepared.hints.total_chapters);
         let value = batch_with_retry(&cfg, messages)
             .await
             .with_context(|| format!("第 {} 批失败", plan.batch_no))?;
+        let raw = value.to_string();
+        // 历史遗留表照写（排查用），新逻辑不依赖它
         storage
-            .graph_batch_put(&job_id, plan.batch_no as i64, &value.to_string())
+            .graph_batch_put(&job_id, plan.batch_no as i64, &raw)
+            .await?;
+        // 立即沉淀：unit + 台账同一事务写入。此后即便任务失败/取消，这一批也不白跑
+        seq += 1;
+        let metas: Vec<(i64, i64, String, i64)> = plan
+            .chapters
+            .iter()
+            .filter_map(|c| by_ordinal.get(&c.0).copied())
+            .map(|e| {
+                (
+                    e.key,
+                    e.chapter.0,
+                    e.chapter.1.clone(),
+                    e.content_hash as i64,
+                )
+            })
+            .collect();
+        storage
+            .graph_unit_commit(&ns, &book_url, &job_id, seq, &raw, &metas)
             .await?;
         done += 1;
         fed += plan.chapters.len();
@@ -408,7 +644,7 @@ async fn run_job(
         let (prompt_tokens, completion_tokens) = if usage.0 > 0 || usage.1 > 0 {
             usage
         } else {
-            estimate(chapters.len(), done)
+            estimate(prepared.entries.len(), done)
         };
         {
             let mut p = lock_progress(&progress);
@@ -431,19 +667,46 @@ async fn run_job(
         return finish_cancelled(&storage, &job_id, &progress, done, fed).await;
     }
 
-    // 全部批完成：读回原始 JSON → 归一化 → 落成品
+    // 全部批完成：汇总该书**所有** unit（历史 + 本次）→ 归一化 → 落成品。
+    // 归并是纯代码不花 token，历史数据留着只会让家族归并更准。
+    let chapters = prepared.chapters();
     let raws: Vec<Value> = storage
-        .graph_batches(&job_id)
+        .graph_units(&ns, &book_url)
         .await?
         .into_iter()
-        .filter_map(|(_, raw)| serde_json::from_str::<Value>(&raw).ok())
+        .filter_map(|raw| serde_json::from_str::<Value>(&raw).ok())
         .collect();
     if raws.is_empty() {
         return Err(anyhow!("没有可归一化的批次结果"));
     }
-    let graph = normalize(&raws, &chapters, &hints);
+    let graph = normalize(&raws, &chapters, &prepared.hints);
     let characters = array_len(&graph, "characters");
     let relations = array_len(&graph, "relations");
+    // 台账覆盖数（不是本次 fed）：成品里的 chapters_scanned 要反映全书已覆盖量
+    let covered_total = storage.graph_ledger_count(&ns, &book_url).await?;
+    // 兜底：模型这次一个字都没抽出（全被 quote 校验/字段校验丢掉）时，别把已有的好成品
+    // 覆盖成空图 —— 实测过假输出会把 1745 章的成品清成 0 人 0 关系。
+    {
+        let old_chars = match storage.graph_get(&ns, &book_url).await? {
+            Some(raw) => serde_json::from_str::<Value>(&raw)
+                .map(|v| array_len(&v, "characters"))
+                .unwrap_or(0),
+            None => 0,
+        };
+        if keep_old_on_empty(characters, relations, old_chars) {
+            tracing::warn!(
+                "图谱归并结果为空（本次 {fed} 章），保留原成品 {old_chars} 人，不覆盖 [{ns}/{book_url}]"
+            );
+            {
+                let mut p = lock_progress(&progress);
+                p.status = ST_DONE.to_string();
+                p.done_batches = done;
+                p.chapters_scanned = fed;
+            }
+            let _ = storage.graph_job_set_status(&job_id, ST_DONE, None).await;
+            return Ok(());
+        }
+    }
     storage
         .graph_save(
             &ns,
@@ -451,7 +714,7 @@ async fn run_job(
             &serde_json::to_string(&graph)?,
             characters as i64,
             relations as i64,
-            fed as i64,
+            covered_total,
             &job_id,
         )
         .await?;
@@ -459,6 +722,7 @@ async fn run_job(
         let mut p = lock_progress(&progress);
         p.status = ST_DONE.to_string();
         p.done_batches = done;
+        // 进度里报本次扫的章数（用户看的是「这次干了多少」）
         p.chapters_scanned = fed;
         p.characters = characters;
         p.relations = relations;
@@ -617,6 +881,8 @@ async fn load_latest_progress(storage: &Storage, book_url: &str) -> Option<Graph
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::service::graph::plan::INCREMENTAL_CHAPTER_BUDGET;
+    use crate::service::graph::plan_batches;
 
     /// 独立临时目录的存储（不污染真实 storage/reader.db）
     fn temp_storage(tag: &str) -> (Storage, std::path::PathBuf) {
@@ -699,6 +965,137 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// 造 N 章已缓存正文（章序 i，正文带 i 以便哈希不同）
+    async fn seed_chapters(storage: &Storage, ns: &str, url: &str, n: i64) {
+        for i in 1..=n {
+            storage
+                .cache_chapter_content(
+                    ns,
+                    url,
+                    i * 100,
+                    &format!("第{i}章 测试"),
+                    &format!(
+                        "第{i}章正文：{}",
+                        "他进了城，街上人来人往。".repeat(i as usize)
+                    ),
+                )
+                .await
+                .expect("写章节缓存");
+        }
+    }
+
+    /// 台账幂等：同一批重复提交不会多出行、不会重复计数
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unit_commit_is_idempotent() {
+        let (storage, dir) = temp_storage("ledger-idempotent");
+        let ns = "default";
+        let url = "https://example.com/book/ledger-idempotent";
+        let metas = vec![
+            (101i64, 1i64, "第1章 测试".to_string(), 111i64),
+            (201, 2, "第2章 测试".to_string(), 222),
+        ];
+        for _ in 0..3 {
+            storage
+                .graph_unit_commit(ns, url, "job-x", 1, "{\"characters\":[]}", &metas)
+                .await
+                .expect("提交批");
+        }
+        assert_eq!(
+            storage.graph_ledger_count(ns, url).await.expect("台账数"),
+            2,
+            "重复标同一章不该重复计数"
+        );
+        assert_eq!(
+            storage
+                .graph_unit_max_seq(ns, url)
+                .await
+                .expect("unit 序号"),
+            1,
+            "同一 seq 重复提交应覆盖，不新增"
+        );
+        assert_eq!(
+            storage.graph_units(ns, url).await.expect("unit 列表").len(),
+            1,
+            "unit 行数不该变"
+        );
+        storage.pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 全覆盖 + 成品已在 → 直接返回「已是最新」，不建任务、不烧 token
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn start_job_up_to_date_when_fully_covered() {
+        let (storage, dir) = temp_storage("up-to-date");
+        let ns = "default";
+        let url = "https://example.com/book/up-to-date";
+        seed_chapters(&storage, ns, url, 3).await;
+
+        // 台账：3 章都覆盖过，哈希与当前正文一致
+        let prepared = prepare_chapters(&storage, ns, url, "").expect("章节");
+        let metas: Vec<(i64, i64, String, i64)> = prepared
+            .entries
+            .iter()
+            .map(|e| {
+                (
+                    e.key,
+                    e.chapter.0,
+                    e.chapter.1.clone(),
+                    e.content_hash as i64,
+                )
+            })
+            .collect();
+        storage
+            .graph_unit_commit(ns, url, "job-old", 1, "{\"characters\":[]}", &metas)
+            .await
+            .expect("提交批");
+        storage
+            .graph_save(ns, url, "{\"characters\":[]}", 0, 0, 3, "job-old")
+            .await
+            .expect("落成品");
+
+        let outcome = start_job(
+            storage.clone(),
+            ns.to_string(),
+            url.to_string(),
+            JobOptions::default(),
+            ai_cfg(),
+        )
+        .expect("启动应成功");
+        assert_eq!(
+            outcome,
+            StartOutcome::UpToDate {
+                covered_chapters: 3
+            },
+            "全覆盖且成品已在，必须不启动任务"
+        );
+        assert!(
+            mem_progress(url).is_none(),
+            "已是最新时不该留内存任务（否则 SSE 会挂住）"
+        );
+
+        // 老章正文被改了 → 下次生成必须重抽这一章
+        storage
+            .cache_chapter_content(ns, url, 200, "第2章 测试", "第2章正文：作者改过的一段。")
+            .await
+            .expect("改正文");
+        let prepared = prepare_chapters(&storage, ns, url, "").expect("章节");
+        let covered = load_covered(&storage, ns, url).expect("台账");
+        let inc = plan_incremental(&prepared.entries, &covered);
+        let picked: Vec<i64> = inc
+            .batches
+            .iter()
+            .flat_map(|b| b.chapters.iter().map(|c| c.0))
+            .collect();
+        assert_eq!(inc.changed, 1, "只有被改的那章是变章");
+        assert!(
+            picked.contains(&2),
+            "正文变化的章应被重抽（其余是预算内的老章补抽）"
+        );
+
+        storage.pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// 任务表命中/未命中 + 取消语义
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn progress_of_hits_and_misses() {
@@ -764,6 +1161,184 @@ mod tests {
         Some(block_on(crate::storage::init(&config)).expect("打开生产库副本失败"))
     }
 
+    /// 增量验证（**不调模型**，只跑选章 + 台账）：
+    /// ① 台账空时首次选多少章 → ② 标 240 章后第二次选哪些章 → ③ 全覆盖后是否直接不启动
+    /// → ④ 只剩 100 新章时跑几批（回答「几天更 100 章要花几批钱」）
+    ///
+    /// 在生产库**副本**上跑（拷到 temp，不动原副本）：
+    /// ```bash
+    /// cargo test --lib prod_db_incremental_selection -- --ignored --nocapture
+    /// ```
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "需要 .tmp/agent-graph 里的生产库副本"]
+    async fn prod_db_incremental_selection() {
+        let src = std::path::Path::new(PROD_WORKDIR)
+            .join("storage")
+            .join("reader.db");
+        if !src.exists() {
+            println!("SKIP: 没有生产库副本 {}", src.display());
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("reader-graph-incr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // 注意：init 找的是 {work_dir}/storage/reader.db，副本必须放这个位置
+        std::fs::create_dir_all(dir.join("storage")).expect("建临时目录");
+        std::fs::copy(&src, dir.join("storage").join("reader.db")).expect("复制生产库副本");
+        let mut config = crate::AppConfig::from_env();
+        config.work_dir = dir.to_string_lossy().into_owned();
+        let storage = block_on(crate::storage::init(&config)).expect("打开库副本");
+
+        // 模拟老用户：台账为空（老版本的 book_graph_chapters 是新建的表）
+        storage
+            .graph_ledger_reset(PROD_NS, PROD_BOOK)
+            .await
+            .expect("清台账");
+        let prepared = prepare_chapters(&storage, PROD_NS, PROD_BOOK, "").expect("章节");
+        let cached = prepared.entries.len();
+        let has_product = block_on(storage.graph_get(PROD_NS, PROD_BOOK))
+            .expect("读成品")
+            .is_some();
+        let old_scanned =
+            block_on(storage.graph_chapters_scanned(PROD_NS, PROD_BOOK)).expect("读成品扫描数");
+        println!(
+            "== 生产库副本：已缓存 {cached} 章，旧成品={has_product}，成品记 scanned={old_scanned}"
+        );
+
+        let by_ordinal: HashMap<i64, &ChapterEntry> =
+            prepared.entries.iter().map(|e| (e.chapter.0, e)).collect();
+        let show = |tag: &str, inc: &crate::service::graph::IncrementalPlan| -> Vec<i64> {
+            let ords: Vec<i64> = inc
+                .batches
+                .iter()
+                .flat_map(|b| b.chapters.iter().map(|c| c.0))
+                .collect();
+            println!(
+                "{tag}: {} 批 / {} 章，章序 {:?}..{:?}，新章={} 变章={} 补老章={}",
+                inc.batches.len(),
+                ords.len(),
+                ords.first().copied().unwrap_or(0),
+                ords.last().copied().unwrap_or(0),
+                inc.fresh,
+                inc.changed,
+                inc.backfill
+            );
+            ords
+        };
+
+        // ① 台账空 → 首次
+        let covered = load_covered(&storage, PROD_NS, PROD_BOOK).expect("台账");
+        let inc = plan_incremental(&prepared.entries, &covered);
+        let first = show("第 1 次（台账空）", &inc);
+        assert_eq!(first.len(), INCREMENTAL_CHAPTER_BUDGET, "首次应跑满预算");
+        assert_eq!(first[0], 1, "首次从第 1 章开始");
+
+        // 把这批标成已覆盖（模拟它们成功跑完）
+        let mut seq = 0i64;
+        for batch in &inc.batches {
+            seq += 1;
+            let metas: Vec<(i64, i64, String, i64)> = batch
+                .chapters
+                .iter()
+                .filter_map(|c| by_ordinal.get(&c.0).copied())
+                .map(|e| {
+                    (
+                        e.key,
+                        e.chapter.0,
+                        e.chapter.1.clone(),
+                        e.content_hash as i64,
+                    )
+                })
+                .collect();
+            storage
+                .graph_unit_commit(PROD_NS, PROD_BOOK, "job-prod-1", seq, "{}", &metas)
+                .await
+                .expect("提交批");
+        }
+        let ledger = storage
+            .graph_ledger_count(PROD_NS, PROD_BOOK)
+            .await
+            .expect("台账数");
+        println!("已标 {ledger} 章为已抽取");
+
+        // ② 再跑一次 → 应该挑**新的**章，不再重抽前 240 章
+        let covered = load_covered(&storage, PROD_NS, PROD_BOOK).expect("台账");
+        let inc = plan_incremental(&prepared.entries, &covered);
+        let second = show("第 2 次（已标 240 章）", &inc);
+        assert!(
+            second.iter().all(|o| *o > first[first.len() - 1]),
+            "第二次不该重抽已覆盖的章"
+        );
+
+        // ③ 全部覆盖 → 没有新章也没有变章
+        let mut seq = 100i64;
+        let mut rest: Vec<(i64, i64, String, i64)> = Vec::new();
+        for e in &prepared.entries {
+            rest.push((
+                e.key,
+                e.chapter.0,
+                e.chapter.1.clone(),
+                e.content_hash as i64,
+            ));
+        }
+        seq += 1;
+        storage
+            .graph_unit_commit(PROD_NS, PROD_BOOK, "job-prod-2", seq, "{}", &rest)
+            .await
+            .expect("提交全部");
+        let covered = load_covered(&storage, PROD_NS, PROD_BOOK).expect("台账");
+        let inc = plan_incremental(&prepared.entries, &covered);
+        println!(
+            "第 3 次（全覆盖）：新章={} 变章={}（成品记 scanned={old_scanned}）",
+            inc.fresh, inc.changed
+        );
+        assert_eq!(inc.fresh, 0, "全覆盖后不该有新章");
+        assert_eq!(inc.changed, 0, "正文没变就不该有变章");
+
+        // 成品也已经反映全部覆盖 → start_job 必须直接返回「已是最新」，不建任务
+        storage
+            .graph_save(
+                PROD_NS,
+                PROD_BOOK,
+                "{\"characters\":[]}",
+                0,
+                0,
+                covered.len() as i64,
+                "job-prod-2",
+            )
+            .await
+            .expect("落成品");
+        let outcome = start_job(
+            storage.clone(),
+            PROD_NS.to_string(),
+            PROD_BOOK.to_string(),
+            JobOptions::default(),
+            ai_cfg(),
+        )
+        .expect("启动应成功");
+        println!("全覆盖后再点生成 → {outcome:?}");
+        assert_eq!(
+            outcome,
+            StartOutcome::UpToDate {
+                covered_chapters: cached
+            },
+            "全覆盖 + 成品已在 → 不该启动任务"
+        );
+
+        // ④ 几天后新增 100 章（= 台账里没有的 100 章）→ 只跑这 100 章
+        let covered = load_covered(&storage, PROD_NS, PROD_BOOK).expect("台账");
+        let cut = prepared.entries.len() - 100;
+        let partial: BTreeMap<i64, Covered> = prepared.entries[..cut]
+            .iter()
+            .filter_map(|e| covered.get(&e.key).map(|c| (e.key, *c)))
+            .collect();
+        let inc = plan_incremental(&prepared.entries, &partial);
+        let fresh = show("新增 100 章", &inc);
+        assert_eq!(fresh.len(), 100, "只该跑新增的 100 章");
+
+        storage.pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// 链路验证 ①：真实库里「取章节 → 按目录排阅读序 → 重编号 1..N → plan_batches」
     ///
     /// ```bash
@@ -775,8 +1350,10 @@ mod tests {
         let Some(storage) = prod_storage() else {
             return;
         };
-        let (chapters, hints) =
+        let prepared =
             prepare_chapters(&storage, PROD_NS, PROD_BOOK, "").expect("prepare_chapters");
+        let hints = &prepared.hints;
+        let chapters = prepared.chapters();
         println!(
             "书名={:?} total_chapters={} 已缓存章数={}",
             hints.book_name,
@@ -894,8 +1471,10 @@ mod tests {
             }
         }
 
-        let (chapters, hints) = prepare_chapters(&storage, PROD_NS, PROD_BOOK, "").expect("章节");
-        let data = normalize(&raws, &chapters, &hints);
+        let prepared = prepare_chapters(&storage, PROD_NS, PROD_BOOK, "").expect("章节");
+        let hints = &prepared.hints;
+        let chapters = prepared.chapters();
+        let data = normalize(&raws, &chapters, hints);
         let factions = data["factions"].as_array().expect("factions");
         println!(
             "势力：归并前候选 {} 个 → 归并后 {} 个（meta.totalChapters={} book={}）",
@@ -940,5 +1519,22 @@ mod tests {
         assert_eq!(out.chars().count(), ERROR_MAX_CHARS + 1); // +1 是省略号
         assert!(out.ends_with('…'));
         assert_eq!(truncate("短错误", ERROR_MAX_CHARS), "短错误");
+    }
+}
+
+#[cfg(test)]
+mod keep_old_tests {
+    use super::keep_old_on_empty;
+
+    #[test]
+    fn keep_old_on_empty_cases() {
+        // 新结果空、旧成品有内容 → 保留旧的（不覆盖）
+        assert!(keep_old_on_empty(0, 0, 131));
+        // 新结果空、旧成品也空 → 照常落盘（没有可损失的东西）
+        assert!(!keep_old_on_empty(0, 0, 0));
+        // 新结果非空 → 正常覆盖
+        assert!(!keep_old_on_empty(3, 2, 131));
+        // 只有人物没关系的半空结果也算「非空」，允许覆盖
+        assert!(!keep_old_on_empty(5, 0, 131));
     }
 }

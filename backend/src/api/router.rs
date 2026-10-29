@@ -9800,26 +9800,14 @@ async fn ai_graph(
 // 这边只做参数校验与协议适配；进度靠 300ms 轮询内存任务表推 SSE（同 cacheBookSSE）。
 // ---------------------------------------------------------------------------
 
-/// 预估批数：优先用真实选章结果。
-///
-/// `plan.rs` 仍在并行开发（`todo!()`），直接调用会让整个请求 panic，所以兜一层
-/// catch_unwind：取不到就回落到上界估计 `estimate_batches`（每批 `PER_BATCH` 章、最多
-/// `BATCHES` 批）。plan.rs 落地后这里自动切到真实批数，不用再改。
-fn graph_preview_batches(chapters: &[crate::service::graph::Chapter]) -> usize {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::service::graph::plan_batches(chapters).len()
-    }))
-    .ok()
-    .filter(|batches| *batches > 0)
-    .unwrap_or_else(|| crate::service::graph::job::estimate_batches(chapters.len()))
-}
-
 /// 万 token 的口语化写法（预算是给用户看的量级，不追求精确）
 fn wan_tokens(tokens: u64) -> String {
     format!("{:.1}", tokens as f64 / 10_000.0)
 }
 
-/// GET/POST /reader3/graphEstimate?url=：生成前预估（只读本地缓存，不调用模型、不花钱）
+/// GET/POST /reader3/graphEstimate?url=：生成前预估（只读本地缓存 + 台账，不调用模型、不花钱）
+///
+/// 增量后预估算的是**本次**要跑的批（不是全量 6 批）：已覆盖且正文没变的章不会再送模型。
 async fn graph_estimate(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
@@ -9837,28 +9825,35 @@ async fn graph_estimate(
     if url.trim().is_empty() {
         return Json(ReturnData::err("缺少书籍地址"));
     }
-    let chapters = match state.storage.list_cached_chapters(&namespace, &url).await {
-        Ok(rows) => rows,
+    // 选章 + 拼提示词都是纯本地计算（含正文哈希），一次算完直接给「本次批数 / 章数 / token」
+    let preview = match crate::service::graph::job::preview(&state.storage, &namespace, &url) {
+        Ok(v) => v,
         Err(e) => {
-            tracing::error!("graphEstimate 读取已缓存章节失败 [{namespace}/{url}]: {e}");
+            tracing::error!("graphEstimate 增量选章失败 [{namespace}/{url}]: {e:#}");
             return Json(ReturnData::err("系统错误"));
         }
     };
-    let cached = chapters.len();
-    let batches = graph_preview_batches(&chapters);
-    let (est_prompt, est_completion) = crate::service::graph::estimate(cached, batches);
+    let (batches, selected, cached) = (preview.batches, preview.chapters, preview.cached);
+    let (est_prompt, est_completion) = (preview.prompt_tokens, preview.completion_tokens);
     let est_cost_note = if cached == 0 {
         "本书还没有已缓存章节：先读几章（或先缓存章节）再生成，目前没有可送模型的正文。".to_string()
+    } else if batches == 0 {
+        format!(
+            "已缓存 {cached} 章，全部已抽取且正文无变化：已是最新，无需重新生成（不消耗 token）。"
+        )
     } else {
         format!(
-            "已缓存 {cached} 章，分 {batches} 批送入模型：约等于 {} 万 token（其中输出约 {} 万），实际用量浮动约三成。",
+            "增量生成：已缓存 {cached} 章，其中 {} 章此前已抽取且正文没变（本次不再重抽），本次覆盖 {selected} 章、分 {batches} 批送入模型：约等于 {} 万 token（其中输出约 {} 万），实际用量浮动约三成。",
+            preview.covered.min(cached),
             wan_tokens(est_prompt + est_completion),
             wan_tokens(est_completion),
         )
     };
     Json(ReturnData::ok(json!({
         "cachedChapters": cached,
+        "selectedChapters": selected,
         "batches": batches,
+        "upToDate": cached > 0 && batches == 0,
         "estPromptTokens": est_prompt,
         "estCompletionTokens": est_completion,
         "estCostNote": est_cost_note,
@@ -9905,6 +9900,10 @@ async fn graph_start(
             book_name = book.name;
         }
     }
+    // 强制重跑：清空本书台账（章节覆盖 + 批次沉淀），回到「首次生成」语义。
+    // 默认 false —— 增量是默认路径，重抽整本必须显式要求，且前端二次确认。
+    let force_param = param_of(&params, body_json.as_ref(), "force");
+    let force = force_param == "1" || force_param.eq_ignore_ascii_case("true");
     let max_batches = param_of(&params, body_json.as_ref(), "maxBatches")
         .trim()
         .parse::<usize>()
@@ -9914,16 +9913,40 @@ async fn graph_start(
         book_name,
         max_batches,
     };
+    if force {
+        if let Err(e) = state.storage.graph_ledger_reset(&namespace, &url).await {
+            tracing::error!("graphStart 清空台账失败 [{namespace}/{url}]: {e:#}");
+            return Json(ReturnData::err("清空图谱台账失败"));
+        }
+        tracing::info!("graphStart 强制重跑，已清空台账 [{namespace}/{url}]");
+    }
     match crate::service::graph::start_job(state.storage.clone(), namespace, url.clone(), opts, cfg)
     {
-        Ok(job_id) => {
-            // 已有在跑任务时会复用同一个 job_id，批数从进度对象里读
-            let total_batches = crate::service::graph::progress_of(&url)
-                .map(|p| p.lock().unwrap_or_else(|e| e.into_inner()).total_batches)
-                .unwrap_or(0);
+        Ok(crate::service::graph::StartOutcome::Started {
+            job_id,
+            total_batches,
+            chapters_selected,
+            reused,
+        }) => Json(ReturnData::ok(json!({
+            "jobId": job_id,
+            "totalBatches": total_batches,
+            "chaptersSelected": chapters_selected,
+            "reused": reused,
+            "upToDate": false,
+            "forced": force,
+        }))),
+        // 没有新章、没有变章、成品已在：不建任务、不烧 token，前端据此提示「已是最新」
+        Ok(crate::service::graph::StartOutcome::UpToDate { covered_chapters }) => {
             Json(ReturnData::ok(json!({
-                "jobId": job_id,
-                "totalBatches": total_batches,
+                "jobId": "",
+                "totalBatches": 0,
+                "chaptersSelected": 0,
+                "reused": false,
+                "upToDate": true,
+                "coveredChapters": covered_chapters,
+                "message": format!(
+                    "已是最新：{covered_chapters} 章的正文都没变化，没有新章要抽取，无需重新生成（不消耗 token）。"
+                ),
             })))
         }
         Err(e) => Json(ReturnData::err(format!("启动失败: {e:#}"))),

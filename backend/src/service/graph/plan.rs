@@ -19,7 +19,7 @@
 //! * 预算超限时直接丢弃该批剩余章（脚本没这道闸，因为 40×2800 天然低于 BUDGET）。
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde_json::{json, Value};
 
@@ -152,6 +152,190 @@ pub fn plan_batches(chapters: &[Chapter]) -> Vec<BatchPlan> {
     plans
 }
 
+// ---------------------------------------------------------------- 增量选章
+//
+// 全量 `plan_batches` 每次都从零挑同样的章（固定 6 窗 × 40 章 = 240 章），用户「几天更新了
+// 100 章」时要么重抽那 240 章、要么整本重来。增量选章按台账（`book_graph_chapters`）决定
+// 这次该跑哪些章，优先级：
+//   ① 台账里没有的新章 → ② 正文哈希变了的旧章 → ③ 最久没覆盖的老章（`done_at` 升序）
+// 一本 1745 章的书多跑几次就能逐步把覆盖推向全书，而不是每次重抽同一批。
+
+/// 一次增量生成最多覆盖多少章（沿用全量的「批数 × 每批章数」预算）
+pub const INCREMENTAL_CHAPTER_BUDGET: usize = BATCHES * PER_BATCH;
+
+/// 是否总用「最久没覆盖的老章」把预算填满。
+///
+/// 为 `false` 时只在**没有新章也没有变章**（纯刷新跑）时才补老章——
+/// 这是刻意的取舍：用户「几天更了 100 章」，若每次都补到 240 章，就要付和整本一样的钱，
+/// 正是要避免的「重头生成」。新章不足时逐步加深覆盖靠的是「没新章的那次跑」，
+/// 而不是让每次更新都为老章买单。
+pub const BACKFILL_ONLY_WHEN_NOTHING_NEW: bool = true;
+
+/// 一章的增量元数据：正文 + 便于和台账对账的两个稳定键。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChapterEntry {
+    /// (序数 1..N, 标题, 正文)
+    pub chapter: Chapter,
+    /// 跨生成稳定的章键 = `book_chapters.chapter_index`（书源书是 md5(chapterUrl)）
+    pub key: i64,
+    /// 正文哈希（[`content_hash`]）：用来发现「老章被改了要重抽」
+    pub content_hash: u64,
+}
+
+/// 台账里一章的覆盖记录
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Covered {
+    /// 上次抽取时的正文哈希——和当前正文对不上就是「变章」
+    pub content_hash: u64,
+    /// 上次抽取时间（毫秒时间戳，0 = 未知/最久远）
+    pub done_at: i64,
+}
+
+/// 增量选章的结果
+#[derive(Debug, Clone, Default)]
+pub struct IncrementalPlan {
+    /// 本次要跑的批（`batch_no` 从 1 连续；空 = 没有要跑的章）
+    pub batches: Vec<BatchPlan>,
+    /// ① 新章入选数
+    pub fresh: usize,
+    /// ② 变章入选数
+    pub changed: usize,
+    /// ③ 补跑老章数
+    pub backfill: usize,
+}
+
+impl IncrementalPlan {
+    /// 本次入选的章数
+    pub fn chapter_count(&self) -> usize {
+        self.batches.iter().map(|b| b.chapters.len()).sum()
+    }
+
+    /// 没有要跑的批（= 已是最新，或预算内挑不出章）
+    pub fn is_empty(&self) -> bool {
+        self.batches.is_empty()
+    }
+}
+
+/// 正文哈希：FNV-1a 64。
+///
+/// 不用 `std::hash::DefaultHasher`——它不保证跨 Rust 版本稳定，而这里的哈希要落库、
+/// 要和「上次生成时算的值」对比，换编译器版本就全量重抽是不可接受的。
+pub fn content_hash(text: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// 按优先级挑出本次要覆盖的章（返回入参下标，按章序升序）。
+///
+/// 上限 [`INCREMENTAL_CHAPTER_BUDGET`] 章：新章 → 变章；什么都没得跑时才用最久没覆盖的老章补齐
+/// （见 [`BACKFILL_ONLY_WHEN_NOTHING_NEW`]）。
+/// 同一优先级内按章序升序（阅读序更连贯，提示词也更自然）。
+pub fn select_incremental(
+    entries: &[ChapterEntry],
+    covered: &BTreeMap<i64, Covered>,
+) -> Vec<usize> {
+    let mut fresh: Vec<usize> = Vec::new();
+    let mut changed: Vec<usize> = Vec::new();
+    // (done_at, ordinal, 下标)：最久没覆盖的排前面
+    let mut stale: Vec<(i64, i64, usize)> = Vec::new();
+    for (i, entry) in entries.iter().enumerate() {
+        match covered.get(&entry.key) {
+            None => fresh.push(i),
+            Some(c) if c.content_hash != entry.content_hash => changed.push(i),
+            Some(c) => stale.push((c.done_at, entry.chapter.0, i)),
+        }
+    }
+    // 同优先级按章序升序
+    let by_ordinal = |entries: &[ChapterEntry], a: &usize, b: &usize| {
+        entries[*a].chapter.0.cmp(&entries[*b].chapter.0)
+    };
+    fresh.sort_by(|a, b| by_ordinal(entries, a, b));
+    changed.sort_by(|a, b| by_ordinal(entries, a, b));
+    stale.sort_unstable();
+
+    let mut picked: Vec<usize> = Vec::with_capacity(INCREMENTAL_CHAPTER_BUDGET.min(entries.len()));
+    picked.extend(fresh.iter().take(INCREMENTAL_CHAPTER_BUDGET));
+    if picked.len() < INCREMENTAL_CHAPTER_BUDGET {
+        let room = INCREMENTAL_CHAPTER_BUDGET - picked.len();
+        picked.extend(changed.iter().take(room));
+    }
+    // ③ 补老章：见 [`BACKFILL_ONLY_WHEN_NOTHING_NEW`] 的取舍说明
+    let nothing_new = picked.is_empty();
+    if picked.len() < INCREMENTAL_CHAPTER_BUDGET && (nothing_new || !BACKFILL_ONLY_WHEN_NOTHING_NEW)
+    {
+        let room = INCREMENTAL_CHAPTER_BUDGET - picked.len();
+        picked.extend(stale.iter().take(room).map(|(_, _, i)| *i));
+    }
+    picked.sort_by(|a, b| by_ordinal(entries, a, b));
+    picked
+}
+
+/// 增量选章 + 切批（纯函数，无 IO）。
+///
+/// 与 [`plan_batches`] 的差别：不再按「重叠窗口 + 人名密度」挑章——挑哪些章由台账决定
+/// （见 [`select_incremental`]），这里只负责按 `PER_BATCH` / `BUDGET` / `BATCHES` 三个
+/// 预算把挑出来的章切成批，保证每批章序升序、每章 ≤ `EXCERPT`、每批合计 ≤ `BUDGET`。
+pub fn plan_incremental(
+    entries: &[ChapterEntry],
+    covered: &BTreeMap<i64, Covered>,
+) -> IncrementalPlan {
+    let picked = select_incremental(entries, covered);
+    let (fresh, changed) =
+        entries
+            .iter()
+            .fold((0usize, 0usize), |(f, c), e| match covered.get(&e.key) {
+                None => (f + 1, c),
+                Some(cv) if cv.content_hash != e.content_hash => (f, c + 1),
+                Some(_) => (f, c),
+            });
+    let mut plan = build_batches(entries, &picked);
+    // 入选明细：按「本章为什么入选」回填（被判成 backfill 的才是 ③）
+    plan.fresh = plan.chapter_count().min(fresh);
+    plan.changed = plan.chapter_count().saturating_sub(plan.fresh).min(changed);
+    plan.backfill = plan
+        .chapter_count()
+        .saturating_sub(plan.fresh + plan.changed);
+    plan
+}
+
+/// 把选中的章按下标切批
+fn build_batches(entries: &[ChapterEntry], picked: &[usize]) -> IncrementalPlan {
+    let mut plan = IncrementalPlan::default();
+    let mut cur: Vec<Chapter> = Vec::new();
+    let mut used = 0usize;
+    for &i in picked {
+        let entry = &entries[i];
+        let text = excerpt(&entry.chapter.2, EXCERPT.min(BUDGET));
+        let len = text.chars().count();
+        if !cur.is_empty() && (cur.len() >= PER_BATCH || used + len > BUDGET) {
+            // 已达批数上限：装不下的章留给下一次生成（不能为了排满而超预算）
+            if plan.batches.len() + 1 >= BATCHES {
+                break;
+            }
+            plan.batches.push(BatchPlan {
+                batch_no: plan.batches.len() + 1,
+                kind: "incremental",
+                chapters: std::mem::take(&mut cur),
+            });
+            used = 0;
+        }
+        used += len;
+        cur.push((entry.chapter.0, entry.chapter.1.clone(), text));
+    }
+    if !cur.is_empty() && plan.batches.len() < BATCHES {
+        plan.batches.push(BatchPlan {
+            batch_no: plan.batches.len() + 1,
+            kind: "incremental",
+            chapters: cur,
+        });
+    }
+    plan
+}
+
 /// 拼一批的 chat messages（system + user）
 ///
 /// `total_chapters` 是全书真实总章数（`books.total_chapter_num` / 目录长度），提示词里的
@@ -245,6 +429,18 @@ fn title_order(title: &str) -> Option<i64> {
 /// 无论目录有没有命中，输出都是 1..N 的连续整数：模型看到的章号、`meta.totalChapters`、
 /// 关系的 `from_chapter` 从此共用一个「人话章序」。
 pub fn number_chapters(chapters: &[Chapter], toc: &[TocEntry]) -> Vec<Chapter> {
+    number_chapters_keyed(chapters, toc)
+        .into_iter()
+        .map(|(chapter, _)| chapter)
+        .collect()
+}
+
+/// [`number_chapters`] 的同款排序，但额外把**原 `chapter_index`**（= 跨生成稳定的章键
+/// `chapter_key`，书源书是 md5(chapterUrl)）一起带出来：增量台账要靠它跟历史对账。
+///
+/// 注意不能拿「重编号后的序数」当章键：序数是每次生成现算的（目录一重排就变），
+/// 台账会因此错位。
+pub fn number_chapters_keyed(chapters: &[Chapter], toc: &[TocEntry]) -> Vec<(Chapter, i64)> {
     let by_hash: HashMap<i64, usize> = toc
         .iter()
         .enumerate()
@@ -276,7 +472,8 @@ pub fn number_chapters(chapters: &[Chapter], toc: &[TocEntry]) -> Vec<Chapter> {
     keyed
         .into_iter()
         .enumerate()
-        .map(|(k, (_, c))| ((k + 1) as i64, c.1.clone(), c.2.clone()))
+        .map(|(k, (_, c))| ((k + 1) as i64, c.1.clone(), c.2.clone(), c.0))
+        .map(|(ordinal, title, body, key)| ((ordinal, title, body), key))
         .collect()
 }
 
@@ -731,5 +928,226 @@ mod tests {
                 "缺第 {chapter_index} 章的块头"
             );
         }
+    }
+
+    // ---------------- 增量选章 ----------------
+
+    /// 造 n 章的增量条目：章键 = 章序（简化为稳定 id），哈希取自正文
+    fn entries(n: usize) -> Vec<ChapterEntry> {
+        book(n)
+            .into_iter()
+            .map(|chapter| ChapterEntry {
+                key: chapter.0,
+                content_hash: content_hash(&chapter.2),
+                chapter,
+            })
+            .collect()
+    }
+
+    fn ordinals(plan: &IncrementalPlan) -> Vec<i64> {
+        plan.batches
+            .iter()
+            .flat_map(|b| b.chapters.iter().map(|c| c.0))
+            .collect()
+    }
+
+    /// ① 优先级：新章 > 变章 > 最久没覆盖的老章
+    #[test]
+    fn incremental_priority_fresh_then_changed_then_stale() {
+        // ① 新章吃满预算 → 变章、老章都不该挤进来（优先级 ① > ② > ③）
+        let ents = entries(600);
+        let mut covered = BTreeMap::new();
+        // 1..=200 已覆盖且没变（done_at 升序：1 最久远）
+        for e in ents.iter().take(200) {
+            covered.insert(
+                e.key,
+                Covered {
+                    content_hash: e.content_hash,
+                    done_at: e.key,
+                },
+            );
+        }
+        // 201..=300 已覆盖但正文哈希变了
+        for e in ents.iter().skip(200).take(100) {
+            covered.insert(
+                e.key,
+                Covered {
+                    content_hash: e.content_hash ^ 1,
+                    done_at: 9_999,
+                },
+            );
+        }
+        // 301..=600 台账里没有（新章），共 300 章 > 预算 240
+        let plan = plan_incremental(&ents, &covered);
+        let picked = ordinals(&plan);
+        eprintln!(
+            "600 章（300 新 + 100 变 + 200 旧）→ {} 批 {} 章，新={} 变={} 补={}，章序 {:?}..{:?}",
+            plan.batches.len(),
+            picked.len(),
+            plan.fresh,
+            plan.changed,
+            plan.backfill,
+            picked.first(),
+            picked.last()
+        );
+        assert_eq!(picked.len(), INCREMENTAL_CHAPTER_BUDGET, "应跑满预算");
+        assert_eq!(
+            picked,
+            (301..=540).collect::<Vec<_>>(),
+            "新章够时只跑新章（按章序靠前优先）"
+        );
+        assert_eq!(plan.fresh, 240, "本次 240 章全是新章");
+        assert_eq!((plan.changed, plan.backfill), (0, 0), "变章/老章不该入选");
+
+        // ② 新章不足 → 用变章补；老章仍不补（BACKFILL_ONLY_WHEN_NOTHING_NEW）
+        let mut covered2 = BTreeMap::new();
+        for e in ents.iter().take(400) {
+            covered2.insert(
+                e.key,
+                Covered {
+                    content_hash: e.content_hash,
+                    done_at: e.key,
+                },
+            );
+        }
+        for e in ents.iter().skip(400).take(100) {
+            covered2.insert(
+                e.key,
+                Covered {
+                    content_hash: e.content_hash ^ 1,
+                    done_at: 9_999,
+                },
+            );
+        }
+        // 501..=600 是新章（100 章），401..=500 是变章（100 章），1..=400 是老章
+        let plan2 = plan_incremental(&ents, &covered2);
+        let picked2 = ordinals(&plan2);
+        eprintln!(
+            "600 章（100 新 + 100 变 + 400 旧）→ {} 批 {} 章，新={} 变={} 补={}",
+            plan2.batches.len(),
+            picked2.len(),
+            plan2.fresh,
+            plan2.changed,
+            plan2.backfill
+        );
+        assert_eq!(
+            picked2,
+            (401..=600).collect::<Vec<_>>(),
+            "新章 + 变章全入选，老章不补"
+        );
+        assert_eq!((plan2.fresh, plan2.changed, plan2.backfill), (100, 100, 0));
+    }
+
+    /// ② 预算上限：1745 章全新 → 最多 BATCHES*PER_BATCH 章，批数 ≤ BATCHES，且优先靠前的章
+    #[test]
+    fn incremental_capped_by_budget() {
+        let ents = entries(1745);
+        let plan = plan_incremental(&ents, &BTreeMap::new());
+        let picked = ordinals(&plan);
+        eprintln!(
+            "1745 章全新 → {} 批 {} 章（{:?}..{:?}）",
+            plan.batches.len(),
+            picked.len(),
+            picked.first(),
+            picked.last()
+        );
+        assert!(plan.batches.len() <= BATCHES, "批数不得超预算");
+        assert!(
+            picked.len() <= INCREMENTAL_CHAPTER_BUDGET,
+            "章数 {} 超预算",
+            picked.len()
+        );
+        assert_eq!(
+            picked,
+            (1..=picked.len() as i64).collect::<Vec<_>>(),
+            "应挑最靠前的连续章"
+        );
+        // 批号连续、每批不超 PER_BATCH、章序升序
+        for (expect, b) in (1..).zip(plan.batches.iter()) {
+            assert_eq!(b.batch_no, expect, "批号应连续");
+            assert!(b.chapters.len() <= PER_BATCH, "单批章数超限");
+            assert!(
+                b.chapters.windows(2).all(|w| w[0].0 < w[1].0),
+                "批内章序应升序"
+            );
+        }
+    }
+
+    /// ③ 全覆盖且正文没变 → 没有新章 / 没有变章（「要不要启动」由调用方结合成品判断：
+    /// 只看选章时，剩下的预算会用来补最久没覆盖的老章，这是刻意的——多跑几次能逐步刷新）
+    #[test]
+    fn incremental_no_fresh_no_changed_when_fully_covered() {
+        let ents = entries(300);
+        let covered: BTreeMap<i64, Covered> = ents
+            .iter()
+            .map(|e| {
+                (
+                    e.key,
+                    Covered {
+                        content_hash: e.content_hash,
+                        done_at: 1_700_000_000_000,
+                    },
+                )
+            })
+            .collect();
+        let plan = plan_incremental(&ents, &covered);
+        assert_eq!(plan.fresh, 0, "全覆盖时不该有新章");
+        assert_eq!(plan.changed, 0, "正文没变时不该有变章");
+        // 没有新章也没有变章 → 预算全给「最久没覆盖」的老章（这才允许补跑）
+        assert_eq!(plan.backfill, INCREMENTAL_CHAPTER_BUDGET.min(300));
+        assert_eq!(plan.chapter_count(), plan.backfill);
+    }
+
+    /// ④ 正文变了（哈希不同）→ 只重抽这一章
+    #[test]
+    fn incremental_replans_only_changed_chapter() {
+        let mut ents = entries(300);
+        let covered: BTreeMap<i64, Covered> = ents
+            .iter()
+            .map(|e| {
+                (
+                    e.key,
+                    Covered {
+                        content_hash: e.content_hash,
+                        done_at: 1_700_000_000_000,
+                    },
+                )
+            })
+            .collect();
+        // 第 137 章正文被改了
+        ents[136].chapter.2.push_str("（作者修文：补了一段）");
+        ents[136].content_hash = content_hash(&ents[136].chapter.2);
+        let plan = plan_incremental(&ents, &covered);
+        let picked = ordinals(&plan);
+        assert!(picked.contains(&137), "被改的那章必须重抽");
+        assert_eq!(plan.changed, 1, "只有 1 章被判成变章");
+        assert_eq!(plan.fresh, 0, "没有新章");
+        // 有变章时不补老章：一次只重抽真变了的那章（省 token）
+        assert_eq!(picked, vec![137], "只重抽被改的那一章");
+        assert_eq!(plan.backfill, 0, "有变章时不该补老章");
+        assert_eq!(plan.chapter_count(), 1);
+        assert!(!plan.is_empty());
+    }
+
+    /// ⑤ 老章按 done_at 升序补：越久没覆盖越先补
+    #[test]
+    fn incremental_backfills_oldest_first() {
+        let ents = entries(120);
+        // 全都覆盖过且没变，done_at 故意打乱：偶数章 done_at=100，奇数章 done_at=200
+        let mut covered = BTreeMap::new();
+        for e in &ents {
+            covered.insert(
+                e.key,
+                Covered {
+                    content_hash: e.content_hash,
+                    done_at: if e.key % 2 == 0 { 100 } else { 200 },
+                },
+            );
+        }
+        let plan = plan_incremental(&ents, &covered);
+        let picked = ordinals(&plan);
+        assert_eq!(picked.len(), 120, "预算内应把老章全补上");
+        // 预算 240 > 120 章，所以全部入选；顺序仍按章序（便于提示词连贯）
+        assert!(picked.windows(2).all(|w| w[0] < w[1]), "入选章应升序");
     }
 }

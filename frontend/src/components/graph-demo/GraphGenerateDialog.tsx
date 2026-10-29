@@ -14,7 +14,13 @@ import * as React from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Button, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, Spinner, cn } from "@/components/ui";
-import { getGraphEstimate, isGraphTerminal, useGraphGeneration, type GraphProgress } from "@/services/graph";
+import {
+  getGraphEstimate,
+  isGraphTerminal,
+  useGraphGeneration,
+  type GraphEstimate,
+  type GraphProgress,
+} from "@/services/graph";
 
 export interface GraphGenerateDialogProps {
   open: boolean;
@@ -88,6 +94,14 @@ export function GraphGenerateDialog({
     void generation.start(bookName === "" ? {} : { bookName });
   }, [bookName, generation]);
 
+  // 强制重跑：清空台账回到「首次生成」。只埋在这一处的次要按钮里，
+  // 避免用户误点把已抽好的 1745 章再烧一遍。
+  const handleForceStart = React.useCallback(() => {
+    void generation.start(
+      bookName === "" ? { force: true } : { bookName, force: true },
+    );
+  }, [bookName, generation]);
+
   const handleView = React.useCallback(() => {
     handleOpenChange(false);
     if (onView !== undefined) {
@@ -152,6 +166,11 @@ export function GraphGenerateDialog({
               <Button variant="secondary" onClick={() => handleOpenChange(false)}>
                 取消
               </Button>
+              {estimate?.upToDate === true ? (
+                <Button variant="secondary" loading={generation.starting} onClick={handleForceStart}>
+                  强制重跑全部
+                </Button>
+              ) : null}
               <Button
                 variant="primary"
                 loading={generation.starting}
@@ -199,7 +218,7 @@ export function GraphGenerateDialog({
 interface EstimateBlockProps {
   loading: boolean;
   error: string | null;
-  estimate: { cachedChapters: number; batches: number; estPromptTokens: number; estCostNote: string } | undefined;
+  estimate: GraphEstimate | undefined;
   onRetry: () => void;
 }
 
@@ -233,6 +252,14 @@ function EstimateBlock({ loading, error, estimate, onRetry }: EstimateBlockProps
     <div className="space-y-2">
       <dl className="space-y-1.5 rounded-xl border border-border bg-surface-muted/50 px-3 py-2.5 text-xs">
         <Row label="已缓存章节" value={`${estimate.cachedChapters} 章`} />
+        <Row
+          label="本次覆盖"
+          value={
+            estimate.upToDate
+              ? "已是最新，无需重跑"
+              : `${estimate.selectedChapters} 章（增量，不重跑已抽过的）`
+          }
+        />
         <Row label="分批数" value={`${estimate.batches} 批`} />
         <Row label="预估输入 token" value={formatTokens(estimate.estPromptTokens)} />
       </dl>
@@ -243,7 +270,9 @@ function EstimateBlock({ loading, error, estimate, onRetry }: EstimateBlockProps
       </p>
       {estimate.batches === 0 ? (
         <p className="text-[11px] leading-relaxed text-muted-foreground">
-          还没有可用的缓存章节：先去「缓存全本」把正文抓下来，再来生成图谱。
+          {estimate.upToDate
+            ? "全部章节都已抽取过且正文没变化：已是最新，不用再花一遍 token。真要重抽，可用右下角「强制重跑全部」（花费同首次生成）。"
+            : "还没有可用的缓存章节：先去「缓存全本」把正文抓下来，再来生成图谱。"}
         </p>
       ) : null}
     </div>

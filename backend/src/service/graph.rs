@@ -11,9 +11,12 @@ pub mod job;
 pub mod normalize;
 pub mod plan;
 
-pub use job::{cancel, estimate, progress_of, start_job, GraphProgress, JobOptions};
+pub use job::{cancel, estimate, progress_of, start_job, GraphProgress, JobOptions, StartOutcome};
 pub use normalize::{normalize, repair_parent_direction};
-pub use plan::{build_batch_messages, plan_batches};
+pub use plan::{
+    build_batch_messages, content_hash, number_chapters_keyed, plan_batches, plan_incremental,
+    select_incremental, ChapterEntry, Covered, IncrementalPlan,
+};
 
 /// 章节行：(chapter_index, 标题, 正文)
 pub type Chapter = (i64, String, String);
