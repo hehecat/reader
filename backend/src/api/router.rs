@@ -3893,7 +3893,8 @@ async fn get_book_info(
 /// chapterUrl 的 md5 哈希（[`crate::util::md5::chapter_url_hash`]），顺序信息为零；
 /// `candidate_urls`：本书候选章节 URL（`book_vars_cache` 的键）。哈希不可逆，只能靠
 /// URL 原文重算，命中即复原 url——有 url 前端才能让 getBookContent 命中正文缓存
-/// （正文缓存同样按 md5(chapterUrl) 建键），否则目录能看却打不开正文。
+/// （正文缓存同样按 md5(chapterUrl) 建键）；没命中的用 [`cache_url_of`] 兜底，
+/// 否则目录能看却打不开正文。
 ///
 /// 排序：优先按 URL 末段数字 id（正文页 id 单调递增 = 阅读顺序，还能把「卷末总结」
 /// 这类无章号条目排回正确位置）；id 缺失、或与章号顺序冲突（别的源 id 不单调）时
@@ -3902,6 +3903,7 @@ async fn get_book_info(
 fn synthesize_toc_from_cache(
     cached: &[(i64, String)],
     candidate_urls: &[String],
+    book_url: &str,
 ) -> Vec<crate::model::book_chapter::BookChapter> {
     struct Row {
         hash: i64,
@@ -3925,7 +3927,7 @@ fn synthesize_toc_from_cache(
             let url = url_by_hash
                 .get(hash)
                 .map(|u| (*u).to_string())
-                .unwrap_or_default();
+                .unwrap_or_else(|| cache_url_of(book_url, *hash));
             Row {
                 hash: *hash,
                 num: chapter_num_of(title),
@@ -3986,6 +3988,27 @@ fn url_tail_id(url: &str) -> Option<i64> {
     stem.parse().ok()
 }
 
+/// 离线目录里「URL 原文已不可知」的章节点位：`cache://{bookUrl}#{hash}`。
+///
+/// 源站不可用时目录只能凭 `book_chapters` 的哈希合成，而正文缓存正是
+/// md5(chapterUrl) 建键——哈希就是键。留空 url 前端就没法取正文
+/// （getBookContent 要 chapterUrl），所以编一个内部 scheme：getBookContent 认出它
+/// 就直接读正文缓存，不再去请求源站。
+fn cache_url_of(book_url: &str, hash: i64) -> String {
+    format!("cache://{book_url}#{hash}")
+}
+
+/// 解析 [`cache_url_of`] 的产物 → (bookUrl, hash)
+fn parse_cache_url(s: &str) -> Option<(&str, i64)> {
+    let rest = s.strip_prefix("cache://")?;
+    // 从右侧切：bookUrl 自身可能带 #（少数源的目录锚点）
+    let (book_url, hash) = rest.rsplit_once('#')?;
+    if book_url.is_empty() {
+        return None;
+    }
+    hash.parse().ok().map(|h| (book_url, h))
+}
+
 /// 抓取失败 / 空目录 / 质量门判残缺时的本地兜底：用 book_chapters 已缓存章节合成目录，
 /// 并写入 toc_cache（下次打开不再重复等抓取超时，也省掉一次 CF 质询等待）。
 /// 返回 None = 本地没有可用缓存章节——调用方保留原有错误语义（不吞异常）。
@@ -4011,13 +4034,16 @@ async fn toc_from_cached_chapters(
         .list_urls_under_prefix(ns, book_url)
         .await
         .unwrap_or_default();
-    let chapters = synthesize_toc_from_cache(&cached, &urls);
+    let chapters = synthesize_toc_from_cache(&cached, &urls, book_url);
     if chapters.is_empty() {
         return None;
     }
-    let with_url = chapters.iter().filter(|c| !c.url.is_empty()).count();
+    let with_url = chapters
+        .iter()
+        .filter(|c| !c.url.starts_with("cache://"))
+        .count();
     tracing::warn!(
-        "目录抓取失败({reason})，回落到 {} 章本地缓存（{with_url} 章复原了章节 URL）[{book_url}]",
+        "目录抓取失败({reason})，回落到 {} 章本地缓存（{with_url} 章复原了章节 URL，其余走正文缓存）[{book_url}]",
         chapters.len()
     );
     if let Ok(json) = serde_json::to_string(&chapters) {
@@ -4413,6 +4439,34 @@ async fn get_book_content(
             return ret;
         }
         return Json(ReturnData::err("本地书章节不存在"));
+    }
+    // 目录离线兜底生成的 cache:// 章节：此刻源站不可用（目录是凭正文缓存合成的），
+    // 直接按 md5(chapterUrl) 哈希读正文缓存，不去请求源站
+    if chapter_url.starts_with("cache://") {
+        let Some((cached_book, hash)) = parse_cache_url(&chapter_url) else {
+            return Json(ReturnData::err("章节链接无效"));
+        };
+        if let Ok(Some(content)) = state
+            .storage
+            .get_chapter_content(&namespace, cached_book, hash)
+            .await
+        {
+            if !content.trim().is_empty() {
+                // 与正常章节同等待遇：读缓存也算在读（cache=1 纯预取不算）
+                if !cache_only {
+                    save_reading_progress_if_shelf(
+                        &state,
+                        &namespace,
+                        cached_book,
+                        &chapter_url,
+                        index_hint,
+                    )
+                    .await;
+                }
+                return Json(ReturnData::ok(serde_json::json!({ "content": content })));
+            }
+        }
+        return Json(ReturnData::err("本地缓存里没有这一章, 源站当前不可用"));
     }
     let bs_param = param_of(&params, body_json.as_ref(), "bookSource");
     let Some(source) =
@@ -25161,6 +25215,7 @@ mod tests {
     #[test]
     fn test_synthesize_toc_from_cache() {
         let u = |id: i64| format!("https://s.com/book/1/{id}.html");
+        const BOOK: &str = "https://s.com/book/1/";
         // 生产形态：chapter_index = md5(chapterUrl) 哈希（无序），标题带「第N章」
         let rows = vec![
             (
@@ -25183,7 +25238,7 @@ mod tests {
         let urls: Vec<String> = [10, 20, 30, 40].iter().map(|i| u(*i)).collect();
 
         // 有 url：按 URL 末段 id 排（= 阅读顺序，含无章号的卷末总结）
-        let toc = synthesize_toc_from_cache(&rows, &urls);
+        let toc = synthesize_toc_from_cache(&rows, &urls, BOOK);
         let titles: Vec<&str> = toc.iter().map(|c| c.title.as_str()).collect();
         assert_eq!(titles, ["第1章 甲", "第一卷总结", "第2章 乙", "第3章 丙"]);
         // index 重编号为 0 基连续
@@ -25194,11 +25249,17 @@ mod tests {
         assert_eq!(toc[3].url, u(40));
         assert!(toc.iter().all(|c| !c.is_volume));
 
-        // 无 url：退回章号序 + 无章号置尾（不知道位置就不猜位置），url 留空
-        let toc = synthesize_toc_from_cache(&rows, &[]);
+        // 无 url：退回章号序 + 无章号置尾（不知道位置就不猜位置），url 写成 cache:// 点位
+        // （留空的话前端就没法取正文：getBookContent 要 chapterUrl）
+        let toc = synthesize_toc_from_cache(&rows, &[], BOOK);
         let titles: Vec<&str> = toc.iter().map(|c| c.title.as_str()).collect();
         assert_eq!(titles, ["第1章 甲", "第2章 乙", "第3章 丙", "第一卷总结"]);
-        assert!(toc.iter().all(|c| c.url.is_empty()));
+        for c in &toc {
+            let (book, hash) = parse_cache_url(&c.url).expect("应写成 cache:// 点位");
+            assert_eq!(book, BOOK);
+            // 哈希就是正文缓存的键：能反查到原始 chapterUrl 的 md5
+            assert!(rows.iter().any(|(h, t)| *h == hash && *t == c.title));
+        }
 
         // url id 与章号顺序冲突（别的源 id 非单调）→ 不信任 id 序，退回章号序
         let rows = vec![
@@ -25211,13 +25272,13 @@ mod tests {
                 "第1章 甲".to_string(),
             ),
         ];
-        let toc = synthesize_toc_from_cache(&rows, &[u(100), u(200)]);
+        let toc = synthesize_toc_from_cache(&rows, &[u(100), u(200)], BOOK);
         let titles: Vec<&str> = toc.iter().map(|c| c.title.as_str()).collect();
         assert_eq!(titles, ["第1章 甲", "第2章 乙"]);
         assert_eq!(toc[0].url, u(200));
 
         // 无缓存章节 → 空目录（调用方据此保留错误语义，不吞异常）
-        assert!(synthesize_toc_from_cache(&[], &urls).is_empty());
+        assert!(synthesize_toc_from_cache(&[], &urls, BOOK).is_empty());
 
         // 章号/N 解析边界：「第N章」仅认阿拉伯数字，「第 12 章」这类带空格与中文数字不猜
         assert_eq!(chapter_num_of("第12章 风起"), Some(12));
@@ -25376,6 +25437,53 @@ mod tests {
             .unwrap()
             .expect("书架书");
         assert_eq!(shelf.total_chapter_num, 10, "兜底目录不许下调书架章数");
+
+        // 兜底目录里的 cache:// 章节点位：源站不可达也能读到正文。
+        // 这本测试书的 URL 都在变量缓存里（合成目录能复原原文），换一本「只有哈希、
+        // 没有 URL」的形态——生产里《绍宋》就是这种（book_vars_cache 一行都没有）。
+        let hash = crate::util::md5::chapter_url_hash(&url(20));
+        let ret = get_book_content(
+            AxumState(state.clone()),
+            Query(HashMap::from([(
+                "chapterUrl".to_string(),
+                cache_url_of(book_url, hash),
+            )])),
+            HeaderMap::new(),
+            None,
+        )
+        .await;
+        assert!(
+            ret.0.is_success,
+            "cache:// 章节应直读正文缓存: {}",
+            ret.0.error_msg
+        );
+        assert_eq!(ret.0.data["content"], serde_json::json!("正文"));
+
+        // 缓存里没有的哈希 → 如实报错，不假装成功
+        let ret = get_book_content(
+            AxumState(state.clone()),
+            Query(HashMap::from([(
+                "chapterUrl".to_string(),
+                cache_url_of(book_url, 12345),
+            )])),
+            HeaderMap::new(),
+            None,
+        )
+        .await;
+        assert!(!ret.0.is_success, "没有缓存正文时应报错");
+
+        // 点位解析：bookUrl 自带 # 也要从右侧切、坏格式一律 None
+        assert_eq!(
+            parse_cache_url(&cache_url_of(book_url, 7)),
+            Some((book_url, 7))
+        );
+        assert_eq!(
+            parse_cache_url("cache://https://s.com/b/1/#42"),
+            Some(("https://s.com/b/1/", 42))
+        );
+        assert_eq!(parse_cache_url("cache://#7"), None);
+        assert_eq!(parse_cache_url("cache://https://s.com/b/1/"), None);
+        assert_eq!(parse_cache_url("https://s.com/b/1/"), None);
 
         cleanup(state, dir).await;
     }
