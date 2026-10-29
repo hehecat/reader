@@ -9513,6 +9513,9 @@ async fn search_book_multi_sse(
             if !full_scan
                 && sse_should_close(done.len(), window_t0.elapsed(), window_budget, hard_cap)
             {
+                // 只有「硬上限到」才算整窗放弃(窗内源集体超时); 软预算收口(done>=8 且超预算)
+                // 保留「第一个未完成源的前一台」语义 —— 那批慢源是少数, 下一窗会重试。
+                hard_capped = window_t0.elapsed() >= hard_cap;
                 break; // 余下源留给前端下一窗(见 next_from)
             }
             // 双路等待：源返回 / 窗预算到期。到点立刻收尾发 event: end，
