@@ -142,8 +142,11 @@ export function SwitchSourceDialog({
             results[candidate.bookUrl] = { missing: "缺少本章" };
           } else {
             const target = match.chapter;
+            // bookUrl = 候选源下这本书的链接(候选对象自带, 后端 getBookContent 的正文缓存
+            // 以 book_url 为键、要求非空; 漏传会整条旁路缓存, 实测 220ms vs 15ms)
             const content = await getBookContent(target.url, target.index, {
               bookSourceUrl: candidate.origin,
+              bookUrl: candidate.bookUrl,
             });
             results[candidate.bookUrl] = {
               kind: match.kind,

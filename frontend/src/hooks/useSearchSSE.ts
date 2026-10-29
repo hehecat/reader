@@ -8,6 +8,17 @@ import { searchSSEBatchSchema } from "@/services/search";
 import { getBookSourcesLite } from "@/services/sources";
 import { useSettingsStore } from "@/stores/settings-store";
 import type { SearchBook } from "@/types/api";
+// 静默态(settling/quiet)的纯状态机: 只降级等待提示, 不碰结果数据.
+// 与搜索结果区同目录便于 node --test 直接单测(它没有任何 `@/` 别名依赖).
+import {
+  QUIET_AFTER_MS,
+  QUIET_INITIAL,
+  QUIET_NOTICE_MS,
+  canSettle,
+  reduceQuiet,
+  type QuietEvent,
+  type QuietState,
+} from "@/components/search/searchQuiet";
 /** 简介补全跨搜索缓存: 同一本书不重复回源 (搜索规则缺 intro 是源侧常态) */
 const introCache = new Map<string, string>();
 
@@ -31,6 +42,13 @@ export interface UseSearchSSEResult {
   /** 仅搜索中非 null */
   progress: SearchProgress | null;
   error: string | null;
+  /**
+   * 静默态(settling): 已有结果且连续 QUIET_AFTER_MS 没有新增 —— 等待提示降级为轻提示,
+   * 列表照常可交互. `searching` 仍为 true, 结果仍继续追加; 真结束/停止/出错必然退出.
+   */
+  quiet: boolean;
+  /** 静默被新结果打断后的累计新到条数 (>0 时 UI 亮出「新到 N 条」; 其余时候恒为 0) */
+  arrived: number;
   /** 书源未搜完(还能 loadMore); 书源总数未知时保守为 true */
   hasMore: boolean;
   /** 发起新搜索: 断开旧连接、清空结果 */
@@ -204,12 +222,86 @@ export function useSearchSSE(): UseSearchSSEResult {
   const flushRef = useRef<() => void>(() => {});
   const enqueueEnrichRef = useRef<() => void>(() => {});
 
+  // ---- 静默态 (settling/quiet): 只降级等待提示, 结果照旧合并追加 ----
+  /** 对外暴露的静默态; 内部副本放 quietRef (定时器/SSE 回调里读 state 会拿到旧值) */
+  const [quietState, setQuietState] = useState<QuietState>(QUIET_INITIAL);
+  const quietRef = useRef<QuietState>(QUIET_INITIAL);
+  /** 已提交进 results 的条目数: 与累加器条目数的差值 = 这一批新到的条数 */
+  const committedRef = useRef(0);
+  /** 本轮搜索是否已报错(静默准入用; 只在回调里写, 不在渲染期写 ref) */
+  const erroredRef = useRef(false);
+  const settleTimerRef = useRef<number | null>(null);
+  const noticeTimerRef = useRef<number | null>(null);
+
   const clearFlushTimer = useCallback(() => {
     if (flushTimerRef.current !== null) {
       window.clearTimeout(flushTimerRef.current);
       flushTimerRef.current = null;
     }
   }, []);
+
+  /** 静默态迁移: 状态没变就不 setState (否则每批结果都白渲染一次) */
+  const dispatchQuiet = useCallback((event: QuietEvent) => {
+    const next = reduceQuiet(quietRef.current, event);
+    if (next === quietRef.current) {
+      return;
+    }
+    quietRef.current = next;
+    setQuietState(next);
+  }, []);
+
+  const clearQuietTimers = useCallback(() => {
+    if (settleTimerRef.current !== null) {
+      window.clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = null;
+    }
+    if (noticeTimerRef.current !== null) {
+      window.clearTimeout(noticeTimerRef.current);
+      noticeTimerRef.current = null;
+    }
+  }, []);
+
+  /** 回到正常等待态(新搜索 / 恢复快照 / 停止 / 用户手动续搜): 静默与新到提示都不许留 */
+  const resetQuiet = useCallback(() => {
+    clearQuietTimers();
+    dispatchQuiet({ type: "reset" });
+  }, [clearQuietTimers, dispatchQuiet]);
+
+  /**
+   * 每有新增结果就重开「静默 N 秒」计时: 到期且仍满足准入条件才降级.
+   * 收尾期(后端还在跑剩余源)没有新结果, 计时不会被重置, 于是保持静默;
+   * 重连(自动续接)不重置静默 —— 否则每 30s 断流一次会把用户反复踢回「搜索中…」.
+   */
+  const armSettle = useCallback(() => {
+    if (settleTimerRef.current !== null) {
+      window.clearTimeout(settleTimerRef.current);
+    }
+    settleTimerRef.current = window.setTimeout(() => {
+      settleTimerRef.current = null;
+      // 结束/停止/出错/还没有任何结果: 一律不降级(不把未完成的源说成有结果)
+      if (
+        !canSettle({
+          searching: searchingRef.current,
+          errored: erroredRef.current,
+          count: accRef.current.items.length,
+        })
+      ) {
+        return;
+      }
+      dispatchQuiet({ type: "settle" });
+    }, QUIET_AFTER_MS);
+  }, [dispatchQuiet]);
+
+  /** 「新到 N 条」提示到期收起(静默态本身不受影响) */
+  const armNotice = useCallback(() => {
+    if (noticeTimerRef.current !== null) {
+      window.clearTimeout(noticeTimerRef.current);
+    }
+    noticeTimerRef.current = window.setTimeout(() => {
+      noticeTimerRef.current = null;
+      dispatchQuiet({ type: "notice-clear" });
+    }, QUIET_NOTICE_MS);
+  }, [dispatchQuiet]);
 
   /**
    * 立即冲刷增量: 把窗口里攒的结果一次性提交.
@@ -232,7 +324,19 @@ export function useSearchSSE(): UseSearchSSEResult {
     // 先补全跨搜索的简介缓存(不必回源), 再一次性提交, 避免「补一条渲染一次」
     enqueueEnrichRef.current();
     setResults(rankResults(accRef.current.items, keyRef.current ?? ""));
-  }, [clearFlushTimer]);
+    // 静默态只认「有没有新结果」: 纯游标推进 / 简介补全(delta 0)不打断静默,
+    // 晚到的新结果则会立刻把静默踢回正常态并亮出新到条数(不静默插入).
+    const committed = accRef.current.items.length;
+    const delta = committed - committedRef.current;
+    committedRef.current = committed;
+    if (delta > 0) {
+      dispatchQuiet({ type: "grow", delta });
+      if (quietRef.current.arrived > 0) {
+        armNotice();
+      }
+      armSettle();
+    }
+  }, [armNotice, armSettle, clearFlushTimer, dispatchQuiet]);
   flushRef.current = flushNow;
 
   // 卸载清理: 停掉在飞的 SSE + 清掉 flush 定时器 —— 否则流会继续跑到结束并对已卸载
@@ -243,8 +347,9 @@ export function useSearchSSE(): UseSearchSSEResult {
       cancelRef.current = null;
       autoRef.current = false;
       clearFlushTimer();
+      clearQuietTimers();
     },
-    [clearFlushTimer],
+    [clearFlushTimer, clearQuietTimers],
   );
 
   /** 开一个 flush 窗口: 已有窗口则让它自然到期 (攒批的关键) */
@@ -412,6 +517,8 @@ export function useSearchSSE(): UseSearchSSEResult {
           }
           // 原生中断不弹错误: onClose 会自动续接; 其余真错误才展示
           if (err.message !== "SSE 连接中断") {
+            // 出错即退出静默: 静默准入也会因此不再成立(见 armSettle)
+            erroredRef.current = true;
             setSearching(false);
             setError(err.message.length > 0 ? err.message : "搜索失败");
           }
@@ -471,17 +578,20 @@ export function useSearchSSE(): UseSearchSSEResult {
       dirtyRef.current = false;
       pendingIndexRef.current = -1;
       accRef.current = { items: [], seen: new Set(), entries: new Map() };
+      committedRef.current = 0;
       enrichedRef.current = new Set();
       enrichQueueRef.current = [];
       autoRef.current = true;
       noMoreRef.current = false;
+      erroredRef.current = false;
       setNoMore(false);
       stallRef.current = 0;
+      resetQuiet();
       setResults([]);
       concurrentRef.current = opts?.concurrentCount;
       connect(trimmed, opts?.lastIndex ?? -1, opts?.concurrentCount);
     },
-    [clearFlushTimer, connect],
+    [clearFlushTimer, connect, resetQuiet],
   );
 
   const stop = useCallback(() => {
@@ -490,8 +600,10 @@ export function useSearchSSE(): UseSearchSSEResult {
     cancelRef.current = null;
     // 停止也要把窗口里最后一批结果落地, 不能丢
     flushNow();
+    // 停止是终态: 静默态与「新到」提示都不许残留
+    resetQuiet();
     setSearching(false);
-  }, [flushNow]);
+  }, [flushNow, resetQuiet]);
 
   const loadMore = useCallback(() => {
     const key = keyRef.current;
@@ -503,9 +615,12 @@ export function useSearchSSE(): UseSearchSSEResult {
     flushNow();
     autoRef.current = true;
     noMoreRef.current = false;
+    erroredRef.current = false;
     stallRef.current = 0;
+    // 用户手动续搜 = 新的一轮连接: 回到正常等待态(而不是一上来就静默)
+    resetQuiet();
     connect(key, lastIndexRef.current, concurrentRef.current);
-  }, [connect, flushNow]);
+  }, [connect, flushNow, resetQuiet]);
 
   /** 会话快照恢复: 阅读器预览返回后保留原搜索列表, 不重新起搜 */
   const hydrate = useCallback(
@@ -524,17 +639,20 @@ export function useSearchSSE(): UseSearchSSEResult {
         entries.set(`${item.name}_${item.author}`, { index, book: item });
       });
       accRef.current = { items: clean, seen, entries };
+      committedRef.current = clean.length;
       enrichedRef.current = new Set();
       enrichQueueRef.current = [];
       keyRef.current = key;
       lastIndexRef.current = fromIndex;
+      erroredRef.current = false;
+      resetQuiet();
       setActiveKey(key);
       setLastIndex(fromIndex);
       setSearching(false);
       setError(null);
       setResults(clean);
     },
-    [clearFlushTimer],
+    [clearFlushTimer, resetQuiet],
   );
 
   // 离开页面自动断开
@@ -544,8 +662,9 @@ export function useSearchSSE(): UseSearchSSEResult {
       cancelRef.current?.();
       cancelRef.current = null;
       clearFlushTimer();
+      clearQuietTimers();
     },
-    [clearFlushTimer],
+    [clearFlushTimer, clearQuietTimers],
   );
 
   const progress = useMemo<SearchProgress | null>(() => {
@@ -566,5 +685,26 @@ export function useSearchSSE(): UseSearchSSEResult {
     return lastIndex < sourceCount - 1;
   }, [activeKey, noMore, lastIndex, sourceCount]);
 
-  return { results, searching, progress, error, hasMore, start, stop, loadMore, hydrate, lastIndex };
+  /**
+   * 静默态对外值: 与 searching/error 相与 —— 真结束(isEnd 后 searching=false)、停止、
+   * 出错三种路径都必然退出静默, 不可能卡住. 内部状态可以跨自动重连保留(收尾期每 30s 断流
+   * 一次不抖回「搜索中…」), 但绝不会透出给一个已经不在搜索的页面.
+   */
+  const quiet = quietState.quiet && searching && error === null;
+  const arrived = quiet || !searching || error !== null ? 0 : quietState.arrived;
+
+  return {
+    results,
+    searching,
+    progress,
+    error,
+    quiet,
+    arrived,
+    hasMore,
+    start,
+    stop,
+    loadMore,
+    hydrate,
+    lastIndex,
+  };
 }

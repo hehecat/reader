@@ -137,8 +137,20 @@ export default function SearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const q = searchParams.get("q")?.trim() ?? "";
   const [keyword, setKeyword] = useState(q);
-  const { results, searching, progress, error, hasMore, start, stop, loadMore, hydrate, lastIndex } =
-    useSearchSSE();
+  const {
+    results,
+    searching,
+    progress,
+    error,
+    quiet,
+    arrived,
+    hasMore,
+    start,
+    stop,
+    loadMore,
+    hydrate,
+    lastIndex,
+  } = useSearchSSE();
   /** 会话快照键: 预览/切页返回后恢复原搜索列表 */
   const SEARCH_SNAPSHOT_KEY = "reader.search.snapshot.v1";
   const { history, add: addHistory, clear: clearHistory } = useSearchHistory();
@@ -357,13 +369,30 @@ export default function SearchPage() {
         ) : (
           <>
             {searching ? (
+              // 搜索(含静默态)的状态行: 高度固定(min-h-9), 从「搜索中」降级到轻提示时不推挤列表
               <div
-                className="flex shrink-0 items-center gap-2 py-2.5 text-xs text-muted-foreground"
+                className="flex min-h-9 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 py-2.5 text-xs text-muted-foreground"
                 role="status"
                 aria-live="polite"
               >
-                <Spinner size="sm" label="搜索中" />
-                <span>已找到 {visibleResults.length} 本</span>
+                {quiet ? (
+                  // 静默态(settling): 结果已到一批但收尾源还在返回 —— 收起转圈, 只留轻提示.
+                  // 列表保持完全可交互(滚动/打开书籍都不受影响), 有新增会立刻切回正常态.
+                  <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-muted-foreground/50" />
+                ) : (
+                  <Spinner size="sm" label="搜索中" />
+                )}
+                <span>
+                  {quiet
+                    ? `已收到 ${visibleResults.length} 条，剩余源仍在返回`
+                    : `已找到 ${visibleResults.length} 本`}
+                </span>
+                {arrived > 0 ? (
+                  // 静默被新结果打断: 亮出新到条数并高亮, 不让结果静默插入
+                  <span className="rounded-full bg-accent/10 px-2 py-0.5 font-medium text-accent transition-colors duration-200 ease-out">
+                    新到 {arrived} 条
+                  </span>
+                ) : null}
                 {progress !== null ? (
                   <span>
                     ·{" "}
