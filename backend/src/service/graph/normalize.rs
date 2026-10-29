@@ -38,6 +38,18 @@ const BOOK_FALLBACK: &str = "未知作品";
 /// 性别兜底
 const GENDER_FALLBACK: &str = "未知";
 
+/// 归一化用的书籍元信息：来自 `books` 表 / 目录缓存，**优先于**模型输出。
+///
+/// 模型的批次 JSON 里经常压根没有 `book` 字段（实测 6 批全无），只靠它取名就会一路
+/// 回落到「未知作品」（Bug 2）。这类权威信息在库里现成可取，别问模型要。
+#[derive(Debug, Clone, Default)]
+pub struct BookHints {
+    /// 权威书名（`books.name`；退 `book_info_cache`）；空 = 没取到
+    pub book_name: String,
+    /// 真实总章数（`books.total_chapter_num`，退目录长度）；0 = 没取到
+    pub total_chapters: i64,
+}
+
 /// 泛称：不当作人物（模型常把「陛下/将军」当名字抽出来）
 const GENERIC: &[&str] = &[
     "陛下",
@@ -1573,21 +1585,39 @@ fn faction_kind(name: &str) -> &'static str {
     "组织"
 }
 
-/// 一个势力：(名字, 成员下标（按度数降序）, 领袖下标)
-type Faction = (String, Vec<usize>, Option<usize>);
+/// 一个势力
+#[derive(Clone, Debug)]
+struct Faction {
+    /// 保留下来（信息量最大）的名字
+    name: String,
+    /// 被归并掉的其他写法（「黎泾李家」「李家」…）：排障用，也进输出便于人工核对
+    aliases: Vec<String>,
+    /// 成员下标（裁剪后的 cluster 下标，按度数降序）
+    members: Vec<usize>,
+    /// 领袖下标
+    leader: Option<usize>,
+    /// 门派 | 家族 | 势力 | 组织（归并时取出现最多的那个）
+    kind: &'static str,
+}
 
 /// 人物 → 所属势力下标（可能同时属于多个）
 type MemberOf = Vec<Vec<usize>>;
 
+/// 家族势力归并的成员重合度阈值（Jaccard）
+const FACTION_MERGE_JACCARD: f64 = 0.3;
+/// 家族后缀字：`X家` / `X氏` / `X族` / `X府`
+const CLAN_SUFFIX: &[char] = &['家', '氏', '族', '府'];
+
 /// 势力投票：人物的 faction 字段 + role 里点名的势力名 + 批次声明的 leader
 ///
-/// 返回投出来的势力，以及「人物 → 势力下标」的反向表。
+/// 返回**未归并、未截断**的势力表（成员按度数降序）与「势力名 → 领袖票」；
+/// 归并 / 收敛 / 选领袖见 [`settle_factions`]。
 fn vote_factions(
     batches: &[Value],
     clusters: &[Cluster],
     resolver: &Resolver<'_>,
     degree: &[usize],
-) -> (Vec<Faction>, MemberOf) {
+) -> (Vec<Faction>, BTreeMap<String, BTreeMap<usize, usize>>) {
     let mut names: BTreeSet<String> = BTreeSet::new();
     for c in clusters {
         if let Some(f) = &c.faction {
@@ -1649,25 +1679,245 @@ fn vote_factions(
         }
     }
 
-    let mut chosen: Vec<(String, Vec<usize>)> = members
+    let mut out: Vec<Faction> = members
         .into_iter()
         .filter(|(_, m)| !m.is_empty())
-        .map(|(f, m)| (f, m.into_iter().collect()))
+        .map(|(name, m)| {
+            let mut mem: Vec<usize> = m.into_iter().collect();
+            mem.sort_by_key(|&i| (Reverse(degree[i]), i));
+            let leader = pick_leader(&name, &mem, clusters, declared.get(&name), degree);
+            Faction {
+                kind: faction_kind(&name),
+                name,
+                aliases: Vec::new(),
+                members: mem,
+                leader,
+            }
+        })
         .collect();
-    chosen.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(&b.0)));
-    chosen.truncate(MAX_FACTIONS);
+    out.sort_by(|a, b| {
+        b.members
+            .len()
+            .cmp(&a.members.len())
+            .then(a.name.cmp(&b.name))
+    });
+    (out, declared)
+}
 
+/// 势力归并 + 规模收敛 + 重算领袖 + 「人物 → 势力下标」反查表
+///
+/// 顺序有讲究：**先归并再截断**。反过来的话，先被 `MAX_FACTIONS` 砍掉的正好可能是
+/// 「黎泾李家」这种小变体，归并就无从谈起了（Bug 3 的现场就是这样）。
+fn settle_factions(
+    factions: Vec<Faction>,
+    clusters: &[Cluster],
+    declared: &BTreeMap<String, BTreeMap<usize, usize>>,
+    degree: &[usize],
+) -> (Vec<Faction>, MemberOf, BTreeMap<String, String>) {
+    let (mut factions, rename) = merge_factions(factions, clusters, degree);
+    factions.truncate(MAX_FACTIONS);
     let mut mem_of: Vec<Vec<usize>> = vec![Vec::new(); clusters.len()];
-    let mut out = Vec::with_capacity(chosen.len());
-    for (fi, (name, mut mem)) in chosen.into_iter().enumerate() {
-        mem.sort_by_key(|&i| (Reverse(degree[i]), i));
-        for &i in &mem {
+    for (fi, f) in factions.iter_mut().enumerate() {
+        // 归并后的领袖票 = 本名 + 全部别名的票之和
+        let mut votes: BTreeMap<usize, usize> = BTreeMap::new();
+        for name in std::iter::once(&f.name).chain(f.aliases.iter()) {
+            if let Some(v) = declared.get(name) {
+                for (k, c) in v {
+                    *votes.entry(*k).or_insert(0) += *c;
+                }
+            }
+        }
+        for &i in &f.members {
             mem_of[i].push(fi);
         }
-        let leader = pick_leader(&name, &mem, clusters, declared.get(&name), degree);
-        out.push((name, mem, leader));
+        let (name, members) = (f.name.clone(), f.members.clone());
+        let votes = (!votes.is_empty()).then_some(&votes);
+        f.leader = pick_leader(&name, &members, clusters, votes, degree);
     }
-    (out, mem_of)
+    (factions, mem_of, rename)
+}
+
+/// 家族势力的「姓根」候选字。
+///
+/// `李氏` → {李}；`黎泾李家` → {黎, 李}（地名前缀 + 姓）；`李通崖家` → {崖, 李}
+/// （按人名派生的碎片写法）。取**候选集合**而不是单个字，是为了「黎泾李家」能和「李氏」
+/// 对上，而「陈家」不会因为首字相同就和「陈氏」以外的东西混一起。
+fn clan_roots(name: &str) -> Vec<char> {
+    let cs: Vec<char> = name.chars().collect();
+    let mut out: Vec<char> = Vec::new();
+    // 去掉尾部的家族后缀（`家族` 两字叠用要都剥）后，末字通常就是姓：`黎泾李` → 李
+    let mut end = cs.len();
+    while end > 0 && CLAN_SUFFIX.contains(&cs[end - 1]) {
+        end -= 1;
+    }
+    if end > 0 && end < cs.len() {
+        out.push(cs[end - 1]);
+    }
+    // 两个字的名字没有前缀可剥（`李氏` / `李家` / `郁家`）：首字就是姓。
+    // 反过来，三字以上的名字首字多是地名（`黎泾李家` 的黎、`黎夏萧家` 的黎），
+    // 把它当姓根会把「黎泾李家」和「黎夏萧家」串成一串，最后把萧家并进李家。
+    if out.is_empty() && cs.len() == 2 {
+        out.push(cs[0]);
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// 成员名的共同「姓」：首字里覆盖 ≥60%（且至少 2 人）的那个字。
+///
+/// 家族势力的成员几乎同姓，所以哪怕势力名写成了「李通崖家」（按人名派生），也能靠成员
+/// 对上「李氏」。覆盖率的闸门是为了别把「袁家」和「费家」这类小势力误并。
+fn member_surname(f: &Faction, clusters: &[Cluster]) -> Option<char> {
+    if f.members.len() < 2 {
+        return None;
+    }
+    let mut counts: BTreeMap<char, usize> = BTreeMap::new();
+    for &i in &f.members {
+        if let Some(c) = clusters[i].name.chars().next() {
+            *counts.entry(c).or_insert(0) += 1;
+        }
+    }
+    let best = counts
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))?;
+    (best.1 >= 2 && best.1 * 5 >= f.members.len() * 3).then_some(best.0)
+}
+
+/// 名字是不是「纯姓根」写法（`X家` / `X氏` / `X族`）——归并时优先保留这种名字
+fn clan_form(name: &str) -> usize {
+    usize::from(name.ends_with(['家', '氏', '族']))
+}
+
+fn jaccard(a: &[usize], b: &[usize]) -> f64 {
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    let sa: BTreeSet<usize> = a.iter().copied().collect();
+    let sb: BTreeSet<usize> = b.iter().copied().collect();
+    let inter = sa.intersection(&sb).count() as f64;
+    let union = sa.union(&sb).count() as f64;
+    if union == 0.0 {
+        0.0
+    } else {
+        inter / union
+    }
+}
+
+/// 家族势力归并（Bug 3）：同一家族在批次之间会以「李氏 / 黎泾李家 / 李家 / 李通崖家」
+/// 等变体各成一条势力，成员集合被切碎，图上看就是几块互不相连的家族。
+///
+/// 合并依据（命中任一即并；只并 `kind == "家族"` 的——门派/势力/组织的同名变体少得多，
+/// 乱并的代价更大）：
+/// a. 姓根相交（`X氏` / `X家` / `地名+X家` 都归到同一个姓，见 [`clan_roots`]）；
+/// b. `leader` 是同一个人（这个证据最硬：两批都指认同一个族长）；
+/// c. 成员重合度（Jaccard）≥ [`FACTION_MERGE_JACCARD`]。
+///
+/// 保留最像正式家族名的那个（纯姓根名 > 成员多 > 更短），其余进 `aliases`；成员取并集，
+/// `kind` 取归并前出现最多的那个。返回 (归并后的势力, 旧名 → 新名)。
+fn merge_factions(
+    factions: Vec<Faction>,
+    clusters: &[Cluster],
+    degree: &[usize],
+) -> (Vec<Faction>, BTreeMap<String, String>) {
+    let n = factions.len();
+    if n <= 1 {
+        let rename = factions
+            .iter()
+            .map(|f| (f.name.clone(), f.name.clone()))
+            .collect();
+        return (factions, rename);
+    }
+    let roots: Vec<Vec<char>> = factions
+        .iter()
+        .map(|f| {
+            let mut r = clan_roots(&f.name);
+            if let Some(s) = member_surname(f, clusters) {
+                r.push(s);
+            }
+            r.sort_unstable();
+            r.dedup();
+            r
+        })
+        .collect();
+
+    let mut parent: Vec<usize> = (0..n).collect();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let same_root = roots[i].iter().any(|c| roots[j].contains(c));
+            let no_root = roots[i].is_empty() || roots[j].is_empty();
+            let same_leader =
+                factions[i].leader.is_some() && factions[i].leader == factions[j].leader;
+            let clan_pair = factions[i].kind == "家族" && factions[j].kind == "家族";
+            let overlaps =
+                jaccard(&factions[i].members, &factions[j].members) >= FACTION_MERGE_JACCARD;
+            // 姓根不同的一律不并：生产库里「李氏」和「萧氏」会被同一个高连通人物同时投成
+            // 领袖，光看 leader 会把萧家整块吞进李家（实测 f1 里混进了萧氏/萧家/黎夏萧家）。
+            let merge = (same_root && clan_pair)
+                // 姓根一致 + 有一方看不出姓根（「陇西堂」这种堂号）时，leader 相同就能并
+                || (same_root && same_leader)
+                || (same_leader && no_root)
+                // 实在看不出姓根，但成员高度重合：仍是同一家（门派/势力不参与这一条）
+                || (overlaps && no_root && clan_pair);
+            if merge {
+                uf_union(&mut parent, i, j);
+            }
+        }
+    }
+
+    let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for i in 0..n {
+        let root = uf_root(&mut parent, i);
+        groups.entry(root).or_default().push(i);
+    }
+
+    let mut out: Vec<Faction> = Vec::with_capacity(groups.len());
+    let mut rename: BTreeMap<String, String> = BTreeMap::new();
+    for (_, mut idxs) in groups {
+        // 保留哪个名字：① 「李/萧/郁」这种纯姓根名（X家/X氏/X族）压过带地名前缀或堂号的
+        // 变体（「黎泾李家」「陇西堂」），② 成员多的更权威，③ 同分取更短的，④ 字典序兜底
+        idxs.sort_by(|&a, &b| {
+            let (fa, fb) = (&factions[a], &factions[b]);
+            clan_form(&fb.name)
+                .cmp(&clan_form(&fa.name))
+                .then(fb.members.len().cmp(&fa.members.len()))
+                .then(char_len(&fa.name).cmp(&char_len(&fb.name)))
+                .then(fa.name.cmp(&fb.name))
+        });
+        let keep = idxs[0];
+        let mut members: BTreeSet<usize> = BTreeSet::new();
+        let mut kinds: BTreeMap<&'static str, usize> = BTreeMap::new();
+        let mut aliases: Vec<String> = Vec::new();
+        for &k in &idxs {
+            members.extend(factions[k].members.iter().copied());
+            *kinds.entry(factions[k].kind).or_insert(0) += 1;
+            if k != keep {
+                aliases.push(factions[k].name.clone());
+            }
+            rename.insert(factions[k].name.clone(), factions[keep].name.clone());
+        }
+        let kind = kinds
+            .into_iter()
+            .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(a.0)))
+            .map_or("组织", |(k, _)| k);
+        let mut mem: Vec<usize> = members.into_iter().collect();
+        mem.sort_by_key(|&i| (Reverse(degree[i]), i));
+        aliases.sort();
+        out.push(Faction {
+            name: factions[keep].name.clone(),
+            aliases,
+            members: mem,
+            leader: factions[keep].leader,
+            kind,
+        });
+    }
+    out.sort_by(|a, b| {
+        b.members
+            .len()
+            .cmp(&a.members.len())
+            .then(a.name.cmp(&b.name))
+    });
+    (out, rename)
 }
 
 /// 领袖：role 里的「势力名 + 领袖词」> 多批一致声明 > 单票声明 > 度数最高
@@ -1723,10 +1973,13 @@ fn pick_leader(
 // ---------------------------------------------------------------- 主体
 
 /// 把多批模型原始 JSON 合并成一份 `graph-demo-v1` 数据
-pub fn normalize(raws: &[Value], chapters: &[Chapter]) -> Value {
+///
+/// `hints` 是库里的权威书籍信息（`books` 表 / 目录），模型输出只作次选：
+/// 实测 6 批 JSON 里一个 `book` 字段都没有，光靠它取名只会得到「未知作品」。
+pub fn normalize(raws: &[Value], chapters: &[Chapter], hints: &BookHints) -> Value {
     let batches = batch_objects(raws);
     let book = Book::new(chapters);
-    let total = total_chapters(chapters);
+    let total = total_chapters(chapters, hints.total_chapters);
     let mut drops = Drops::default();
 
     let (mut clusters, ambiguous) = merge_characters(&batches);
@@ -1823,13 +2076,14 @@ pub fn normalize(raws: &[Value], chapters: &[Chapter]) -> Value {
         degree[r.b] += 1;
     }
 
-    // 势力投票（裁剪后重建名字表）
+    // 势力投票（裁剪后重建名字表）→ 家族归并 → 规模收敛 → 选领袖
     let post_resolver = Resolver::new(&kept_clusters);
-    let (factions, mut mem_of) = vote_factions(&batches, &kept_clusters, &post_resolver, &degree);
+    let (voted, declared) = vote_factions(&batches, &kept_clusters, &post_resolver, &degree);
+    let (factions, mut mem_of, rename) = settle_factions(voted, &kept_clusters, &declared, &degree);
     let fid: BTreeMap<String, String> = factions
         .iter()
         .enumerate()
-        .map(|(i, (name, _, _))| (name.clone(), format!("f{}", i + 1)))
+        .map(|(i, f)| (f.name.clone(), format!("f{}", i + 1)))
         .collect();
 
     // 岳父/女婿（正文核实后改成 other + label）：辈分上晚辈低一代
@@ -1845,8 +2099,9 @@ pub fn normalize(raws: &[Value], chapters: &[Chapter]) -> Value {
     for &i in &order {
         let c = &kept_clusters[i];
         let role = if BAD_ROLE.contains(&c.role.as_str()) {
-            match &c.faction {
-                Some(f) => format!("{f}属员"),
+            match c.faction.as_deref() {
+                // 归并后的势力名（「黎泾李家属员」→「李家属员」）
+                Some(f) => format!("{}属员", rename.get(f).map_or(f, String::as_str)),
                 None => "正文提及人物".to_string(),
             }
         } else {
@@ -1856,7 +2111,7 @@ pub fn normalize(raws: &[Value], chapters: &[Chapter]) -> Value {
             .get(i)
             .and_then(|fs| fs.first())
             .and_then(|fi| factions.get(*fi))
-            .and_then(|(name, _, _)| fid.get(name).cloned());
+            .and_then(|f| fid.get(&f.name).cloned());
         out_chars.push(json!({
             "id": cid[i],
             "name": c.name,
@@ -1914,10 +2169,10 @@ pub fn normalize(raws: &[Value], chapters: &[Chapter]) -> Value {
             Value::Null
         };
         for fi in fs.iter() {
-            let Some((name, _, _)) = factions.get(*fi) else {
+            let Some(f) = factions.get(*fi) else {
                 continue;
             };
-            let Some(faction_id) = fid.get(name) else {
+            let Some(faction_id) = fid.get(&f.name) else {
                 continue;
             };
             out_mem.push(json!({
@@ -1931,13 +2186,15 @@ pub fn normalize(raws: &[Value], chapters: &[Chapter]) -> Value {
 
     // factions
     let mut out_factions = Vec::with_capacity(factions.len());
-    for (fi, (name, members, leader)) in factions.iter().enumerate() {
+    for (fi, f) in factions.iter().enumerate() {
         out_factions.push(json!({
             "id": format!("f{}", fi + 1),
-            "name": name,
-            "kind": faction_kind(name),
-            "leader": leader.map(|i| cid[i].clone()),
-            "members": members.iter().map(|&i| cid[i].clone()).collect::<Vec<_>>(),
+            "name": f.name,
+            // 归并掉的写法（「黎泾李家」「萧家」…）：前端 zod 宽容解析会忽略，留给排障/人工核对
+            "aliases": f.aliases,
+            "kind": f.kind,
+            "leader": f.leader.map(|i| cid[i].clone()),
+            "members": f.members.iter().map(|&i| cid[i].clone()).collect::<Vec<_>>(),
         }));
     }
 
@@ -1950,7 +2207,7 @@ pub fn normalize(raws: &[Value], chapters: &[Chapter]) -> Value {
 
     json!({
         "meta": {
-            "book": book_name(&batches),
+            "book": book_name(&batches, &hints.book_name),
             "totalChapters": total,
             "sampledChapters": chapters.len(),
             "generatedAt": generated_at(),
@@ -1972,12 +2229,24 @@ pub fn normalize(raws: &[Value], chapters: &[Chapter]) -> Value {
     })
 }
 
-fn total_chapters(chapters: &[Chapter]) -> i64 {
+/// 全书真实总章数。
+///
+/// 优先用库里查实的值（`books.total_chapter_num`，退目录长度），再退「最大章号 / 章数」。
+/// 旧实现只取 `max(chapter_index)`：书源书的 `chapter_index` 是 md5 哈希，于是页面显示
+/// 「1151345960693571501 章」（Bug 1）。
+fn total_chapters(chapters: &[Chapter], hint: i64) -> i64 {
     let last = chapters.iter().map(|c| c.0).max().unwrap_or(0);
-    last.max(chapters.len() as i64)
+    hint.max(last).max(chapters.len() as i64)
 }
 
-fn book_name(batches: &[Value]) -> String {
+/// 书名：库里的权威名 > 模型批次 JSON 的 `book` > 兜底「未知作品」。
+///
+/// 模型这边指望不上：实测整本书 6 批 JSON 里全部没有 `book` 字段（Bug 2）。
+fn book_name(batches: &[Value], hint: &str) -> String {
+    let hint = hint.trim();
+    if !hint.is_empty() && hint != BOOK_FALLBACK {
+        return hint.to_string();
+    }
     for batch in batches {
         if let Some(name) = batch.get("book").and_then(|v| v.as_str()) {
             let name = name.trim();
@@ -2069,6 +2338,11 @@ mod tests {
             .collect()
     }
 
+    /// 不带书籍元信息的归一化（多数用例只关心关系/势力逻辑）
+    fn norm(raws: &[Value], chapters: &[Chapter]) -> Value {
+        normalize(raws, chapters, &BookHints::default())
+    }
+
     fn rels_of(data: &Value) -> &Vec<Value> {
         data["relations"].as_array().expect("relations 是数组")
     }
@@ -2100,7 +2374,7 @@ mod tests {
             }],
         });
         // 正文里根本没有这句
-        let data = normalize(&[raw], &chapters(&["正文里只有无关紧要的几句闲话。"]));
+        let data = norm(&[raw], &chapters(&["正文里只有无关紧要的几句闲话。"]));
         assert!(rels_of(&data).is_empty(), "找不到出处的边必须丢掉");
         assert!(chars_of(&data).is_empty(), "孤点也要被剔除");
     }
@@ -2115,7 +2389,7 @@ mod tests {
                 {"from": "周八", "to": "孙七", "type": "ally", "quote": "孙七与周八结盟", "chapter": 1},
             ],
         });
-        let data = normalize(&[raw], &chapters(&["孙七与周八结盟。"]));
+        let data = norm(&[raw], &chapters(&["孙七与周八结盟。"]));
         assert_eq!(rels_of(&data).len(), 1, "A-B / B-A 只留一条");
         assert_eq!(rels_of(&data)[0]["type"], "ally");
     }
@@ -2132,7 +2406,7 @@ mod tests {
                 {"from": "李四", "to": "赵六", "type": "sibling", "quote": "李四亲弟赵六", "chapter": 1},
             ],
         });
-        let data = normalize(&[raw], &chapters(&[text]));
+        let data = norm(&[raw], &chapters(&[text]));
         assert_eq!(
             generation_of(&data, "李四"),
             generation_of(&data, "张三") + 1,
@@ -2191,7 +2465,7 @@ mod tests {
         }));
 
         let raw = json!({"characters": chars, "relations": rels});
-        let data = normalize(&[raw], &chapters(&[&text]));
+        let data = norm(&[raw], &chapters(&[&text]));
 
         let chars = chars_of(&data);
         assert!(
@@ -2285,7 +2559,7 @@ mod tests {
     /// 空输入不能炸，且仍然是合法的 graph-demo-v1
     #[test]
     fn empty_input_stays_valid() {
-        let data = normalize(&[], &[]);
+        let data = norm(&[], &[]);
         assert!(chars_of(&data).is_empty());
         assert!(rels_of(&data).is_empty());
         assert!(data["factions"].as_array().expect("factions").is_empty());
@@ -2311,7 +2585,7 @@ mod tests {
             ],
             "factions": [{"name": "张氏", "leader": "张三"}],
         });
-        let data = normalize(&[raw], &chapters(&["张三麾下李四，皆听号令。"]));
+        let data = norm(&[raw], &chapters(&["张三麾下李四，皆听号令。"]));
         assert_eq!(data["meta"]["schema"], SCHEMA);
         assert_eq!(data["meta"]["source"], "batch");
         assert!(data["meta"]["generatedAt"]
@@ -2379,5 +2653,254 @@ mod tests {
             assert_ne!(r["from"], r["to"]);
             assert!(char_len(r["quote"].as_str().unwrap()) <= QUOTE_CAP);
         }
+    }
+
+    // ---- 书名 / 总章数：库里查实的比模型输出权威（Bug 2） ----
+
+    /// 模型批次里没有 `book` 字段（生产现场 6 批全空）→ 取 `books.name`
+    #[test]
+    fn book_name_prefers_library_hint() {
+        let raw = json!({"characters": [], "relations": []});
+        let hints = BookHints {
+            book_name: "玄鉴仙族".into(),
+            total_chapters: 1745,
+        };
+        let data = normalize(std::slice::from_ref(&raw), &chapters(&["正文。"]), &hints);
+        assert_eq!(data["meta"]["book"], "玄鉴仙族");
+        // 没查到书（hints 空）→ 才退回模型输出，再不行才算兜底
+        let data = normalize(
+            std::slice::from_ref(&raw),
+            &chapters(&["正文。"]),
+            &BookHints::default(),
+        );
+        assert_eq!(data["meta"]["book"], BOOK_FALLBACK);
+        let with_book = json!({"book": "模型给的书名", "characters": [], "relations": []});
+        let data = normalize(&[with_book], &chapters(&["正文。"]), &BookHints::default());
+        assert_eq!(data["meta"]["book"], "模型给的书名");
+    }
+
+    /// `meta.totalChapters` 取 `books.total_chapter_num`，不再被 md5 章号带跑
+    #[test]
+    fn total_chapters_uses_library_hint() {
+        let raws = vec![json!({"characters": [], "relations": []})];
+        // number_chapters 之后章号是 1..N（这里只缓存了 3 章）
+        let chs = chapters(&["甲。", "乙。", "丙。"]);
+        let hints = BookHints {
+            book_name: "玄鉴仙族".into(),
+            total_chapters: 1745,
+        };
+        let data = normalize(&raws, &chs, &hints);
+        assert_eq!(data["meta"]["totalChapters"], 1745, "应有 1745 章");
+        // 没有库信息时退回「章数」，也绝不出现 1e18
+        let data = normalize(&raws, &chs, &BookHints::default());
+        assert_eq!(data["meta"]["totalChapters"], 3);
+    }
+
+    // ---- 家族势力归并（Bug 3） ----
+
+    fn cluster_named(name: &str, faction: Option<&str>) -> Cluster {
+        Cluster {
+            name: name.into(),
+            aliases: Vec::new(),
+            role: String::new(),
+            faction: faction.map(str::to_string),
+            gender: GENDER_FALLBACK.into(),
+            first_seen: 1,
+            last_seen: 1,
+        }
+    }
+
+    fn faction_of(name: &str, members: &[usize], leader: Option<usize>) -> Faction {
+        Faction {
+            name: name.into(),
+            aliases: Vec::new(),
+            members: members.to_vec(),
+            leader,
+            kind: faction_kind(name),
+        }
+    }
+
+    /// 「李氏 / 黎泾李家」「萧氏 / 萧家」是同一家：按姓根归并，保留成员最多的名字
+    #[test]
+    fn merges_clan_factions_sharing_surname_root() {
+        let clusters = vec![
+            cluster_named("李明", Some("李氏")),
+            cluster_named("李强", Some("李氏")),
+            cluster_named("李伟", Some("李氏")),
+            cluster_named("李项平", Some("黎泾李家")),
+            cluster_named("田芸", Some("黎泾李家")),
+            cluster_named("萧初庭", Some("萧氏")),
+            cluster_named("萧归鸾", Some("萧氏")),
+            cluster_named("萧元思", Some("萧家")),
+            cluster_named("郁让", Some("郁家")),
+            cluster_named("郁三", Some("郁家")),
+        ];
+        let degree = vec![3usize, 2, 2, 2, 1, 3, 2, 2, 2, 1];
+        let factions = vec![
+            faction_of("李氏", &[0, 1, 2], Some(0)),
+            faction_of("黎泾李家", &[3, 4], Some(3)),
+            faction_of("萧氏", &[5, 6], Some(5)),
+            faction_of("萧家", &[7], Some(5)),
+            faction_of("郁家", &[8, 9], Some(8)),
+        ];
+        let (merged, rename) = merge_factions(factions, &clusters, &degree);
+
+        let names: Vec<&str> = merged.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["李氏", "萧氏", "郁家"], "5 个势力应并成 3 个");
+
+        let li = &merged[0];
+        assert_eq!(li.aliases, vec!["黎泾李家"], "被并掉的名字进 aliases");
+        assert_eq!(li.members, vec![0, 1, 2, 3, 4], "成员取并集（按度数降序）");
+        assert_eq!(li.kind, "家族");
+        assert_eq!(li.leader, Some(0));
+
+        let xiao = &merged[1];
+        assert_eq!(xiao.aliases, vec!["萧家"]);
+        assert_eq!(xiao.members, vec![5, 6, 7]);
+
+        assert_eq!(rename.get("黎泾李家").map(String::as_str), Some("李氏"));
+        assert_eq!(rename.get("萧家").map(String::as_str), Some("萧氏"));
+    }
+
+    /// 名字对不上、但两批都指认同一个领袖 → 同一家（证据比名字硬）
+    #[test]
+    fn merges_clan_factions_sharing_leader() {
+        let clusters = vec![
+            cluster_named("李家", Some("李家")),
+            cluster_named("李二", Some("李家")),
+            cluster_named("李三", Some("陇西堂")),
+            cluster_named("李四", Some("陇西堂")),
+        ];
+        let degree = vec![2usize, 1, 1, 1];
+        let factions = vec![
+            faction_of("李家", &[0, 1], Some(0)),
+            faction_of("陇西堂", &[2, 3], Some(0)),
+        ];
+        let (merged, _) = merge_factions(factions, &clusters, &degree);
+        assert_eq!(merged.len(), 1, "leader 相同应并成一个");
+        assert_eq!(merged[0].name, "李家");
+        assert_eq!(merged[0].members, vec![0, 1, 2, 3]);
+    }
+
+    /// 地名首字不许当姓根：`黎泾李家` 与 `黎夏萧家` 共用一个「黎」字，
+    /// 早先把它们串成一串，最后「萧家」整块并进了「李氏」（生产库实测到的现场）
+    #[test]
+    fn does_not_chain_clans_through_place_prefix() {
+        let clusters = vec![
+            cluster_named("李明", Some("李氏")),
+            cluster_named("李强", Some("李氏")),
+            cluster_named("李项平", Some("黎泾李家")),
+            cluster_named("李二", Some("黎泾李家")),
+            cluster_named("萧初庭", Some("萧氏")),
+            cluster_named("萧归鸾", Some("萧氏")),
+            cluster_named("萧元思", Some("黎夏萧家")),
+            cluster_named("萧暮云", Some("黎夏萧家")),
+        ];
+        let degree = vec![3usize, 2, 2, 1, 3, 2, 2, 1];
+        let factions = vec![
+            faction_of("李氏", &[0, 1], Some(0)),
+            faction_of("黎泾李家", &[2, 3], Some(2)),
+            faction_of("萧氏", &[4, 5], Some(4)),
+            faction_of("黎夏萧家", &[6, 7], Some(4)),
+        ];
+        let (merged, rename) = merge_factions(factions, &clusters, &degree);
+        let names: Vec<&str> = merged.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["李氏", "萧氏"],
+            "李家和萧家各并成一块：{names:?}"
+        );
+        let li = &merged[0];
+        assert_eq!(li.members, vec![0, 1, 2, 3]);
+        assert_eq!(li.aliases, vec!["黎泾李家"]);
+        let xiao = &merged[1];
+        assert_eq!(xiao.members, vec![4, 5, 6, 7], "萧家不许被李家吞掉");
+        assert_eq!(xiao.aliases, vec!["黎夏萧家"]);
+        assert_eq!(rename.get("黎夏萧家").map(String::as_str), Some("萧氏"));
+    }
+
+    /// 不同姓的小家族不许乱并（袁家 / 费家）
+    #[test]
+    fn keeps_unrelated_clans_separate() {
+        let clusters = vec![
+            cluster_named("袁大", Some("袁家")),
+            cluster_named("袁二", Some("袁家")),
+            cluster_named("费三", Some("费家")),
+            cluster_named("费四", Some("费家")),
+        ];
+        let degree = vec![1usize, 1, 1, 1];
+        let factions = vec![
+            faction_of("袁家", &[0, 1], Some(0)),
+            faction_of("费家", &[2, 3], Some(2)),
+        ];
+        let (merged, _) = merge_factions(factions, &clusters, &degree);
+        assert_eq!(merged.len(), 2, "袁家 / 费家 是两家，不许并");
+    }
+
+    /// 端到端：两批里「李氏」和「黎泾李家」合成一个势力，
+    /// 且 memberships / characters.faction 不再指向被删掉的势力（Bug 3 的一致性要求）
+    #[test]
+    fn merged_factions_keep_memberships_consistent() {
+        let text = "李通崖与李项平是兄弟。萧初庭是萧元思的兄长。";
+        let batch1 = json!({
+            "characters": [
+                {"name": "李通崖", "role": "黎泾李家练气修士", "faction": "李氏"},
+                {"name": "李项平", "role": "李家修士", "faction": "黎泾李家"},
+            ],
+            "factions": [{"name": "李氏", "leader": "李通崖"}],
+            "relations": [
+                {"from": "李通崖", "to": "李项平", "type": "sibling",
+                 "quote": "李通崖与李项平是兄弟", "chapter": 1},
+            ],
+        });
+        let batch2 = json!({
+            "characters": [
+                {"name": "萧初庭", "role": "萧家族长", "faction": "萧氏"},
+                {"name": "萧元思", "role": "萧家修士", "faction": "萧家"},
+            ],
+            "factions": [{"name": "萧氏", "leader": "萧初庭"}, {"name": "萧家", "leader": "萧初庭"}],
+            "relations": [
+                {"from": "萧初庭", "to": "萧元思", "type": "sibling",
+                 "quote": "萧初庭是萧元思的兄长", "chapter": 1},
+            ],
+        });
+        let data = norm(&[batch1, batch2], &chapters(&[text]));
+        let factions = data["factions"].as_array().expect("factions");
+        let names: Vec<&str> = factions
+            .iter()
+            .map(|f| f["name"].as_str().unwrap_or_default())
+            .collect();
+        assert_eq!(names.len(), 2, "两家不该碎成多块：{names:?}");
+
+        let ids: HashSet<String> = factions
+            .iter()
+            .map(|f| f["id"].as_str().unwrap_or_default().to_string())
+            .collect();
+        for m in data["memberships"].as_array().expect("memberships") {
+            let fid = m["faction"].as_str().unwrap_or_default();
+            assert!(ids.contains(fid), "membership 指向了已删势力 {fid}");
+        }
+        for c in chars_of(&data) {
+            if let Some(fid) = c["faction"].as_str() {
+                assert!(ids.contains(fid), "character.faction 指向了已删势力 {fid}");
+            }
+        }
+        // 李家这块要把两批的人并到一起（保留哪个写法看成员数/名字干净程度，
+        // 被并掉的那个进 aliases：这里是「黎泾李家练气修士」这种 role 又给「黎泾李家」
+        // 投了一票，所以两种写法都可能胜出，关键是它们合成了一块）
+        let li = factions
+            .iter()
+            .find(|f| matches!(f["name"].as_str(), Some("李氏" | "黎泾李家")))
+            .unwrap_or_else(|| panic!("应有李家势力：{names:?}"));
+        assert_eq!(
+            li["members"].as_array().map(Vec::len),
+            Some(2),
+            "李家应含两批的人：{li}"
+        );
+        let alias = li["aliases"][0].as_str().unwrap_or_default();
+        assert!(
+            matches!(alias, "李氏" | "黎泾李家") && Some(alias) != li["name"].as_str(),
+            "被并掉的写法应进 aliases：{li}"
+        );
     }
 }

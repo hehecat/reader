@@ -153,8 +153,12 @@ pub fn plan_batches(chapters: &[Chapter]) -> Vec<BatchPlan> {
 }
 
 /// 拼一批的 chat messages（system + user）
-pub fn build_batch_messages(book_name: &str, plan: &BatchPlan) -> Vec<Value> {
-    let max_chapter = plan.chapters.iter().map(|c| c.0).max().unwrap_or(1);
+///
+/// `total_chapters` 是全书真实总章数（`books.total_chapter_num` / 目录长度），提示词里的
+/// `1..{max}` 说的就是它；传 0 时退回「本批最大章号」。
+pub fn build_batch_messages(book_name: &str, plan: &BatchPlan, total_chapters: i64) -> Vec<Value> {
+    let last = plan.chapters.iter().map(|c| c.0).max().unwrap_or(1);
+    let max_chapter = total_chapters.max(last).max(1);
     let mut user = user_instruction(book_name, max_chapter);
     for (chapter_index, title, text) in &plan.chapters {
         let title = strip_chapter_prefix(title);
@@ -177,6 +181,103 @@ fn user_instruction(book_name: &str, max_chapter: i64) -> String {
     USER_INSTRUCTION
         .replace("{book}", book_name)
         .replace("{max}", &max_chapter.to_string())
+}
+
+// ---------------------------------------------------------------- 目录排序（Bug 1）
+
+/// 目录的一条（`toc_cache.chapters_json` 的元素，只留排章序要用的两个字段）
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TocEntry {
+    /// 目录标题（阅读序 = 它在目录数组里的位置）
+    pub title: String,
+    /// 书源书的章 URL 尾巴 `#<md5>`，正好等于 `book_chapters.chapter_index`
+    pub hash: Option<i64>,
+}
+
+/// 解析 `toc_cache.chapters_json`。坏 JSON / 坏元素都跳过，绝不 panic（缓存是好几年攒的）。
+pub fn parse_toc(json: &str) -> Vec<TocEntry> {
+    let Ok(Value::Array(items)) = serde_json::from_str::<Value>(json) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let title = item.get("title")?.as_str()?.trim().to_string();
+            if title.is_empty() {
+                return None;
+            }
+            // `cache://http://…/455131.html#483218903185877268` → 483218903185877268
+            let hash = item
+                .get("url")
+                .and_then(Value::as_str)
+                .and_then(|url| url.rsplit_once('#'))
+                .and_then(|(_, tail)| tail.trim().parse::<i64>().ok());
+            Some(TocEntry { title, hash })
+        })
+        .collect()
+}
+
+/// 章标题里自带的章号（「第12章 xxx」→ 12）。抄 `service::ai::title_order`。
+fn title_order(title: &str) -> Option<i64> {
+    let digits: String = title
+        .trim_start()
+        .chars()
+        .skip_while(|c| *c != '第')
+        .skip(1)
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse::<i64>().ok()
+}
+
+/// 把已缓存章节排成阅读序，并把「真实章序 1..N」写回 `Chapter.0`。
+///
+/// 书源书的 `chapter_index` 是 `md5(chapterUrl)`（见 `Storage::cache_chapter_content`），
+/// 于是 `list_cached_chapters` 的 `ORDER BY chapter_index` 给的是**哈希序**（不是阅读序），
+/// 数字还是 1e18 量级 —— 原样喂模型/记账就有「1151345960693571501 章」这种页面文案
+/// 和【第1151345960693571501章】这种块头。这里按目录重排，再统一重编号 1..N。
+///
+/// 排序键（优先级从高到低）：
+/// 1. 章 URL 哈希命中目录（`cache://…#<md5>`）→ 用目录下标（书源书最准）；
+/// 2. 标题命中目录 → 用目录下标；
+/// 3. 标题自带章号（「第12章」）→ 按章号；
+/// 4. 都对不上 → 保持入参原序垫底（本地文件书的 `chapter_index` 本身就是阅读序）。
+///
+/// 无论目录有没有命中，输出都是 1..N 的连续整数：模型看到的章号、`meta.totalChapters`、
+/// 关系的 `from_chapter` 从此共用一个「人话章序」。
+pub fn number_chapters(chapters: &[Chapter], toc: &[TocEntry]) -> Vec<Chapter> {
+    let by_hash: HashMap<i64, usize> = toc
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| e.hash.map(|h| (h, i)))
+        .collect();
+    let by_title: HashMap<&str, usize> = toc
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.title.as_str(), i))
+        .collect();
+    let mut keyed: Vec<((usize, usize), &Chapter)> = chapters
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let key = if let Some(&p) = by_hash.get(&c.0) {
+                (0, p)
+            } else if let Some(&p) = by_title.get(c.1.trim()) {
+                (1, p)
+            } else if let Some(o) = title_order(&c.1) {
+                (2, o.max(0) as usize)
+            } else {
+                (3, i)
+            };
+            (key, c)
+        })
+        .collect();
+    // 稳定排序：键相同的章（同名/同章号）保持入参相对顺序
+    keyed.sort_by_key(|item| item.0);
+    keyed
+        .into_iter()
+        .enumerate()
+        .map(|(k, (_, c))| ((k + 1) as i64, c.1.clone(), c.2.clone()))
+        .collect()
 }
 
 /// 批数：脚本按《绍宋》395 章调死 6 批，这里按章数给（算出几个就是几个，不凑满）
@@ -507,7 +608,7 @@ mod tests {
         let chapters = book(120);
         let plans = plan_batches(&chapters);
         let plan = &plans[0];
-        let msgs = build_batch_messages("绍宋", plan);
+        let msgs = build_batch_messages("绍宋", plan, 120);
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0]["role"], "system");
         assert_eq!(msgs[1]["role"], "user");
@@ -528,6 +629,106 @@ mod tests {
             assert!(
                 user.contains(strip_chapter_prefix(title)),
                 "缺标题：{title}"
+            );
+        }
+    }
+
+    // ---- 目录排序 + 真实章序（Bug 1） ----
+
+    /// 生产库《玄鉴仙族》的真实形状：toc_cache 里是 `cache://…#<md5>`，
+    /// `book_chapters.chapter_index` 就是那个 md5，而且行序是哈希序。
+    #[test]
+    fn number_chapters_orders_by_toc_hash() {
+        // 哈希序（乱）= list_cached_chapters 给的顺序；真实阅读序是 1 2 3
+        let chapters: Vec<Chapter> = vec![
+            (831657723095650985, "第2章 李家".into(), "乙".into()),
+            (1151345960693571501, "第3章 鉴子".into(), "丙".into()),
+            (483218903185877268, "第1章 初入".into(), "甲".into()),
+        ];
+        let toc = parse_toc(
+            r#"[{"title":"第1章 初入","url":"cache://http://x/455131.html#483218903185877268"},
+                {"title":"第2章 李家","url":"cache://http://x/455131.html#831657723095650985"},
+                {"title":"第3章 鉴子","url":"cache://http://x/455131.html#1151345960693571501"}]"#,
+        );
+        assert_eq!(toc.len(), 3);
+        assert_eq!(toc[0].hash, Some(483218903185877268));
+
+        let ordered = number_chapters(&chapters, &toc);
+        let got: Vec<(i64, &str)> = ordered.iter().map(|c| (c.0, c.1.as_str())).collect();
+        assert_eq!(
+            got,
+            vec![(1, "第1章 初入"), (2, "第2章 李家"), (3, "第3章 鉴子")],
+            "必须按目录顺序，且章号重编号成 1..N"
+        );
+    }
+
+    /// 没有 `#hash` 的目录（普通书源/本地书）靠标题匹配；目录里没有的章垫到最后。
+    #[test]
+    fn number_chapters_falls_back_to_toc_titles() {
+        let chapters: Vec<Chapter> = vec![
+            (77, "第三章 收网".into(), "c".into()),
+            (11, "第一章 起风".into(), "a".into()),
+            (99, "番外 年表".into(), "x".into()),
+            (55, "第二章 落子".into(), "b".into()),
+        ];
+        let toc = parse_toc(
+            r#"[{"title":"第一章 起风"},{"title":"第二章 落子"},{"title":"第三章 收网"}]"#,
+        );
+        assert_eq!(toc.len(), 3);
+        assert!(toc.iter().all(|e| e.hash.is_none()));
+
+        let ordered = number_chapters(&chapters, &toc);
+        let titles: Vec<&str> = ordered.iter().map(|c| c.1.as_str()).collect();
+        assert_eq!(
+            titles,
+            vec!["第一章 起风", "第二章 落子", "第三章 收网", "番外 年表"],
+            "目录命中的按目录序，未命中的垫在最后"
+        );
+    }
+
+    /// 目录整个缺失（没缓存过 toc）：也要退回「按入参原序重编号 1..N」，
+    /// 绝不把入参里的哈希/0 起行号原样传给模型。
+    #[test]
+    fn number_chapters_without_toc_still_renumbers() {
+        let chapters: Vec<Chapter> = (0..4)
+            .map(|i| {
+                (
+                    i * 1_000_000_007,
+                    format!("第{}章 标题", i + 1),
+                    "正文".to_string(),
+                )
+            })
+            .collect();
+        let ordered = number_chapters(&chapters, &[]);
+        let nums: Vec<i64> = ordered.iter().map(|c| c.0).collect();
+        assert_eq!(nums, vec![1, 2, 3, 4]);
+        assert_eq!(ordered[0].1, "第1章 标题");
+    }
+
+    /// 坏 JSON、缺 title、title 为空：解析出空目录，不 panic。
+    #[test]
+    fn parse_toc_tolerates_junk() {
+        assert!(parse_toc("not json").is_empty());
+        assert!(parse_toc("{}").is_empty());
+        assert!(
+            parse_toc(r#"[{"title":"  "},{"url":"cache://x#1"},{"title":"第一章"}]"#).len() == 1
+        );
+    }
+
+    /// 提示词里的「1..{max}」用全书真实总章数，而不是本批最大哈希章号。
+    #[test]
+    fn build_batch_messages_uses_real_total_chapters() {
+        let chapters = book(60);
+        let plans = plan_batches(&chapters);
+        let user = build_batch_messages("绍宋", &plans[0], 1745)[1]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .replace('\n', " ");
+        assert!(user.contains("1..1745"), "缺真实总章数：{user:.120}");
+        for (chapter_index, _, _) in &plans[0].chapters {
+            assert!(
+                user.contains(&format!("【第{chapter_index}章")),
+                "缺第 {chapter_index} 章的块头"
             );
         }
     }

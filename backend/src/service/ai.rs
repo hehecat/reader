@@ -1256,6 +1256,18 @@ pub async fn chat_once(
     messages: Vec<Value>,
     max_tokens: u64,
 ) -> anyhow::Result<String> {
+    Ok(chat_once_with_usage(cfg, messages, max_tokens).await?.0)
+}
+
+/// 同 [`chat_once`]，额外把这次调用的 token 用量带出来。
+///
+/// 关系图的 `meta.cost` 要记账，但 `chat_once` 只把 usage 打进日志、调用方拿不到数字；
+/// 网关不回 usage 时返回 `(0, 0)`，调用方据此判断「没有真值可记」。
+pub async fn chat_once_with_usage(
+    cfg: &AiConfig,
+    messages: Vec<Value>,
+    max_tokens: u64,
+) -> anyhow::Result<(String, (u64, u64))> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .build()?;
@@ -1283,8 +1295,11 @@ pub async fn chat_once(
         );
     }
     let v: Value = resp.json().await?;
+    let mut usage = (0u64, 0u64);
     if let Some(u) = v.get("usage").filter(|u| !u.is_null()) {
         log_usage(cfg, u);
+        let get = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
+        usage = (get("prompt_tokens"), get("completion_tokens"));
     }
     let content = v["choices"][0]["message"]["content"]
         .as_str()
@@ -1293,7 +1308,7 @@ pub async fn chat_once(
     if content.trim().is_empty() {
         anyhow::bail!("模型没有返回内容（推理模型可能在思考阶段用尽了 token 预算）");
     }
-    Ok(content)
+    Ok((content, usage))
 }
 
 /// 拼人物关系图的系统提示

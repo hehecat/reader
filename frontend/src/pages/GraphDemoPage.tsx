@@ -557,6 +557,11 @@ function GraphDemoView({ injected = null, onRegenerate = null }: GraphDemoViewPr
     [data],
   );
   const visibility = React.useMemo(() => computeVisibility(data, chapter), [data, chapter]);
+  const characterById = React.useMemo(
+    () => new Map(data.characters.map((character) => [character.id, character])),
+    [data],
+  );
+  const factionById = React.useMemo(() => new Map(data.factions.map((faction) => [faction.id, faction])), [data]);
   // 家族树视图只画亲缘子图, 顶部要说明「其余 N 人去哪了」
   const degreeMap = React.useMemo(() => {
     const map = new Map<string, number>();
@@ -581,15 +586,38 @@ function GraphDemoView({ injected = null, onRegenerate = null }: GraphDemoViewPr
     }
     return linked;
   }, [data, visibility]);
+  // 家族分组: 先算亲缘连通分量, 再把落在同一个「家族」势力里的分量并成一家.
+  // 名字用势力的正式名（「李氏」）, 势力认不出来时才退回姓根（「李家」）——
+  // 不再沿用连通分量里那个人的名字（「李通崖家 25 人」这种碎片就是这么来的）。
   const families = React.useMemo(() => {
-    return kinFamilies(data)
-      .map((family) => ({
-        ...family,
-        size: family.memberIds.filter((id) => visibility.characters.has(id) && kinLinkedNow.has(id)).length,
-      }))
+    const byFaction = new Map<string, { id: string; name: string; members: Set<string> }>();
+    for (const family of kinFamilies(data)) {
+      const linked = family.memberIds.filter((id) => visibility.characters.has(id) && kinLinkedNow.has(id));
+      if (linked.length === 0) continue;
+      // 这一块亲缘里出现最多的「家族」势力: 它就是这家的正主（≥2 票才认, 免得一个人定一家）
+      const votes = new Map<string, number>();
+      for (const id of linked) {
+        const factionId = characterById.get(id)?.faction ?? null;
+        const faction = factionId === null ? undefined : factionById.get(factionId);
+        if (faction === undefined || faction.kind !== "家族") continue;
+        votes.set(faction.id, (votes.get(faction.id) ?? 0) + 1);
+      }
+      const dominant = [...votes.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
+      const useFaction = dominant !== undefined && dominant[1] >= 2;
+      const key = useFaction ? dominant[0] : `surname:${clanLabel(linked.map((id) => characterById.get(id)?.name ?? ""))}`;
+      const name = useFaction ? (factionById.get(dominant[0])?.name ?? family.name) : clanLabel(linked.map((id) => characterById.get(id)?.name ?? ""));
+      const hit = byFaction.get(key);
+      if (hit === undefined) {
+        byFaction.set(key, { id: key, name, members: new Set(linked) });
+      } else {
+        for (const id of linked) hit.members.add(id);
+      }
+    }
+    return [...byFaction.values()]
+      .map((group) => ({ id: group.id, name: group.name, memberIds: [...group.members], size: group.members.size }))
       .filter((family) => family.size > 1)
       .sort((a, b) => b.size - a.size || a.name.localeCompare(b.name));
-  }, [data, visibility, kinLinkedNow]);
+  }, [data, visibility, kinLinkedNow, characterById, factionById]);
   const treeFamilyIds = React.useMemo(() => {
     if (!treeFamily) return null;
     const hit = families.find((family) => family.id === treeFamily);
@@ -1332,6 +1360,49 @@ function GraphDemoView({ injected = null, onRegenerate = null }: GraphDemoViewPr
   );
 }
 
+/** 复姓表: 这些姓取前两个字, 其余取首字（「欧阳锋」是欧阳, 不是欧） */
+const COMPOUND_SURNAMES = new Set([
+  "欧阳",
+  "司马",
+  "上官",
+  "诸葛",
+  "东方",
+  "皇甫",
+  "慕容",
+  "令狐",
+  "独孤",
+  "南宫",
+  "西门",
+  "夏侯",
+  "尉迟",
+  "公孙",
+  "长孙",
+  "宇文",
+  "司徒",
+  "司空",
+  "端木",
+  "呼延",
+]);
+
+/** 取人名的姓 */
+function surnameOf(name: string): string {
+  const trimmed = name.trim();
+  if (trimmed.length <= 1) return trimmed;
+  return COMPOUND_SURNAMES.has(trimmed.slice(0, 2)) ? trimmed.slice(0, 2) : trimmed.slice(0, 1);
+}
+
+/** 一块亲缘的家族名: 大多数人同姓就写「X家」, 看不出来就写「亲缘」 */
+function clanLabel(memberNames: string[]): string {
+  const counts = new Map<string, number>();
+  for (const name of memberNames) {
+    const surname = surnameOf(name);
+    if (surname === "") continue;
+    counts.set(surname, (counts.get(surname) ?? 0) + 1);
+  }
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
+  return top === undefined ? "亲缘" : `${top[0]}家`;
+}
+
 /**
  * 页面入口: /graph 与 /graph-demo 都指到这里.
  *   不带 ?url=  → 静态演示(上面那个视图, 行为与改造前完全一致, dev 验收要用);
@@ -1359,7 +1430,10 @@ function BookGraphView({ bookUrl }: { bookUrl: string }) {
   });
   const graph = graphQuery.data;
   const generatedAt = graph?.data?.meta.generatedAt ?? "";
-  const bookName = graph?.data?.meta.book ?? "";
+  // 书名: 有成品就用成品里的书名; 首生成时（或历史遗留的「未知作品」）留空,
+  // 后端会自己从 books 表解析——这里传死名字反而会把错名字钉进下一份成品
+  const resolvedBookName = graph?.data?.meta.book?.trim() ?? "";
+  const bookName = resolvedBookName === "未知作品" ? "" : resolvedBookName;
   const goBack = React.useCallback(() => navigate("/"), [navigate]);
   // 页头「重新生成」: 复用同一个弹窗(改动前的成品页只有空态能打开它)
   const openRegenerate = React.useCallback(() => setGenerateOpen(true), []);

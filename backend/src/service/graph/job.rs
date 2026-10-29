@@ -10,11 +10,13 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::service::ai::{self, AiConfig};
 use crate::storage::Storage;
 
+use super::normalize::BookHints;
+use super::plan::{number_chapters, parse_toc};
 use super::{build_batch_messages, normalize, plan_batches, Chapter, MAX_BATCH_TOKENS};
 
 /// 任务状态机：queued → running → done | failed | cancelled
@@ -121,6 +123,76 @@ fn array_len(value: &Value, key: &str) -> usize {
     value.get(key).and_then(Value::as_array).map_or(0, Vec::len)
 }
 
+/// 目录缓存的有效期：目录是阅读序的唯一权威来源，就算过期也比重排错强（10 年）
+const TOC_MAX_AGE_MS: i64 = 10 * 365 * 24 * 3600 * 1000;
+
+/// 取章节 → 按目录排阅读序 → 重编号 1..N；顺手查出权威书名与全书总章数。
+///
+/// Bug 1：`list_cached_chapters` 的 `ORDER BY chapter_index` 对书源书是**哈希序**
+/// （`chapter_index = md5(chapterUrl)`，见 `Storage::cache_chapter_content`），数字还是
+/// 1e18 量级。原样喂模型，页面就显示「1151345960693571501 章」、prompt 里也成了
+/// 【第1151345960693571501章】。权威阅读序在 `toc_cache.chapters_json`。
+/// Bug 2：书名/总章数别问模型，`books` 表里现成就有。
+fn prepare_chapters(
+    storage: &Storage,
+    ns: &str,
+    book_url: &str,
+    requested_name: &str,
+) -> Result<(Vec<Chapter>, BookHints)> {
+    let cached = block_on(storage.list_cached_chapters(ns, book_url))
+        .map_err(|e| anyhow!("读取已缓存章节失败: {e}"))?;
+    if cached.is_empty() {
+        return Ok((Vec::new(), BookHints::default()));
+    }
+
+    let book = block_on(storage.find_book(ns, book_url)).ok().flatten();
+    let toc_url = book
+        .as_ref()
+        .map(|b| b.toc_url.trim().to_string())
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| book_url.to_string());
+    // 取不到目录（没缓存过 / JSON 坏了）时 number_chapters 只按原序重编号，绝不 panic
+    let toc = block_on(storage.get_toc_cache(ns, &toc_url, TOC_MAX_AGE_MS))
+        .ok()
+        .flatten()
+        .map(|json| parse_toc(&json))
+        .unwrap_or_default();
+    let chapters = number_chapters(&cached, &toc);
+
+    // 书名优先级：books.name > 调用方给的名字 > book_info_cache > 空（normalize 退模型输出）
+    let mut book_name = book
+        .as_ref()
+        .map(|b| b.name.trim().to_string())
+        .unwrap_or_default();
+    if book_name.is_empty() {
+        book_name = requested_name.trim().to_string();
+    }
+    if book_name.is_empty() {
+        book_name = block_on(storage.get_book_info_cache(ns, book_url, TOC_MAX_AGE_MS))
+            .ok()
+            .flatten()
+            .and_then(|info| {
+                info.get("name")
+                    .and_then(Value::as_str)
+                    .map(|n| n.trim().to_string())
+            })
+            .unwrap_or_default();
+    }
+    // 全书总章数：books.total_chapter_num 优先，退目录长度（本书 1745，与实际一致）
+    let total = book
+        .as_ref()
+        .map(|b| b.total_chapter_num)
+        .unwrap_or(0)
+        .max(toc.len() as i64);
+    Ok((
+        chapters,
+        BookHints {
+            book_name,
+            total_chapters: total,
+        },
+    ))
+}
+
 // ---------------- 对外接口 ----------------
 
 /// 启动一次生成任务，返回 job_id
@@ -151,13 +223,19 @@ pub fn start_job(
         }
     }
 
-    // 已缓存章节是整条链路的前置条件：没有缓存就不必建行
-    let chapters = block_on(storage.list_cached_chapters(&ns, &book_url))
-        .map_err(|e| anyhow!("读取已缓存章节失败: {e}"))?;
+    // 已缓存章节是整条链路的前置条件：没有缓存就不必建行。
+    // 章节在这里就按目录排成阅读序、重编号 1..N（书源书的 chapter_index 是 md5 哈希，
+    // 既是哈希序又是天文数字，见 `plan::number_chapters`），书名/总章数顺手从库里查实。
+    let (chapters, hints) = prepare_chapters(&storage, &ns, &book_url, &opts.book_name)?;
     if chapters.is_empty() {
         return Err(anyhow!(
             "本书还没有已缓存章节, 先读几章(或先缓存章节)再生成关系图"
         ));
+    }
+    // 提示词与成品都用库里的权威书名（模型批次 JSON 里通常没有 book 字段）
+    let mut opts = opts;
+    if !hints.book_name.is_empty() {
+        opts.book_name = hints.book_name.clone();
     }
 
     let job_id = uuid::Uuid::new_v4().simple().to_string();
@@ -185,6 +263,7 @@ pub fn start_job(
     let url_for_run = book_url.clone();
     let job_for_run = job_id.clone();
     let progress_for_run = progress.clone();
+    let hints_for_run = hints.clone();
     tokio::spawn(async move {
         // 内层再 spawn 一层：plan/normalize 还在并行开发（todo!() 会 panic），
         // 靠 JoinError 把 panic 也收成 failed，否则任务永远停在 running、SSE 永不关流。
@@ -196,6 +275,7 @@ pub fn start_job(
             opts,
             cfg,
             chapters,
+            hints_for_run,
             progress_for_run.clone(),
         ));
         let err = match inner.await {
@@ -281,6 +361,7 @@ async fn run_job(
     opts: JobOptions,
     cfg: AiConfig,
     chapters: Vec<Chapter>,
+    hints: BookHints,
     progress: Arc<Mutex<GraphProgress>>,
 ) -> Result<()> {
     let mut plans = plan_batches(&chapters);
@@ -300,12 +381,13 @@ async fn run_job(
 
     let mut done = 0usize;
     let mut fed = 0usize;
+    let mut usage = (0u64, 0u64);
     for plan in &plans {
         // 每批之间检查取消：已完成的批留在 book_graph_batches，不丢
         if is_cancelled(&progress) {
             return finish_cancelled(&storage, &job_id, &progress, done, fed).await;
         }
-        let messages = build_batch_messages(&opts.book_name, plan);
+        let messages = build_batch_messages(&opts.book_name, plan, hints.total_chapters);
         let value = batch_with_retry(&cfg, messages)
             .await
             .with_context(|| format!("第 {} 批失败", plan.batch_no))?;
@@ -314,7 +396,20 @@ async fn run_job(
             .await?;
         done += 1;
         fed += plan.chapters.len();
-        let (prompt_tokens, completion_tokens) = estimate(chapters.len(), done);
+        usage.0 += value
+            .pointer("/usage/prompt_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        usage.1 += value
+            .pointer("/usage/completion_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        // 拿到了真实 usage 就报真值；拿不到（网关不回 usage）才退回经验估算
+        let (prompt_tokens, completion_tokens) = if usage.0 > 0 || usage.1 > 0 {
+            usage
+        } else {
+            estimate(chapters.len(), done)
+        };
         {
             let mut p = lock_progress(&progress);
             p.done_batches = done;
@@ -346,7 +441,7 @@ async fn run_job(
     if raws.is_empty() {
         return Err(anyhow!("没有可归一化的批次结果"));
     }
-    let graph = normalize(&raws, &chapters);
+    let graph = normalize(&raws, &chapters, &hints);
     let characters = array_len(&graph, "characters");
     let relations = array_len(&graph, "relations");
     storage
@@ -372,13 +467,29 @@ async fn run_job(
     Ok(())
 }
 
-/// 跑一批：失败重试 1 次（网络/模型抖一下很常见），两次都失败才放弃
+/// 跑一批：失败重试 1 次（网络/模型抖一下很常见），两次都失败才放弃。
+///
+/// 拿到 usage 就塞进批次 JSON 的 `usage` 字段：`normalize` 的 `token_cost` 从这里汇总
+/// `meta.cost`（网关不回 usage 时不塞，别硬编 0）。
 async fn batch_with_retry(cfg: &AiConfig, messages: Vec<Value>) -> Result<Value> {
     let mut last: Option<anyhow::Error> = None;
     for attempt in 0..2 {
-        match ai::chat_once(cfg, messages.clone(), MAX_BATCH_TOKENS).await {
-            Ok(raw) => match ai::extract_json_object(&raw) {
-                Some(value) => return Ok(value),
+        match ai::chat_once_with_usage(cfg, messages.clone(), MAX_BATCH_TOKENS).await {
+            Ok((raw, (prompt_tokens, completion_tokens))) => match ai::extract_json_object(&raw) {
+                Some(mut value) => {
+                    if prompt_tokens > 0 || completion_tokens > 0 {
+                        if let Some(obj) = value.as_object_mut() {
+                            obj.insert(
+                                "usage".to_string(),
+                                json!({
+                                    "prompt_tokens": prompt_tokens,
+                                    "completion_tokens": completion_tokens,
+                                }),
+                            );
+                        }
+                    }
+                    return Ok(value);
+                }
                 None => last = Some(anyhow!("模型未返回合法 JSON: {}", snippet(&raw))),
             },
             Err(e) => last = Some(e),
@@ -630,6 +741,195 @@ mod tests {
         for s in [ST_QUEUED, ST_RUNNING, "", "weird"] {
             assert!(!is_terminal(s));
         }
+    }
+
+    // ---- 真实生产库验证（`#[ignore]`：只在手工验收时跑，别进 CI） ----
+
+    /// 生产库副本的 work_dir（`reader.db` 在 `<work_dir>/storage/` 下，只读消费）
+    const PROD_WORKDIR: &str = "/home/hehecat/code/.tmp/agent-graph";
+    /// 《玄鉴仙族》的 book_url（chapter_index 是 md5 哈希的那本）
+    const PROD_BOOK: &str = "http://www.xbotaodz.info/455131.html";
+    /// 生产库里这个 namespace 的行（不是 default）
+    const PROD_NS: &str = "testuser01";
+
+    /// 打开生产库副本；副本不存在就返回 None（让人看到 SKIP 而不是 panic）
+    fn prod_storage() -> Option<Storage> {
+        let dir = std::path::Path::new(PROD_WORKDIR);
+        if !dir.join("storage/reader.db").exists() {
+            println!("SKIP: 没有生产库副本 {PROD_WORKDIR}/storage/reader.db");
+            return None;
+        }
+        let mut config = crate::AppConfig::from_env();
+        config.work_dir = PROD_WORKDIR.to_string();
+        Some(block_on(crate::storage::init(&config)).expect("打开生产库副本失败"))
+    }
+
+    /// 链路验证 ①：真实库里「取章节 → 按目录排阅读序 → 重编号 1..N → plan_batches」
+    ///
+    /// ```bash
+    /// cargo test --lib prod_db_chapter_numbering -- --ignored --nocapture
+    /// ```
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "需要 .tmp/agent-graph 里的生产库副本"]
+    async fn prod_db_chapter_numbering() {
+        let Some(storage) = prod_storage() else {
+            return;
+        };
+        let (chapters, hints) =
+            prepare_chapters(&storage, PROD_NS, PROD_BOOK, "").expect("prepare_chapters");
+        println!(
+            "书名={:?} total_chapters={} 已缓存章数={}",
+            hints.book_name,
+            hints.total_chapters,
+            chapters.len()
+        );
+        assert_eq!(hints.book_name, "玄鉴仙族", "书名应取自 books.name");
+        assert_eq!(
+            hints.total_chapters, 1745,
+            "总章数应取 books.total_chapter_num"
+        );
+        let nums: Vec<i64> = chapters.iter().map(|c| c.0).collect();
+        assert_eq!(nums[0], 1, "第一章的序数必须是 1");
+        assert!(
+            nums.windows(2).all(|w| w[0] + 1 == w[1]),
+            "序数应是连续的 1..N"
+        );
+
+        println!("前 5 章（序数 + 目录标题）：");
+        for (idx, title, _) in chapters.iter().take(5) {
+            println!("  {idx:>2}. {title}");
+        }
+
+        let plans = plan_batches(&chapters);
+        println!(
+            "批数={} 各批章数={:?}",
+            plans.len(),
+            plans.iter().map(|p| p.chapters.len()).collect::<Vec<_>>()
+        );
+        let msgs = build_batch_messages(&hints.book_name, &plans[0], hints.total_chapters);
+        let prompt = msgs
+            .iter()
+            .filter_map(|m| m.get("content").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n");
+        println!("第一批 prompt 里的前 5 个章节头：");
+        for line in prompt.lines().filter(|l| l.starts_with("【第")).take(5) {
+            println!("  {line}");
+        }
+        assert!(
+            prompt.contains("【第1章"),
+            "prompt 里的章号应是真实序数，不是 md5"
+        );
+        assert!(
+            !prompt.contains("1151345960693571501"),
+            "prompt 里不该再出现 md5 章号"
+        );
+        let total_line = format!("1..{}", hints.total_chapters);
+        assert!(prompt.contains(&total_line), "prompt 应写明全书总章数");
+        storage.pool.close().await;
+    }
+
+    /// 链路验证 ②：真实 `book_graph_batches`（6 批）喂给 normalize，看势力归并前后
+    ///
+    /// ```bash
+    /// cargo test --lib prod_db_faction_merge -- --ignored --nocapture
+    /// ```
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "需要 .tmp/agent-graph 里的生产库副本"]
+    async fn prod_db_faction_merge() {
+        let Some(storage) = prod_storage() else {
+            return;
+        };
+        let job_id: Option<String> = block_on(
+            sqlx::query_scalar::<_, String>(
+                "SELECT job_id FROM book_graph_jobs WHERE book_url = ?1 \
+                 ORDER BY created_at DESC LIMIT 1",
+            )
+            .bind(PROD_BOOK)
+            .fetch_optional(&storage.pool),
+        )
+        .expect("查 job_id");
+        let Some(job_id) = job_id else {
+            println!("SKIP: 库里没有这本书的 graph 任务");
+            return;
+        };
+        let batches = block_on(storage.graph_batches(&job_id)).expect("读批次");
+        println!("job={job_id} 批数={}", batches.len());
+        let raws: Vec<Value> = batches
+            .iter()
+            .filter_map(|(no, raw)| {
+                let v: Value = serde_json::from_str(raw).ok()?;
+                println!(
+                    "  批{no}: characters={} factions={} relations={}",
+                    array_len(&v, "characters"),
+                    array_len(&v, "factions"),
+                    array_len(&v, "relations")
+                );
+                Some(v)
+            })
+            .collect();
+
+        // 归并前：各批 declared/提到的势力名去重（约等于归并前的势力条数）
+        let mut before: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for v in &raws {
+            for f in v
+                .get("factions")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(name) = f.get("name").and_then(Value::as_str) {
+                    before.insert(name.trim().to_string());
+                }
+            }
+            for c in v
+                .get("characters")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(name) = c.get("faction").and_then(Value::as_str) {
+                    before.insert(name.trim().to_string());
+                }
+            }
+        }
+
+        let (chapters, hints) = prepare_chapters(&storage, PROD_NS, PROD_BOOK, "").expect("章节");
+        let data = normalize(&raws, &chapters, &hints);
+        let factions = data["factions"].as_array().expect("factions");
+        println!(
+            "势力：归并前候选 {} 个 → 归并后 {} 个（meta.totalChapters={} book={}）",
+            before.len(),
+            factions.len(),
+            data["meta"]["totalChapters"],
+            data["meta"]["book"]
+        );
+        for f in factions {
+            println!(
+                "  {:<4} {:<10} kind={:<4} 成员={:<3} aliases={:?}",
+                f["id"].as_str().unwrap_or(""),
+                f["name"].as_str().unwrap_or(""),
+                f["kind"].as_str().unwrap_or(""),
+                f["members"].as_array().map_or(0, Vec::len),
+                f["aliases"]
+            );
+        }
+        assert!(factions.len() < before.len(), "归并后势力数应减少");
+        assert_eq!(data["meta"]["book"], "玄鉴仙族", "meta.book 不该是未知作品");
+        assert_eq!(data["meta"]["totalChapters"], 1745);
+        // memberships / character.faction 不许指向已不存在的势力
+        let ids: std::collections::BTreeSet<&str> =
+            factions.iter().filter_map(|f| f["id"].as_str()).collect();
+        for m in data["memberships"].as_array().into_iter().flatten() {
+            let fid = m["faction"].as_str().unwrap_or_default();
+            assert!(ids.contains(fid), "membership 指向已删势力 {fid}");
+        }
+        for c in data["characters"].as_array().into_iter().flatten() {
+            if let Some(fid) = c["faction"].as_str() {
+                assert!(ids.contains(fid), "character.faction 指向已删势力 {fid}");
+            }
+        }
+        storage.pool.close().await;
     }
 
     /// 错误文本截断到 500 字（不切断 UTF-8）
