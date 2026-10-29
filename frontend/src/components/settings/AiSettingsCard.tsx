@@ -17,6 +17,7 @@ import {
 import { humanizeError } from "@/lib/errors";
 import {
   getAiSettings,
+  listAiModels,
   saveAiSettings,
   testAiEndpoint,
   type AiSettingsInput,
@@ -51,6 +52,8 @@ export function AiSettingsCard() {
   const [maxTokens, setMaxTokens] = React.useState(3500);
   const [thinking, setThinking] = React.useState("off");
   const [testResult, setTestResult] = React.useState<string | null>(null);
+  // 端点报出来的模型 id: 拉到之后给一个下拉, 省掉手敲模型名敲错
+  const [modelOptions, setModelOptions] = React.useState<string[]>([]);
 
   React.useEffect(() => {
     if (data === undefined) {
@@ -88,6 +91,20 @@ export function AiSettingsCard() {
     },
     onError: (error) => {
       setTestResult(null);
+      toast.error(humanizeError(error instanceof Error ? error.message : String(error)));
+    },
+  });
+
+  const listModels = useMutation({
+    mutationFn: () => listAiModels(input),
+    onSuccess: (models) => {
+      setModelOptions(models);
+      if (models.length === 0) {
+        toast.error("端点没有返回模型列表, 模型名可以手填");
+      }
+    },
+    onError: (error) => {
+      setModelOptions([]);
       toast.error(humanizeError(error instanceof Error ? error.message : String(error)));
     },
   });
@@ -131,13 +148,39 @@ export function AiSettingsCard() {
         />
       </SettingRow>
       <SettingRow label="模型" value="支持推理模型 (思考过程不展示给读者)">
-        <Input
-          className="w-full sm:w-72"
-          value={model}
-          placeholder="deepseek-v4.1-flash"
-          onChange={(event) => setModel(event.target.value)}
-        />
+        <div className="flex w-full items-center gap-2 sm:w-72">
+          <Input
+            className="min-w-0 flex-1"
+            value={model}
+            placeholder="deepseek-v4.1-flash"
+            onChange={(event) => setModel(event.target.value)}
+          />
+          <Button
+            size="sm"
+            variant="secondary"
+            loading={listModels.isPending}
+            onClick={() => listModels.mutate()}
+          >
+            列出
+          </Button>
+        </div>
       </SettingRow>
+      {modelOptions.length > 0 ? (
+        <SettingRow label="可用模型" value={`端点报了 ${modelOptions.length} 个, 点一个填进去`}>
+          <Select value={model} onValueChange={setModel}>
+            <SelectTrigger size="sm" aria-label="选择模型" className="w-full sm:w-72">
+              <SelectValue placeholder="选择模型" />
+            </SelectTrigger>
+            <SelectContent>
+              {modelOptions.map((id) => (
+                <SelectItem key={id} value={id}>
+                  {id}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </SettingRow>
+      ) : null}
       <SettingRow
         label="思考"
         value={

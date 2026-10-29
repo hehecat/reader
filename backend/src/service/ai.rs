@@ -32,6 +32,9 @@ const MAX_SNIPPETS: usize = 6;
 const SNIPPET_WINDOW: usize = 600;
 /// 打分低于最高分这个比例的章节就不再取（省 token，也避免凑数塞噪声）
 const SCORE_CUTOFF: f64 = 0.4;
+/// 全书检索的放宽档：段数更多、门槛更低（「全书」范围用）
+const BOOK_SNIPPETS: usize = 10;
+const BOOK_SCORE_CUTOFF: f64 = 0.2;
 /// 每章最多取几个窗口
 const MAX_WINDOWS_PER_CHAPTER: usize = 2;
 /// 问题关键词上限
@@ -547,6 +550,53 @@ fn fallback_snippets(
     out
 }
 
+/// 检索范围归一化。
+///
+/// 界面上只有两档：`current`（默认，只看当前章及前后各一章）与 `book`（全书放宽）。
+/// `auto`（全书关键词检索）保留但不暴露——少了它，用户不用猜"自动"到底偏哪边。
+pub fn scope_of(raw: &str) -> &'static str {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "book" | "all" | "whole" => "book",
+        "auto" => "auto",
+        _ => "current",
+    }
+}
+
+/// 按范围取片段。
+///
+/// - `current`（默认）：只读当前章及前后各一章，问"这段里 X 为什么"时不会被别处的高分章挤掉；
+/// - `book`：全书关键词检索，放宽到 10 段、打分门槛降到 0.2，跨章线索/全书类问题用；
+/// - `auto`：全书关键词检索的默认参数（6 段、门槛 0.4），界面上已不暴露。
+pub async fn retrieve_scoped(
+    storage: &Storage,
+    ns: &str,
+    book_url: &str,
+    question: &str,
+    titles: &[String],
+    current_title: &str,
+    scope: &str,
+) -> Retrieval {
+    match scope_of(scope) {
+        "current" => retrieve_window(storage, ns, book_url, question, titles, current_title).await,
+        "book" => {
+            retrieve_inner(
+                storage,
+                ns,
+                book_url,
+                question,
+                titles,
+                current_title,
+                Tuning {
+                    max_snippets: BOOK_SNIPPETS,
+                    score_cutoff: BOOK_SCORE_CUTOFF,
+                },
+            )
+            .await
+        }
+        _ => retrieve(storage, ns, book_url, question, titles, current_title).await,
+    }
+}
+
 /// 检索：已缓存章节里按关键词稀缺度加权打分，取前几章；每章截 1-2 个命中窗口。
 ///
 /// 排序：常规问题按分数降序（同分按章节先后）；"什么时候/第一次/第几章"这类问题会把
@@ -558,6 +608,37 @@ pub async fn retrieve(
     question: &str,
     titles: &[String],
     current_title: &str,
+) -> Retrieval {
+    retrieve_inner(
+        storage,
+        ns,
+        book_url,
+        question,
+        titles,
+        current_title,
+        Tuning {
+            max_snippets: MAX_SNIPPETS,
+            score_cutoff: SCORE_CUTOFF,
+        },
+    )
+    .await
+}
+
+/// 检索的调参。单独收成结构体而不是两个散参数，否则 retrieve_inner 会到 8 个参数。
+#[derive(Clone, Copy)]
+struct Tuning {
+    max_snippets: usize,
+    score_cutoff: f64,
+}
+
+async fn retrieve_inner(
+    storage: &Storage,
+    ns: &str,
+    book_url: &str,
+    question: &str,
+    titles: &[String],
+    current_title: &str,
+    tuning: Tuning,
 ) -> Retrieval {
     let chapters = match storage.list_cached_chapters(ns, book_url).await {
         Ok(v) => v,
@@ -630,10 +711,10 @@ pub async fn retrieve(
     let mut out: Vec<Snippet> = Vec::new();
     let mut budget = CONTEXT_BUDGET;
     for (score, ci) in scored {
-        if out.len() >= MAX_SNIPPETS || budget < 200 {
+        if out.len() >= tuning.max_snippets || budget < 200 {
             break;
         }
-        if score < max_score * SCORE_CUTOFF {
+        if score < max_score * tuning.score_cutoff {
             break;
         }
         let ch = &chapters[ci];
@@ -647,6 +728,102 @@ pub async fn retrieve(
             continue;
         }
         let text = windows.join("\n…\n");
+        let used = text.chars().count();
+        if used > budget {
+            continue;
+        }
+        budget -= used;
+        out.push(Snippet {
+            index: ch.0,
+            order: order_of(&ch.1),
+            title: ch.1.clone(),
+            text,
+        });
+    }
+    Retrieval {
+        snippets: out,
+        cached_chapters,
+    }
+}
+
+/// `current` 范围：只取当前章及其前后各一章，不做全书关键词排序。
+///
+/// 读者问"这一段里 X 到底怎么想的"时，全书检索会把最相关的邻章挤下去，所以这里直接按
+/// 当前章定位；关键词只用来挑窗口，一章都命中不了就给开头一段原文。
+async fn retrieve_window(
+    storage: &Storage,
+    ns: &str,
+    book_url: &str,
+    question: &str,
+    titles: &[String],
+    current_title: &str,
+) -> Retrieval {
+    let chapters = match storage.list_cached_chapters(ns, book_url).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("AI 检索读取章节失败: {e}");
+            return Retrieval {
+                snippets: Vec::new(),
+                cached_chapters: 0,
+            };
+        }
+    };
+    if chapters.is_empty() {
+        return Retrieval {
+            snippets: Vec::new(),
+            cached_chapters: 0,
+        };
+    }
+    let cached_chapters = chapters.len();
+    let order_of = |title: &str| -> usize {
+        if let Some(pos) = titles.iter().position(|t| t == title) {
+            return pos + 1;
+        }
+        title_order(title)
+            .map(|v| if v > 0 { v as usize } else { 0 })
+            .unwrap_or(0)
+    };
+    // 定位当前章：标题精确匹配 → 章号匹配 → 退化成最后一章（读者正在读的通常就是它）
+    let anchor = chapters
+        .iter()
+        .position(|c| c.1 == current_title)
+        .or_else(|| {
+            let want = title_order(current_title)?;
+            chapters
+                .iter()
+                .position(|c| title_order(&c.1) == Some(want))
+        })
+        .unwrap_or(chapters.len() - 1);
+    let hi = (anchor + 1).min(chapters.len() - 1);
+    let kws = question_keywords(question, &chapters);
+    let mut window: Vec<usize> = vec![anchor];
+    if anchor < hi {
+        window.push(anchor + 1);
+    }
+    if anchor > 0 {
+        window.push(anchor - 1);
+    }
+    let mut out: Vec<Snippet> = Vec::new();
+    let mut budget = CONTEXT_BUDGET;
+    for ci in window {
+        if budget < 200 {
+            break;
+        }
+        let ch = &chapters[ci];
+        let mut chops = best_windows(
+            &ch.2,
+            &kws,
+            SNIPPET_WINDOW.min(budget),
+            MAX_WINDOWS_PER_CHAPTER,
+        );
+        if chops.is_empty() {
+            let head: String = ch.2.chars().take(SNIPPET_WINDOW.min(budget)).collect();
+            if head.trim().is_empty() {
+                continue;
+            }
+            chops = vec![head];
+        }
+        let text = chops.join("\n…\n");
         let used = text.chars().count();
         if used > budget {
             continue;
@@ -932,6 +1109,43 @@ pub async fn stream_chat(
     }
 }
 
+/// 拉取端点支持的模型 id 列表（`GET {base_url}/models`）。
+///
+/// 设置页用它做模型下拉，省掉"手敲模型名敲错一次就报 404"的来回。
+/// 端点不支持该接口时返回空列表而不是报错——模型名仍然可以手填。
+pub async fn list_models(cfg: &AiConfig) -> anyhow::Result<Vec<String>> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()?;
+    let resp = client
+        .get(format!("{}/models", cfg.base_url))
+        .bearer_auth(&cfg.api_key)
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!(
+            "端点返回 {status}: {}",
+            text.chars().take(200).collect::<String>()
+        );
+    }
+    let value: Value = resp.json().await?;
+    let mut out: Vec<String> = value
+        .get("data")
+        .and_then(|d| d.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.get("id").and_then(|i| i.as_str()))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
 /// 非流式对话（用于结构化输出：人物关系图 JSON）
 pub async fn chat_once(
     cfg: &AiConfig,
@@ -1118,5 +1332,18 @@ mod tests {
         let cfg: AiConfig = serde_json::from_str(raw).expect("旧配置应能反序列化");
         assert_eq!(cfg.thinking_mode(), "off");
         assert_eq!(cfg.max_tokens, 1200);
+    }
+
+    #[test]
+    fn scope_of_normalizes_and_defaults_to_current() {
+        // 缺省/乱填都落到 current（界面上只有「当前章 / 全书」两档）
+        assert_eq!(scope_of(""), "current");
+        assert_eq!(scope_of("whatever"), "current");
+        assert_eq!(scope_of(" Current "), "current");
+        assert_eq!(scope_of("chapter"), "current");
+        assert_eq!(scope_of("BOOK"), "book");
+        assert_eq!(scope_of("all"), "book");
+        // auto 保留给老客户端，界面不再暴露
+        assert_eq!(scope_of("auto"), "auto");
     }
 }

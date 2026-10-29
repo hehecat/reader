@@ -1,10 +1,40 @@
 import { Bot, Send, Square, Trash2, X } from "lucide-react";
 import * as React from "react";
 
-import { Badge, Button, IconButton, Spinner, Textarea, cn } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  IconButton,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Spinner,
+  Textarea,
+  cn,
+} from "@/components/ui";
 import { MarkdownLite } from "@/components/reader/ai-markdown";
 import { CharacterGraph, type GraphData } from "@/components/reader/CharacterGraph";
-import { generateAiGraph, streamAiChat, type AiSnippet } from "@/services/ai";
+import { generateAiGraph, streamAiChat, type AiScope, type AiSnippet } from "@/services/ai";
+
+/** 检索范围偏好：本地记住，下次打开面板还是上次选的 */
+const SCOPE_KEY = "reader.aiScope";
+const SCOPE_OPTIONS: { id: AiScope; label: string; hint: string }[] = [
+  { id: "current", label: "当前章", hint: "只看当前章及前后各一章(默认), 问这段细节最准" },
+  { id: "book", label: "全书", hint: "整本书里找相关章节, 跨章线索用, token 更多" },
+];
+
+function readScope(): AiScope {
+  try {
+    if (localStorage.getItem(SCOPE_KEY) === "book") {
+      return "book";
+    }
+  } catch {
+    // 隐私模式下 localStorage 可能不可用，忽略
+  }
+  return "current";
+}
 
 interface ChatMessage {
   id: number;
@@ -67,6 +97,7 @@ export function AiChatPanel({
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [input, setInput] = React.useState("");
   const [streaming, setStreaming] = React.useState(false);
+  const [scope, setScope] = React.useState<AiScope>(readScope);
   // 关系图: 生成结果 / 加载态 / 错误
   const [graph, setGraph] = React.useState<GraphData | null>(null);
   const [graphLoading, setGraphLoading] = React.useState(false);
@@ -133,7 +164,7 @@ export function AiChatPanel({
     setStreaming(true);
 
     cancelRef.current = streamAiChat(
-      { url: bookUrl, question, bookName, titles, currentTitle, history },
+      { url: bookUrl, question, bookName, scope, titles, currentTitle, history },
       {
         onMeta: ({ snippets }) => {
           patch(botMsg.id, (m) => ({ ...m, snippets }));
@@ -171,7 +202,7 @@ export function AiChatPanel({
       },
     );
     },
-    [bookName, bookUrl, configured, currentTitle, input, messages, patch, streaming, titles],
+    [bookName, bookUrl, configured, currentTitle, input, messages, patch, scope, streaming, titles],
   );
 
   const stop = React.useCallback(() => {
@@ -398,7 +429,34 @@ export function AiChatPanel({
               }}
             />
             <div className="mt-2 flex items-center justify-between gap-2">
-              <span className="text-xs text-muted-foreground">基于已缓存章节</span>
+              <div className="flex min-w-0 items-center gap-2">
+                <Select
+                  value={scope}
+                  onValueChange={(value) => {
+                    const next: AiScope = value === "book" ? "book" : "current";
+                    setScope(next);
+                    try {
+                      localStorage.setItem(SCOPE_KEY, next);
+                    } catch {
+                      // 存不下就算了, 只是下次不记住
+                    }
+                  }}
+                >
+                  <SelectTrigger size="sm" aria-label="检索范围" className="w-24">
+                    <SelectValue placeholder="范围" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SCOPE_OPTIONS.map((option) => (
+                      <SelectItem key={option.id} value={option.id}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <span className="truncate text-xs text-muted-foreground">
+                  {SCOPE_OPTIONS.find((option) => option.id === scope)?.hint ?? "基于已缓存章节"}
+                </span>
+              </div>
               {streaming ? (
                 <Button size="sm" variant="secondary" onClick={stop}>
                   <Square aria-hidden />

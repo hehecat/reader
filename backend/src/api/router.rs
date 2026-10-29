@@ -120,6 +120,7 @@ pub fn router(config: crate::AppConfig, storage: Storage) -> axum::Router {
             get(ai_settings_get).post(ai_settings_save),
         )
         .route("/reader3/aiTest", post(ai_test))
+        .route("/reader3/aiModels", post(ai_models))
         .route("/reader3/aiGraph", post(ai_graph))
         // 关系图谱整本生成（B 阶段）：预估 / 启动 / 进度流 / 取消 / 取成品
         .route("/reader3/graphEstimate", get(graph_estimate))
@@ -9980,6 +9981,68 @@ async fn ai_test(
     }
 }
 
+/// POST /reader3/aiModels：拉取端点可用模型列表（{models: [...]}）
+///
+/// 参数与 `/reader3/aiTest` 完全同参同鉴权：body 里的 baseUrl/apiKey/model 优先，
+/// 缺省回落到已保存配置——「先填 key 看有哪些模型，再选模型保存」的交互要用它。
+async fn ai_models(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Option<axum::body::Bytes>,
+) -> Json<ReturnData> {
+    if let Err(ret) = require_ai_admin(&state, &params, &headers).await {
+        return Json(ret);
+    }
+    crate::service::ai::ensure_loaded(&state.storage).await;
+    let body_json = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    let base_in = param_of(&params, body_json.as_ref(), "baseUrl")
+        .trim()
+        .trim_end_matches('/')
+        .to_string();
+    let key_in = param_of(&params, body_json.as_ref(), "apiKey")
+        .trim()
+        .to_string();
+    let saved = crate::service::ai::config();
+    let base_url = if base_in.is_empty() {
+        match saved.as_ref() {
+            Some(cfg) => cfg.base_url.clone(),
+            None => return Json(ReturnData::err("请填写端点地址")),
+        }
+    } else {
+        base_in
+    };
+    let api_key = if key_in.is_empty() {
+        match saved.as_ref() {
+            Some(cfg) => cfg.api_key.clone(),
+            None => return Json(ReturnData::err("请填写 API Key")),
+        }
+    } else {
+        key_in
+    };
+    let mut model = param_of(&params, body_json.as_ref(), "model");
+    if model.trim().is_empty() {
+        model = saved
+            .as_ref()
+            .map(|cfg| cfg.model.clone())
+            .unwrap_or_default();
+    }
+    let cfg = crate::service::ai::AiConfig {
+        base_url,
+        api_key,
+        model,
+        max_tokens: saved.as_ref().map_or(3500, |cfg| cfg.max_tokens),
+        thinking: saved
+            .as_ref()
+            .map(|cfg| cfg.thinking.clone())
+            .unwrap_or_default(),
+    };
+    match crate::service::ai::list_models(&cfg).await {
+        Ok(models) => Json(ReturnData::ok(json!({ "models": models }))),
+        Err(e) => Json(ReturnData::err(format!("{e:#}"))),
+    }
+}
+
 /// GET /reader3/jevSettings：判定模型(Jev/EMRank)端点配置（密钥只回是否已设置）
 async fn jev_settings_get(
     State(state): State<AppState>,
@@ -10189,14 +10252,17 @@ async fn ai_chat(
         })
         .unwrap_or_default();
     let current_title = param_of(&params, body_json.as_ref(), "currentTitle");
+    // 检索范围: current(默认, 只读当前章及前后各一章) / book(全书关键词检索)
+    let scope = param_of(&params, body_json.as_ref(), "scope");
     // 检索已缓存章节：毫秒级（单本几 MB 关键词扫描），不阻塞其他读写
-    let retrieval = crate::service::ai::retrieve(
+    let retrieval = crate::service::ai::retrieve_scoped(
         &state.storage,
         &namespace,
         &url,
         &question,
         &titles,
         &current_title,
+        &scope,
     )
     .await;
     let snippets = retrieval.snippets;

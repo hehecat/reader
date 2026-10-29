@@ -21,10 +21,15 @@ export interface AiSnippet {
   title: string;
 }
 
+/** 检索范围: 只看当前章及前后各一章(默认) / 全书放宽覆盖 */
+export type AiScope = "current" | "book";
+
 export interface AiChatRequest {
   url: string;
   question: string;
   bookName?: string;
+  /** 检索范围; 缺省由后端按 current 处理 */
+  scope?: AiScope;
   /** 章节标题序（后端按它排序，无命中时取"开头两章 + 当前章附近"） */
   titles?: string[];
   currentTitle?: string;
@@ -195,6 +200,17 @@ export async function testAiEndpoint(input: AiSettingsInput): Promise<AiTestResu
   const data = await post<unknown>("/aiTest", input);
   return data as AiTestResult;
 }
+
+/**
+ * 列出端点支持的模型 id（下拉用），同样接受未保存的输入。
+ * 端点不支持 /models 时后端返回空数组，前端继续允许手填。
+ */
+export async function listAiModels(input: AiSettingsInput): Promise<string[]> {
+  const data = await post<unknown>("/aiModels", input);
+  return aiModelsSchema.parse(data).models;
+}
+
+const aiModelsSchema = z.object({ models: z.array(z.string()).default([]) });
 
 /** 关系图: 人物 + 关系（后端让模型输出 JSON 后透传） */
 export const graphCharacterSchema = z.object({
