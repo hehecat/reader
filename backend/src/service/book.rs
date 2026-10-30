@@ -9,7 +9,7 @@ use serde::Deserialize;
 use crate::model::book_chapter::{BookChapter, BookInfo};
 use crate::model::BookSource;
 use crate::parser::css_chain::css_chain;
-use crate::parser::rule::{apply, parse_rule, RuleKind};
+use crate::parser::rule::{apply, apply_with_vars, parse_rule, RuleKind};
 use crate::service::crawler;
 use std::collections::HashMap;
 
@@ -664,6 +664,126 @@ async fn fetch_toc_page_retry(
     }
 }
 
+/// nextTocUrl → **多个**页地址（legado 多 URL 语义）
+///
+/// legado 的 nextTocUrl 一次可以给出多页地址：
+/// - CSS/XPath 命中多个元素（`option@value` / `.page-item a@href`——一个 `<select>`
+///   或一组页码 `<a>` 里就是全套页码）；
+/// - `@js:` / `<js>` 返回 URL 数组（legado：JS 可返回字符串或数组）。
+///
+/// 单 URL 时行为与改造前一致：首元素走原 [`crate::service::search::field_url_with_vars`]
+/// 语义（URL 字段 isUrl 直判 + 相对转绝对），多 URL 只是把同一套管线对每个地址各跑一次。
+fn next_toc_urls(
+    context: &str,
+    rule: &str,
+    base: &str,
+    source: &BookSource,
+    ns: &str,
+    vars: &mut crate::parser::rule::RuleVars,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for u in next_toc_url_candidates(context, rule, base, vars) {
+        // E7：翻页 URL 过模板/JS 管线后再绝对化（与单 URL 路径同序）
+        let expanded = expand_next_url(&u, base, source, ns);
+        let abs = to_abs(expanded.trim(), base);
+        if !abs.trim().is_empty() {
+            out.push(abs);
+        }
+    }
+    out
+}
+
+/// [`next_toc_urls`] 的规则求值阶段：一次解析出全部候选页地址
+///
+/// 形态分派：
+/// 1. `@get:` / `{{}}` 先展开（与 field_url_with_vars 同一套；JS 规则不做 `{{}}`
+///    展开，避免误伤 JS 源码）；
+/// 2. 直接 URL / 根相对路径 → 单值（legado isUrl 直判）；
+/// 3. CSS 选择器不含 `@`（legado 元素 text() 回退形态）→ 走原单值路径；
+/// 4. 其余取**全量**结果（AR2 全量语义：getStringList 而非 getString0），
+///    每条结果再按「JSON 数组 / 换行」拆成多个 URL。
+fn next_toc_url_candidates(
+    context: &str,
+    rule: &str,
+    base: &str,
+    vars: &mut crate::parser::rule::RuleVars,
+) -> Vec<String> {
+    // legado makeUpRule：@get 先替换（引用已存变量）
+    let resolved = crate::parser::rule::resolve_get(rule, vars);
+    let trimmed = resolved.trim();
+    if trimmed.is_empty() {
+        return vec![];
+    }
+    let is_js = crate::parser::rule::contains_js_marker(trimmed);
+    let expanded = if is_js {
+        trimmed.to_string()
+    } else {
+        crate::service::search::expand_embedded_with_vars(trimmed, context, vars)
+    };
+    let t = expanded.trim();
+    if t.is_empty() {
+        return vec![];
+    }
+    // URL 型直判：完整 URL / 根相对路径（`//` 开头是 XPath，不在此列）
+    if t.starts_with("http://") || t.starts_with("https://") {
+        return vec![t.to_string()];
+    }
+    if t.starts_with('/') && !t.starts_with("//") {
+        return vec![to_abs(t, base)];
+    }
+    // 无 `@` 的裸 CSS 选择器：legado 走元素 text()（本仓由 field_url_impl 的
+    // visible_text 回退实现）——保持原单值路径，不在此重复实现文本提取
+    if !is_js {
+        let parsed = parse_rule(t);
+        if parsed.kind == RuleKind::Css && !parsed.body.contains('@') {
+            let v =
+                crate::service::search::field_url_with_vars(context, Some(rule), "", base, vars);
+            return if v.trim().is_empty() { vec![] } else { vec![v] };
+        }
+    }
+    // 全量求值：CSS 多命中 / JSONPath 多命中 / JS 返回数组
+    // （eval 出口已按 JSON.stringify 序列化，如 `["https://x/p2","https://x/p3"]`）
+    let mut out = Vec::new();
+    for v in apply_with_vars(t, context, vars) {
+        out.extend(split_url_list(&v));
+    }
+    out.into_iter()
+        .map(|u| to_abs(u.trim(), base))
+        .filter(|u| !u.trim().is_empty())
+        .collect()
+}
+
+/// 规则命中值 → URL 列表
+///
+/// - JS 返回数组：eval 出口按 JSON.stringify 序列化为 `["u1","u2"]` → 按 JSON 数组展开
+/// - 数组元素/普通值可能是换行拼接的多条（legado getStringList 的 join("\n") 语义）
+///   → 继续按换行拆；不含换行的普通值即整条（单 URL 向后兼容）
+fn split_url_list(v: &str) -> Vec<String> {
+    fn push_lines(s: &str, out: &mut Vec<String>) {
+        for line in s.split('\n') {
+            let line = line.trim();
+            if !line.is_empty() {
+                out.push(line.to_string());
+            }
+        }
+    }
+    let v = v.trim();
+    let mut out = Vec::new();
+    if v.starts_with('[') {
+        // 解析成功即按数组语义返回（空数组 `[]` → 0 个 URL，不能退化成字面量 "[]"）
+        if let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(v) {
+            for item in items {
+                if let serde_json::Value::String(s) = item {
+                    push_lines(&s, &mut out);
+                }
+            }
+            return out;
+        }
+    }
+    push_lines(v, &mut out);
+    out
+}
+
 /// 目录抓取主体: 有界并发抓页 + **严格保序**处理（按页序 → 页内序合并）
 ///
 /// 并发只影响「谁先抓回来」，不影响合并顺序：每页结果按页序索引落到 ready 表，
@@ -703,10 +823,19 @@ async fn analyze_toc_impl(
     if max_pages > 0 {
         pending.push_back((0, toc_url.to_string()));
     }
-    let mut head = 0usize; // 下一个待处理页序（严格递增）
+    // 两个独立游标（多 URL 扇出必须分开，否则页序错位丢页）：
+    // - head: 下一个待**处理**的页序（成功/跳过一页就 +1，严格递增）
+    // - next_idx: 下一个待**分配**的页序（每次入池 +1）
+    // 单 URL 链式翻页时两者恒相等；多 URL 时一次可入池 N 页，head 只 +1。
+    let mut head = 0usize;
+    let mut next_idx = 1usize;
     let mut pages_done = 0usize; // 成功合并的页数
     let mut failures_in_row = 0usize; // 连续失败页数（重试后仍失败）
     let mut stop_reason: Option<String> = None;
+    // 已入池/已抓取的页地址（绝对 URL 精确匹配）：同一 URL 只抓一次。
+    // 多 URL 规则常把「当前页」也列进页码集合（option@value 全套页码），靠它避开自抓。
+    let mut seen_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
+    seen_urls.insert(toc_url.to_string());
     // 诊断: 在飞峰值 / 抓取耗时累计 / 页内解析落盘耗时累计（RUST_LOG=debug 可见）
     let mut max_inflight = 0usize;
     let mut fetch_ms_sum = 0u128;
@@ -788,7 +917,7 @@ async fn analyze_toc_impl(
                     "目录第 {} 页抓取失败(重试后仍失败, 连续 {failures_in_row} 页), 跳过继续: {e:#}",
                     head + 1
                 );
-                head += 1;
+                head += 1; // 只跳处理游标；next_idx 不动（该页序已作废）
                 if head >= max_pages {
                     break;
                 }
@@ -800,6 +929,8 @@ async fn analyze_toc_impl(
         // legado WebBook.getChapterList：目录页抓取后执行 loginCheckJs
         let page_body = apply_login_check_js(ns, source, &resp.body, &resp.url, None).await;
         let base = resp.url.clone();
+        // 本页已抓 → 记入去重集（规则把当前页列进页码集合时不再自抓；重定向后以真实 URL 记）
+        seen_urls.insert(base.clone());
         // E10/AR5：真实页 URL → JS 求值绑定 baseUrl（push_js_context 透传）
         vars.insert("baseUrl".to_string(), base.clone());
         let rule: TocRule = source
@@ -836,33 +967,48 @@ async fn analyze_toc_impl(
         pages_done += 1;
         parse_ms_sum += t_parse.elapsed().as_millis();
 
-        // 多页目录
-        let next = rule
+        // 多页目录：nextTocUrl 一次可解析出**多个**页地址（legado 多 URL 语义——
+        // `option@value` / `a@href` 一次就是全套页码，`@js:` 可直接返回 URL 数组）。
+        // 提取顺序即页序：逐个分配严格递增的页序，保证合并顺序与串行逐条一致。
+        let next_urls = rule
             .next_toc_url
             .as_deref()
-            .map(|r| {
-                crate::service::search::field_url_with_vars(
-                    &page_body,
-                    Some(r),
-                    "",
-                    &base,
-                    &mut vars,
-                )
-            })
+            .map(|r| next_toc_urls(&page_body, r, &base, source, ns, &mut vars))
             .unwrap_or_default();
-        if next.is_empty() {
-            break;
+        if next_urls.is_empty() {
+            // 链尾：本页没有下一页地址。多 URL 扇出时可能还有已入池的兄弟页在等，
+            // 只有「无待抓且无在飞」才算目录抓完。
+            head += 1;
+            if pending.is_empty() && inflight.is_empty() {
+                break;
+            }
+            continue;
         }
-        // E7：翻页 URL 过模板/JS 管线后再绝对化
-        let next = expand_next_url(&next, &base, source, ns);
-        let next_abs = to_abs(&next, &base);
-        crate::parser::rule::save_book_vars(ns, &source.book_source_url, &next_abs, &vars);
+        let mut queued = 0usize;
+        tracing::debug!(
+            "目录页 #{} 解析出 {} 个页地址（逐个去重后入池）[{toc_url}]",
+            head + 1,
+            next_urls.len()
+        );
+        for next_abs in next_urls {
+            // 同一 URL 只抓一次（规则常把「当前页」也列在页码集合里）
+            if !seen_urls.insert(next_abs.clone()) {
+                continue;
+            }
+            if next_idx >= max_pages {
+                break;
+            }
+            crate::parser::rule::save_book_vars(ns, &source.book_source_url, &next_abs, &vars);
+            // ④ 地址已知 → 立刻入池（与当前页后续处理/下一轮解析重叠）
+            pending.push_back((next_idx, next_abs));
+            next_idx += 1;
+            queued += 1;
+        }
+        // 本页处理完毕 → 处理游标前进（与入池游标分离，多 URL 才不会错位）
         head += 1;
-        if head >= max_pages {
-            break;
+        if queued == 0 && pending.is_empty() && inflight.is_empty() {
+            break; // 解析出的地址都抓过了（或超出 max_pages）→ 目录已完整
         }
-        // ④ 下一页地址已知 → 立刻入池（与当前页后续处理/下一轮解析重叠）
-        pending.push_back((head, next_abs));
     }
 
     crate::parser::rule::save_book_vars_two_level(
@@ -900,7 +1046,7 @@ async fn analyze_toc_impl(
         tracing::warn!(
             "目录不完整（已抓 {}/{} 页, {reason}）[{toc_url}]：返回已抓到的部分目录, 共 {} 章",
             pages_done,
-            head + 1,
+            next_idx,
             all.len()
         );
     }
@@ -3166,5 +3312,312 @@ mod tests {
         let _ = fetch_url("default", &url, &src).await.unwrap();
         let recorded = times.lock().unwrap();
         assert_eq!(recorded.len(), 2);
+    }
+
+    // ---- nextTocUrl 多 URL（legado 多 URL 语义）----
+
+    fn toc_vars() -> crate::parser::rule::RuleVars {
+        let mut vars = crate::parser::rule::RuleVars::new();
+        vars.book_name = Some("书".to_string());
+        vars
+    }
+
+    /// CSS 规则命中多个元素 → 全部取出，按命中顺序即页序（`option@value` 全套页码）
+    #[test]
+    fn test_next_toc_urls_multi_elements() {
+        let html = r#"<div class="pages">
+            <select onchange="go()">
+                <option value="/50551/1.html" selected>1</option>
+                <option value="/50551/2.html">2</option>
+                <option value="/50551/3.html">3</option>
+            </select></div>"#;
+        let mut vars = toc_vars();
+        let urls = next_toc_urls(
+            html,
+            "option@value",
+            "https://m.example.com/book/50551/",
+            &test_source(),
+            "default",
+            &mut vars,
+        );
+        assert_eq!(
+            urls,
+            vec![
+                "https://m.example.com/50551/1.html",
+                "https://m.example.com/50551/2.html",
+                "https://m.example.com/50551/3.html",
+            ],
+            "option@value 应一次给出全套页码（相对路径按 base 绝对化）"
+        );
+    }
+
+    /// 多元素链接（`.page-item a@href`）同样全量取出
+    #[test]
+    fn test_next_toc_urls_multi_links() {
+        let html = r#"<ul>
+            <li class="page-item"><a href="?page=2">2</a></li>
+            <li class="page-item"><a href="?page=3">3</a></li>
+            <li class="page-item"><a href="?page=4">4</a></li>
+        </ul>"#;
+        let mut vars = toc_vars();
+        let urls = next_toc_urls(
+            html,
+            ".page-item a@href",
+            "https://x.test/book/1/",
+            &test_source(),
+            "default",
+            &mut vars,
+        );
+        assert_eq!(
+            urls,
+            vec![
+                "https://x.test/book/1/?page=2",
+                "https://x.test/book/1/?page=3",
+                "https://x.test/book/1/?page=4",
+            ]
+        );
+    }
+
+    /// `@js:` 返回**数组**（legado：JS 可返回 URL 数组）→ 展开成多个 URL
+    #[test]
+    fn test_next_toc_urls_js_returns_array() {
+        let js = "var list=[];\nfor(var i=2;i<=4;i++){ list.push(baseUrl+'/p'+i+'.html') }\nlist;";
+        let mut vars = toc_vars();
+        vars.insert(
+            "baseUrl".to_string(),
+            "https://m.example.com/toc".to_string(),
+        );
+        let urls = next_toc_urls(
+            "<html>共 4 页</html>",
+            &format!("@js:{js}"),
+            "https://m.example.com/toc",
+            &test_source(),
+            "default",
+            &mut vars,
+        );
+        assert_eq!(
+            urls,
+            vec![
+                "https://m.example.com/toc/p2.html",
+                "https://m.example.com/toc/p3.html",
+                "https://m.example.com/toc/p4.html",
+            ]
+        );
+    }
+
+    /// `@js:` 返回**字符串**（单个 URL）→ 与改造前一致，只有一个地址
+    #[test]
+    fn test_next_toc_urls_js_returns_single_string() {
+        let mut vars = toc_vars();
+        vars.insert(
+            "baseUrl".to_string(),
+            "https://m.example.com/toc".to_string(),
+        );
+        let urls = next_toc_urls(
+            "<html/>",
+            "@js:baseUrl+'/p2.html'",
+            "https://m.example.com/toc",
+            &test_source(),
+            "default",
+            &mut vars,
+        );
+        assert_eq!(urls, vec!["https://m.example.com/toc/p2.html".to_string()]);
+    }
+
+    /// 单 URL 向后兼容：`text.下一页@href` 只命中一个 → 与 field_url_with_vars 同值
+    #[test]
+    fn test_next_toc_urls_single_url_backward_compatible() {
+        let html = r#"<div><a href="/50551/2.html">下一页</a></div>"#;
+        let base = "https://m.roushuwu.com/book/50551/";
+        let rule = "text.下一页@href";
+        let mut vars_a = toc_vars();
+        let got = next_toc_urls(html, rule, base, &test_source(), "default", &mut vars_a);
+        // 原单 URL 路径（改造前 analyze_toc_impl 的取法）逐字节对照
+        let mut vars_b = toc_vars();
+        let legacy = {
+            let next = crate::service::search::field_url_with_vars(
+                html,
+                Some(rule),
+                "",
+                base,
+                &mut vars_b,
+            );
+            let next = expand_next_url(&next, base, &test_source(), "default");
+            to_abs(&next, base)
+        };
+        assert_eq!(legacy, "https://m.roushuwu.com/50551/2.html");
+        assert_eq!(got, vec![legacy], "单 URL 必须与改造前完全一致");
+    }
+
+    /// 无命中的单 URL 规则 → 空（不造假地址，翻页链正常收尾）
+    #[test]
+    fn test_next_toc_urls_empty_when_no_match() {
+        let mut vars = toc_vars();
+        let urls = next_toc_urls(
+            "<div>没有下一页</div>",
+            "text.下一页@href",
+            "https://x.test/toc",
+            &test_source(),
+            "default",
+            &mut vars,
+        );
+        assert!(urls.is_empty(), "无命中应为空: {urls:?}");
+    }
+
+    /// 相对 URL 解析：`/` 开头按根、无前导 `/` 按当前路径解析（legado toAbsolute）
+    #[test]
+    fn test_next_toc_urls_relative_resolution() {
+        let html = r#"<select>
+            <option value="2.html">2</option>
+            <option value="/book/50551/3.html">3</option>
+            <option value="https://cdn.x.test/b/4.html">4</option>
+        </select>"#;
+        let mut vars = toc_vars();
+        let urls = next_toc_urls(
+            html,
+            "option@value",
+            "https://m.example.com/book/50551/1.html",
+            &test_source(),
+            "default",
+            &mut vars,
+        );
+        assert_eq!(
+            urls,
+            vec![
+                "https://m.example.com/book/50551/2.html",
+                "https://m.example.com/book/50551/3.html",
+                // 已是绝对 URL 的保持不变
+                "https://cdn.x.test/b/4.html",
+            ]
+        );
+    }
+
+    /// 多值拆分：JSON 数组文本（JS 数组序列化出口）与换行拼接两种形态
+    #[test]
+    fn test_split_url_list_forms() {
+        assert_eq!(
+            split_url_list(r#"["https://a/1","https://a/2"]"#),
+            vec!["https://a/1".to_string(), "https://a/2".to_string()]
+        );
+        assert_eq!(
+            split_url_list("https://a/1\n\n https://a/2 \n"),
+            vec!["https://a/1".to_string(), "https://a/2".to_string()]
+        );
+        // 单值（含逗号的 URL 不被误拆）→ 向后兼容
+        assert_eq!(
+            split_url_list("https://a/1?x=1,2"),
+            vec!["https://a/1?x=1,2".to_string()]
+        );
+        assert!(split_url_list("   ").is_empty());
+    }
+
+    /// 多 URL 目录：一次解析出多页 → 并发抓、按页序合并、同 URL 只抓一次
+    #[tokio::test]
+    async fn test_toc_multi_url_fanout_order_and_dedupe() {
+        use std::sync::{Arc, Mutex};
+        let _ssrf = crate::service::crawler::ssrf_allow_private_guard(true);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // 记录每个被请求的路径（去重断言用）
+        let hits: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let hits_srv = hits.clone();
+        // 每个请求的 [开始, 结束]（算并发重叠峰值 = 真实在飞峰值）
+        let spans: Arc<Mutex<Vec<(std::time::Instant, std::time::Instant)>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let spans_srv = spans.clone();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                let hits = hits_srv.clone();
+                let spans = spans_srv.clone();
+                tokio::spawn(async move {
+                    let t_start = std::time::Instant::now();
+                    let mut buf = [0u8; 2048];
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
+                    hits.lock().unwrap().push(path.clone());
+                    let name = path
+                        .trim_start_matches('/')
+                        .replace(|c: char| !c.is_alphanumeric(), "");
+                    // 每页固定 2 章，标题/URL 带页号（页序可辨）
+                    let body = format!(
+                        r#"{{"ch":[{{"t":"{name}A","u":"/{name}a"}},{{"t":"{name}B","u":"/{name}b"}}]}}"#
+                    );
+                    // 让三页同时在飞（延迟 > 单页 RTT）
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                    spans
+                        .lock()
+                        .unwrap()
+                        .push((t_start, std::time::Instant::now()));
+                });
+            }
+        });
+        let base = format!("http://{addr}");
+        let mut src = test_source();
+        src.book_source_url = format!("{base}/src");
+        // nextTocUrl = @js: 返回 URL 数组（本次要支持的形态）：首页给 [自身, p2, p3, p4, p2]
+        src.rule_toc = Some(serde_json::json!({
+            "chapterList": "$.ch",
+            "chapterName": "$.t",
+            "chapterUrl": "$.u",
+            "nextTocUrl": "@js:var list=[];if(baseUrl.slice(-2)=='p1'){var u=baseUrl.slice(0,-2);list=[baseUrl,u+'p2',u+'p3',u+'p4',u+'p2']};list"
+        }));
+        let t0 = std::time::Instant::now();
+        let chapters = analyze_toc("default", &format!("{base}/p1"), &src, 20, None, "")
+            .await
+            .unwrap();
+        let elapsed = t0.elapsed();
+        let got = hits.lock().unwrap().clone();
+        let titles: Vec<&str> = chapters.iter().map(|c| c.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            vec!["p1A", "p1B", "p2A", "p2B", "p3A", "p3B", "p4A", "p4B"],
+            "多 URL 目录必须按页序（提取顺序）合并; hits={got:?}"
+        );
+        let urls: Vec<&str> = chapters.iter().map(|c| c.url.as_str()).collect();
+        assert_eq!(
+            urls,
+            vec![
+                format!("{base}/p1a"),
+                format!("{base}/p1b"),
+                format!("{base}/p2a"),
+                format!("{base}/p2b"),
+                format!("{base}/p3a"),
+                format!("{base}/p3b"),
+                format!("{base}/p4a"),
+                format!("{base}/p4b"),
+            ]
+        );
+        let p2_hits = got.iter().filter(|p| p.starts_with("/p2")).count();
+        assert_eq!(p2_hits, 1, "同一 URL 只抓一次（去重，含首页自指）: {got:?}");
+        assert_eq!(got.len(), 4, "只抓 p1..p4 各一次: {got:?}");
+        // 并发重叠峰值：3 个后续页同时在飞（每页 200ms 延迟）→ 峰值必须 >1
+        let spans = spans.lock().unwrap().clone();
+        let mut events: Vec<(std::time::Instant, i32)> = Vec::new();
+        for (s, e) in &spans {
+            events.push((*s, 1));
+            events.push((*e, -1));
+        }
+        events.sort();
+        let (mut cur, mut peak) = (0i32, 0i32);
+        for (_, d) in events {
+            cur += d;
+            peak = peak.max(cur);
+        }
+        assert!(
+            peak >= 2,
+            "多 URL 必须真的并发（在飞峰值应 >1，实际 {peak}; 墙钟 {elapsed:?}）"
+        );
     }
 }
