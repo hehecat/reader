@@ -1,0 +1,720 @@
+{
+ "meta": {
+  "note": "从生产快照 GET /reader3/graph?url=http://www.xbotaodz.info/455131.html 里按第 1749 章可见性裁出来的亲缘子图(id 与原快照一致, 未增删任何人物或关系); nodes 按 data.characters 顺序(即页面传给布局的元素顺序), edges 按 source/target/type 排序",
+  "book": "玄鉴仙族",
+  "totalChapters": 1749,
+  "chapter": 1749,
+  "generatedAt": "2026-10-30T16:05:00+08:00",
+  "charactersInSnapshot": 132,
+  "relationsInSnapshot": 223,
+  "visibleCharacters": 132,
+  "visibleRelations": 92,
+  "kinRelations": 83,
+  "kinCharacters": 71
+ },
+ "names": {
+  "c79": "李平逸",
+  "c105": "李曦治",
+  "c14": "万萧华",
+  "c2": "李木田",
+  "c4": "李叶生",
+  "c3": "李项平",
+  "c116": "安思危",
+  "c34": "萧元思",
+  "c120": "李月湘",
+  "c76": "费望白",
+  "c95": "费逸和",
+  "c92": "萧归鸾",
+  "c98": "萧归图",
+  "c15": "李根水",
+  "c30": "袁湍",
+  "c83": "郁慕仙",
+  "c84": "荠木",
+  "c58": "李渊修",
+  "c70": "江渔女",
+  "c13": "陈二牛",
+  "c12": "李叶盛",
+  "c62": "安鹧言",
+  "c63": "费桐玉",
+  "c60": "李清虹",
+  "c44": "陈求水",
+  "c86": "唦摩里",
+  "c97": "窦夫人",
+  "c124": "孟泰志",
+  "c7": "李尺泾",
+  "c6": "李通崖",
+  "c125": "孟灼云",
+  "c23": "李渊蛟",
+  "c8": "柳林云",
+  "c46": "萧初庭",
+  "c43": "陈三水",
+  "c110": "李曦明",
+  "c99": "萧久庆",
+  "c54": "李玄岭",
+  "c11": "费桐啸",
+  "c24": "李玄宣",
+  "c5": "李长湖",
+  "c111": "李曦峸",
+  "c94": "李渊平",
+  "c74": "郁慕高",
+  "c96": "李清晓",
+  "c41": "李玄锋",
+  "c25": "柳林峰",
+  "c104": "萧宪",
+  "c103": "李寄蛮",
+  "c42": "李景恬",
+  "c59": "木焦蛮",
+  "c77": "郁慕剑",
+  "c68": "安景明",
+  "c67": "木芽鹿",
+  "c9": "田芸",
+  "c33": "李秋阳",
+  "c22": "田有道",
+  "c82": "李渊云",
+  "c101": "田荣",
+  "c89": "李妃若",
+  "c19": "李承福",
+  "c91": "萧初筹",
+  "c112": "宁和远",
+  "c17": "陈冬河",
+  "c118": "宁和棉",
+  "c27": "郁慕元",
+  "c113": "李曦峻",
+  "c26": "柳柔绚",
+  "c117": "安思明",
+  "c127": "李承辽",
+  "c38": "李谢文"
+ },
+ "nodes": [
+  {
+   "id": "c2"
+  },
+  {
+   "id": "c3"
+  },
+  {
+   "id": "c4"
+  },
+  {
+   "id": "c5"
+  },
+  {
+   "id": "c6"
+  },
+  {
+   "id": "c7"
+  },
+  {
+   "id": "c8"
+  },
+  {
+   "id": "c9"
+  },
+  {
+   "id": "c11"
+  },
+  {
+   "id": "c12"
+  },
+  {
+   "id": "c13"
+  },
+  {
+   "id": "c14"
+  },
+  {
+   "id": "c15"
+  },
+  {
+   "id": "c17"
+  },
+  {
+   "id": "c19"
+  },
+  {
+   "id": "c22"
+  },
+  {
+   "id": "c23"
+  },
+  {
+   "id": "c24"
+  },
+  {
+   "id": "c25"
+  },
+  {
+   "id": "c26"
+  },
+  {
+   "id": "c27"
+  },
+  {
+   "id": "c30"
+  },
+  {
+   "id": "c33"
+  },
+  {
+   "id": "c34"
+  },
+  {
+   "id": "c38"
+  },
+  {
+   "id": "c41"
+  },
+  {
+   "id": "c42"
+  },
+  {
+   "id": "c43"
+  },
+  {
+   "id": "c44"
+  },
+  {
+   "id": "c46"
+  },
+  {
+   "id": "c54"
+  },
+  {
+   "id": "c58"
+  },
+  {
+   "id": "c59"
+  },
+  {
+   "id": "c60"
+  },
+  {
+   "id": "c62"
+  },
+  {
+   "id": "c63"
+  },
+  {
+   "id": "c67"
+  },
+  {
+   "id": "c68"
+  },
+  {
+   "id": "c70"
+  },
+  {
+   "id": "c74"
+  },
+  {
+   "id": "c76"
+  },
+  {
+   "id": "c77"
+  },
+  {
+   "id": "c79"
+  },
+  {
+   "id": "c82"
+  },
+  {
+   "id": "c83"
+  },
+  {
+   "id": "c84"
+  },
+  {
+   "id": "c86"
+  },
+  {
+   "id": "c89"
+  },
+  {
+   "id": "c91"
+  },
+  {
+   "id": "c92"
+  },
+  {
+   "id": "c94"
+  },
+  {
+   "id": "c95"
+  },
+  {
+   "id": "c96"
+  },
+  {
+   "id": "c97"
+  },
+  {
+   "id": "c98"
+  },
+  {
+   "id": "c99"
+  },
+  {
+   "id": "c101"
+  },
+  {
+   "id": "c103"
+  },
+  {
+   "id": "c104"
+  },
+  {
+   "id": "c105"
+  },
+  {
+   "id": "c110"
+  },
+  {
+   "id": "c111"
+  },
+  {
+   "id": "c112"
+  },
+  {
+   "id": "c113"
+  },
+  {
+   "id": "c116"
+  },
+  {
+   "id": "c117"
+  },
+  {
+   "id": "c118"
+  },
+  {
+   "id": "c120"
+  },
+  {
+   "id": "c124"
+  },
+  {
+   "id": "c125"
+  },
+  {
+   "id": "c127"
+  }
+ ],
+ "edges": [
+  {
+   "source": "c110",
+   "target": "c113",
+   "type": "sibling"
+  },
+  {
+   "source": "c111",
+   "target": "c110",
+   "type": "sibling"
+  },
+  {
+   "source": "c111",
+   "target": "c113",
+   "type": "sibling"
+  },
+  {
+   "source": "c111",
+   "target": "c127",
+   "type": "parent"
+  },
+  {
+   "source": "c112",
+   "target": "c118",
+   "type": "sibling"
+  },
+  {
+   "source": "c113",
+   "target": "c105",
+   "type": "sibling"
+  },
+  {
+   "source": "c12",
+   "target": "c4",
+   "type": "sibling"
+  },
+  {
+   "source": "c120",
+   "target": "c113",
+   "type": "sibling"
+  },
+  {
+   "source": "c124",
+   "target": "c125",
+   "type": "parent"
+  },
+  {
+   "source": "c13",
+   "target": "c17",
+   "type": "parent"
+  },
+  {
+   "source": "c13",
+   "target": "c43",
+   "type": "parent"
+  },
+  {
+   "source": "c13",
+   "target": "c44",
+   "type": "parent"
+  },
+  {
+   "source": "c14",
+   "target": "c6",
+   "type": "parent"
+  },
+  {
+   "source": "c15",
+   "target": "c13",
+   "type": "parent"
+  },
+  {
+   "source": "c15",
+   "target": "c2",
+   "type": "parent"
+  },
+  {
+   "source": "c19",
+   "target": "c33",
+   "type": "parent"
+  },
+  {
+   "source": "c2",
+   "target": "c5",
+   "type": "parent"
+  },
+  {
+   "source": "c22",
+   "target": "c101",
+   "type": "parent"
+  },
+  {
+   "source": "c22",
+   "target": "c9",
+   "type": "sibling"
+  },
+  {
+   "source": "c23",
+   "target": "c105",
+   "type": "parent"
+  },
+  {
+   "source": "c23",
+   "target": "c110",
+   "type": "parent"
+  },
+  {
+   "source": "c23",
+   "target": "c58",
+   "type": "sibling"
+  },
+  {
+   "source": "c23",
+   "target": "c82",
+   "type": "sibling"
+  },
+  {
+   "source": "c23",
+   "target": "c94",
+   "type": "sibling"
+  },
+  {
+   "source": "c24",
+   "target": "c23",
+   "type": "parent"
+  },
+  {
+   "source": "c24",
+   "target": "c41",
+   "type": "sibling"
+  },
+  {
+   "source": "c24",
+   "target": "c54",
+   "type": "sibling"
+  },
+  {
+   "source": "c24",
+   "target": "c58",
+   "type": "parent"
+  },
+  {
+   "source": "c24",
+   "target": "c82",
+   "type": "parent"
+  },
+  {
+   "source": "c24",
+   "target": "c97",
+   "type": "spouse"
+  },
+  {
+   "source": "c26",
+   "target": "c54",
+   "type": "parent"
+  },
+  {
+   "source": "c26",
+   "target": "c6",
+   "type": "spouse"
+  },
+  {
+   "source": "c3",
+   "target": "c4",
+   "type": "sibling"
+  },
+  {
+   "source": "c3",
+   "target": "c41",
+   "type": "parent"
+  },
+  {
+   "source": "c3",
+   "target": "c5",
+   "type": "sibling"
+  },
+  {
+   "source": "c3",
+   "target": "c6",
+   "type": "sibling"
+  },
+  {
+   "source": "c30",
+   "target": "c7",
+   "type": "sibling"
+  },
+  {
+   "source": "c34",
+   "target": "c7",
+   "type": "sibling"
+  },
+  {
+   "source": "c38",
+   "target": "c79",
+   "type": "parent"
+  },
+  {
+   "source": "c4",
+   "target": "c38",
+   "type": "parent"
+  },
+  {
+   "source": "c4",
+   "target": "c89",
+   "type": "parent"
+  },
+  {
+   "source": "c41",
+   "target": "c118",
+   "type": "spouse"
+  },
+  {
+   "source": "c41",
+   "target": "c54",
+   "type": "sibling"
+  },
+  {
+   "source": "c41",
+   "target": "c70",
+   "type": "spouse"
+  },
+  {
+   "source": "c42",
+   "target": "c24",
+   "type": "sibling"
+  },
+  {
+   "source": "c42",
+   "target": "c41",
+   "type": "sibling"
+  },
+  {
+   "source": "c42",
+   "target": "c54",
+   "type": "sibling"
+  },
+  {
+   "source": "c42",
+   "target": "c96",
+   "type": "parent"
+  },
+  {
+   "source": "c46",
+   "target": "c91",
+   "type": "sibling"
+  },
+  {
+   "source": "c5",
+   "target": "c24",
+   "type": "parent"
+  },
+  {
+   "source": "c5",
+   "target": "c6",
+   "type": "sibling"
+  },
+  {
+   "source": "c5",
+   "target": "c7",
+   "type": "sibling"
+  },
+  {
+   "source": "c54",
+   "target": "c82",
+   "type": "parent"
+  },
+  {
+   "source": "c6",
+   "target": "c24",
+   "type": "parent"
+  },
+  {
+   "source": "c6",
+   "target": "c41",
+   "type": "parent"
+  },
+  {
+   "source": "c6",
+   "target": "c60",
+   "type": "parent"
+  },
+  {
+   "source": "c6",
+   "target": "c7",
+   "type": "sibling"
+  },
+  {
+   "source": "c62",
+   "target": "c116",
+   "type": "parent"
+  },
+  {
+   "source": "c62",
+   "target": "c117",
+   "type": "parent"
+  },
+  {
+   "source": "c62",
+   "target": "c68",
+   "type": "parent"
+  },
+  {
+   "source": "c63",
+   "target": "c11",
+   "type": "sibling"
+  },
+  {
+   "source": "c67",
+   "target": "c23",
+   "type": "parent"
+  },
+  {
+   "source": "c67",
+   "target": "c24",
+   "type": "spouse"
+  },
+  {
+   "source": "c7",
+   "target": "c3",
+   "type": "sibling"
+  },
+  {
+   "source": "c74",
+   "target": "c27",
+   "type": "sibling"
+  },
+  {
+   "source": "c74",
+   "target": "c77",
+   "type": "sibling"
+  },
+  {
+   "source": "c74",
+   "target": "c83",
+   "type": "sibling"
+  },
+  {
+   "source": "c76",
+   "target": "c95",
+   "type": "parent"
+  },
+  {
+   "source": "c8",
+   "target": "c25",
+   "type": "sibling"
+  },
+  {
+   "source": "c82",
+   "target": "c111",
+   "type": "parent"
+  },
+  {
+   "source": "c82",
+   "target": "c113",
+   "type": "parent"
+  },
+  {
+   "source": "c86",
+   "target": "c103",
+   "type": "parent"
+  },
+  {
+   "source": "c86",
+   "target": "c59",
+   "type": "parent"
+  },
+  {
+   "source": "c86",
+   "target": "c84",
+   "type": "sibling"
+  },
+  {
+   "source": "c89",
+   "target": "c38",
+   "type": "sibling"
+  },
+  {
+   "source": "c9",
+   "target": "c41",
+   "type": "parent"
+  },
+  {
+   "source": "c9",
+   "target": "c42",
+   "type": "parent"
+  },
+  {
+   "source": "c92",
+   "target": "c105",
+   "type": "parent"
+  },
+  {
+   "source": "c95",
+   "target": "c11",
+   "type": "parent"
+  },
+  {
+   "source": "c95",
+   "target": "c63",
+   "type": "parent"
+  },
+  {
+   "source": "c96",
+   "target": "c94",
+   "type": "sibling"
+  },
+  {
+   "source": "c98",
+   "target": "c92",
+   "type": "sibling"
+  },
+  {
+   "source": "c99",
+   "target": "c104",
+   "type": "parent"
+  }
+ ]
+}

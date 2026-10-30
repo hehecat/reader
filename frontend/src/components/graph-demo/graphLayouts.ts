@@ -11,6 +11,7 @@
 import type cytoscape from "cytoscape";
 
 import type { LayoutMode } from "./graphElements";
+import { computeKinTreeLayout } from "./graphTreeLayout";
 
 /** fit 留白(屏幕 px): 除了节点半径还要容下标签 + 描边, 窄屏收紧 */
 export function fitPadding(cy: cytoscape.Core): number {
@@ -113,6 +114,7 @@ export function fitToContent(cy: cytoscape.Core, eles: cytoscape.CollectionRetur
   return zoom;
 }
 
+
 /**
  * 势力框的实体范围. 框宽由成员包围盒(含成员名字标签, 标签会往外溢出)撑开, 所以既要取 compound
  * 自己的 boundingBox(cytoscape 已经算上 padding 和成员标签), 也要取「成员 bbox + 内边距」兜底 ——
@@ -151,197 +153,12 @@ export function visibleElements(cy: cytoscape.Core): cytoscape.CollectionReturnV
   );
 }
 
-/** 家族树的分层间距 / 层内间距 */
-const KIN_LAYER_GAP = 132;
-const KIN_NODE_GAP = 128;
-/** 亲缘块之间的空隙: 两个没关系的家族之间要留白, 否则看着像一家 */
-const KIN_BLOCK_GAP = 208;
-
-interface KinBlock {
-  nodes: cytoscape.NodeSingular[];
-  width: number;
-  height: number;
-  x: number;
-  y: number;
-}
-
-/** 并查集: 把夫妻/手足并成「同一排里的一簇」 */
-function makeUnionFind(): { find: (id: string) => string; union: (a: string, b: string) => void } {
-  const parent = new Map<string, string>();
-  const find = (id: string): string => {
-    let root = parent.get(id) ?? id;
-    if (root !== id) {
-      root = find(root);
-      parent.set(id, root);
-    }
-    return root;
-  };
-  return {
-    find,
-    union: (a, b) => {
-      const ra = find(a);
-      const rb = find(b);
-      if (ra !== rb) parent.set(ra, rb);
-    },
-  };
-}
-
-/**
- * 一块连通亲缘子图的分层排布:
- *   - 代数用 parent 边做最长路径松弛(父上子下), 夫妻/手足再互相拉平到同一层;
- *   - 同一层里用并查集把夫妻/手足并成一簇, 簇按「父母的平均 x」排序(孩子落在父母下方),
- *     兄弟姐妹同代相邻、夫妻并排.
- * 不用 klay: klay 没有「同层约束」, 夫妻边会被当成父子边竖向摞起来(实测两人上下排队,
- * 看着像父子关系), 而 sibling 边会让整块被拉成长条.
- */
-function layoutKinComponent(componentNodes: cytoscape.NodeSingular[], componentEdges: cytoscape.EdgeSingular[]): KinBlock {
-  const depth = new Map<string, number>();
-  componentNodes.forEach((node) => depth.set(node.id(), 0));
-  const parentOf = new Map<string, string[]>();
-  for (const edge of componentEdges) {
-    if (String(edge.data("type")) !== "parent") continue;
-    const from = edge.source().id();
-    const to = edge.target().id();
-    const list = parentOf.get(to);
-    if (list) list.push(from);
-    else parentOf.set(to, [from]);
-  }
-
-  // 松弛出代数: parent → +1, spouse/sibling → 拉平. 有环也不会发散(代数封顶)
-  for (let iter = 0; iter < 40; iter += 1) {
-    let changed = false;
-    for (const edge of componentEdges) {
-      const type = String(edge.data("type"));
-      const a = edge.source().id();
-      const b = edge.target().id();
-      const da = depth.get(a) ?? 0;
-      const db = depth.get(b) ?? 0;
-      if (type === "parent") {
-        const next = Math.min(da + 1, 12);
-        if (db < next) {
-          depth.set(b, next);
-          changed = true;
-        }
-      } else {
-        const merged = Math.min(Math.max(da, db), 12);
-        if (da !== merged) {
-          depth.set(a, merged);
-          changed = true;
-        }
-        if (db !== merged) {
-          depth.set(b, merged);
-          changed = true;
-        }
-      }
-    }
-    if (!changed) break;
-  }
-
-  // 同层里夫妻/手足并簇
-  const uf = makeUnionFind();
-  for (const edge of componentEdges) {
-    const type = String(edge.data("type"));
-    if (type === "parent") continue;
-    uf.union(edge.source().id(), edge.target().id());
-  }
-
-  const layers = new Map<number, cytoscape.NodeSingular[]>();
-  for (const node of componentNodes) {
-    const layer = depth.get(node.id()) ?? 0;
-    const list = layers.get(layer);
-    if (list) list.push(node);
-    else layers.set(layer, [node]);
-  }
-
-  const placed = new Map<string, number>();
-  let maxX = 0;
-  let maxY = 0;
-  // 某些块(比如只有夫妻两人、双方父母都不在图里)松弛后最低代可能不是 0, 归一化到 0,
-  // 否则整块会被顶到下面留出一大片空白
-  const minLayer = Math.min(...layers.keys());
-  for (const rawLayer of [...layers.keys()].sort((a, b) => a - b)) {
-    const layer = rawLayer - minLayer;
-    const list = layers.get(layer) ?? [];
-    const clusters = new Map<string, cytoscape.NodeSingular[]>();
-    for (const node of list) {
-      const key = uf.find(node.id());
-      const bucket = clusters.get(key);
-      if (bucket) bucket.push(node);
-      else clusters.set(key, [node]);
-    }
-    // 簇的排序键: 簇内成员的父母水平位置均值(没父母就排到右边, 保持稳定)
-    const ordered = [...clusters.values()].map((members) => {
-      const xs: number[] = [];
-      for (const member of members) {
-        for (const parentId of parentOf.get(member.id()) ?? []) {
-          const x = placed.get(parentId);
-          if (x !== undefined) xs.push(x);
-        }
-      }
-      const anchor = xs.length > 0 ? xs.reduce((sum, x) => sum + x, 0) / xs.length : Number.MAX_SAFE_INTEGER;
-      return { members, anchor };
-    });
-    ordered.sort((a, b) => a.anchor - b.anchor || (a.members[0]?.id() ?? "").localeCompare(b.members[0]?.id() ?? ""));
-
-    let cursorX = 0;
-    const y = layer * KIN_LAYER_GAP;
-    for (const cluster of ordered) {
-      for (const node of cluster.members) {
-        node.position({ x: cursorX, y });
-        placed.set(node.id(), cursorX);
-        cursorX += KIN_NODE_GAP;
-        maxX = Math.max(maxX, cursorX - KIN_NODE_GAP);
-      }
-    }
-    maxY = Math.max(maxY, y);
-  }
-
-  return { nodes: componentNodes, width: maxX, height: maxY, x: 0, y: 0 };
-}
-
-/** 亲缘块按货架打包: 一列一列塞, 行宽按画布长宽比挑, 免得几十个两块之家排成一条 5000px 的长龙 */
-function packKinBlocks(blocks: KinBlock[], usableWidth: number, usableHeight: number): void {
-  const candidates = [700, 900, 1100, 1300, 1500, 1800, 2200, 2800, 3600];
-  let best: { rowWidth: number; score: number } | null = null;
-  for (const rowWidth of candidates) {
-    let cursorX = 0;
-    let cursorY = 0;
-    let rowHeight = 0;
-    let totalWidth = 0;
-    for (const block of blocks) {
-      if (cursorX > 0 && cursorX + block.width > rowWidth) {
-        cursorY += rowHeight + KIN_BLOCK_GAP;
-        cursorX = 0;
-        rowHeight = 0;
-      }
-      cursorX += block.width + KIN_BLOCK_GAP;
-      rowHeight = Math.max(rowHeight, block.height);
-      totalWidth = Math.max(totalWidth, cursorX);
-    }
-    const totalHeight = cursorY + rowHeight;
-    const score = Math.min(usableWidth / Math.max(totalWidth, 1), usableHeight / Math.max(totalHeight, 1));
-    if (!best || score > best.score) best = { rowWidth, score };
-  }
-  const rowWidth = best?.rowWidth ?? 1500;
-
-  let cursorX = 0;
-  let cursorY = 0;
-  let rowHeight = 0;
-  for (const block of blocks) {
-    if (cursorX > 0 && cursorX + block.width > rowWidth) {
-      cursorY += rowHeight + KIN_BLOCK_GAP;
-      cursorX = 0;
-      rowHeight = 0;
-    }
-    block.x = cursorX;
-    block.y = cursorY;
-    cursorX += block.width + KIN_BLOCK_GAP;
-    rowHeight = Math.max(rowHeight, block.height);
-  }
-}
-
 /**
  * 家族树 = 亲缘子图(只算 parent/spouse/sibling 三类边).
+ *
+ * 坐标计算全部在 graphTreeLayout.ts 里(纯函数, 零 cytoscape 依赖, 有单测):
+ * tidy tree 一行一行往下排, 父单元居中于子代跨度, 块间留白按货架打包.
+ * 这里只做三件事: 把可见元素喂进去、把坐标落到节点上、把世代标尺交给装饰层.
  *
  * 不按 generation 归行了: 冻结数据里 0 代有 106 人, 其中绝大多数跟谁都没有亲缘关系,
  * 按代排只会得到一张 106 人的大栅格 —— 树完全看不出来. 现在只画亲缘子图
@@ -352,30 +169,29 @@ export function layoutFamilyTree(cy: cytoscape.Core, eles: cytoscape.CollectionR
   if (nodes.length === 0) return cy.zoom();
 
   const KIN_TYPES = new Set(["parent", "spouse", "sibling"]);
-  const kinEdges = eles.edges().filter((edge) => KIN_TYPES.has(String(edge.data("type"))));
-  const subgraph = kinEdges.connectedNodes().union(kinEdges) as cytoscape.CollectionReturnValue;
-  if (subgraph.empty()) return fitToContent(cy, eles);
-
-  const blocks: KinBlock[] = [];
-  const components = subgraph.components() as unknown as cytoscape.CollectionReturnValue;
-  components.forEach((component) => {
-    const compNodes = component.nodes().toArray() as cytoscape.NodeSingular[];
-    const compEdges = component.edges().toArray() as cytoscape.EdgeSingular[];
-    if (compNodes.length === 0) return;
-    blocks.push(layoutKinComponent(compNodes, compEdges));
-  });
-  blocks.sort((a, b) => b.nodes.length - a.nodes.length || b.height - a.height);
-
+  const kinEdges = eles
+    .edges()
+    .filter((edge) => KIN_TYPES.has(String(edge.data("type"))))
+    .filter((edge) => edge.isEdge()) as unknown as cytoscape.EdgeCollection;
   const usable = usableCanvas(cy);
-  packKinBlocks(blocks, usable.width, usable.height);
+  const layout = computeKinTreeLayout(
+    nodes.map((node) => ({ id: node.id() })),
+    kinEdges.map((edge) => ({
+      source: edge.source().id(),
+      target: edge.target().id(),
+      type: String(edge.data("type")),
+    })),
+    { viewport: { width: usable.width, height: usable.height } },
+  );
+
+  // 世代标尺的锚点: 页面按它在画布上画「第 N 代」浮层(纯 DOM, 不进 cytoscape 元素表,
+  // 所以不会污染人数/家数统计和搜索)
+  cy.scratch("gd-kin-rows", layout.rows);
 
   cy.batch(() => {
-    for (const block of blocks) {
-      const dx = block.x;
-      const dy = block.y;
-      block.nodes.forEach((node) => {
-        node.position({ x: node.position("x") + dx, y: node.position("y") + dy });
-      });
+    for (const node of nodes) {
+      const point = layout.positions.get(node.id());
+      if (point) node.position(point);
     }
   });
 
@@ -666,6 +482,8 @@ export function runLayout(
   // 面板/图例的开合会改变容器尺寸, 不先同步的话随后的 fit 会拿旧宽高算缩放
   cy.resize();
   if (mode === "tree") return layoutFamilyTree(cy, eles);
+  // 非家族树模式没有世代, 标尺锚点必须清掉, 否则浮层会留在画布上
+  cy.scratch("gd-kin-rows", null);
   if (mode === "faction") return layoutFactionMap(cy, eles);
   return layoutPanorama(cy, eles);
 }

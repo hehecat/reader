@@ -5,7 +5,7 @@
  * `/graph-demo-data.json`; 文件缺失或校验不过时用文件内自带的兜底数据, 保证一打开就有东西看.
  *
  * 三个视图:
- *   家族树  klay 分层 + 按 generation 归行, 看血缘世系
+ *   家族树  tidy tree(父子严格分行 + 父单元居中于子代跨度 + 世代标尺), 看血缘世系
  *   势力图  compound 分组, 看门派归属(成员网格按标签高度定距)
  *   全景    fcose 力导向, 看关系极性与冲突
  *
@@ -36,6 +36,7 @@ import {
 import { DETOUR_MIN_ZOOM, routeEdges } from "@/components/graph-demo/graphEdgeRoutes";
 import { labelFontScale, syncEdgeLabels, syncLabels } from "@/components/graph-demo/graphLabels";
 import { fitToContent, runLayout, visibleElements, type Occluder } from "@/components/graph-demo/graphLayouts";
+import type { KinTreeRulerRow } from "@/components/graph-demo/graphTreeLayout";
 import {
   buildGraphStylesheet,
   detectGraphTheme,
@@ -504,6 +505,8 @@ function GraphDemoView({ injected = null, onRegenerate = null }: GraphDemoViewPr
   const topBarRef = React.useRef<HTMLDivElement | null>(null);
   const toolbarRef = React.useRef<HTMLDivElement | null>(null);
   const legendAreaRef = React.useRef<HTMLDivElement | null>(null);
+  /** 世代标尺的装饰层(纯 DOM, 不进 cytoscape 元素表, 所以不参与人数/家数统计和搜索) */
+  const rulerRef = React.useRef<HTMLDivElement | null>(null);
   const measureOccludersRef = React.useRef<(() => void) | null>(null);
   const cyRef = React.useRef<cytoscape.Core | null>(null);
   const apiRef = React.useRef<GraphApi | null>(null);
@@ -614,6 +617,16 @@ function GraphDemoView({ injected = null, onRegenerate = null }: GraphDemoViewPr
     const hit = families.find((family) => family.id === treeFamily);
     return hit ? new Set(hit.memberIds) : null;
   }, [families, treeFamily]);
+  // 家族树默认只看最大的那一家. 「全部」把 71 人摊成 6 家 14 个碎块, 全图 fit 后只剩 26% 缩放,
+  // 一半人名退化成一个点 —— 用户的原话是「看着有点乱」. 一家一图才是这个视图的用法, 点「全部」
+  // 随时能回到整张家谱(所以只自动选一次, 之后听用户的).
+  const autoFamilyPicked = React.useRef(false);
+  React.useEffect(() => {
+    if (autoFamilyPicked.current || families.length < 2) return;
+    autoFamilyPicked.current = true;
+    const biggest = families[0];
+    if (biggest !== undefined && biggest.size >= 6) setTreeFamily(biggest.id);
+  }, [families]);
   // 章节提交时要重放视图过滤, 用 ref 兜住最新条件
   React.useEffect(() => {
     filterRef.current = { minDegree, showIntraFaction, treeFamilyIds };
@@ -683,6 +696,8 @@ function GraphDemoView({ injected = null, onRegenerate = null }: GraphDemoViewPr
   React.useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    // 标尺装饰层的容器: 在这里取一次, 别在 cleanup 里读 ref(那时 ref 可能已经指向新节点)
+    const rulerHost = rulerRef.current;
 
     let fontScale = 1;
     // 手机(390px)下势力框标题要降一档字号: 与 labelScale 一样, 只在变化时重建样式表
@@ -897,6 +912,47 @@ function GraphDemoView({ injected = null, onRegenerate = null }: GraphDemoViewPr
       }
     });
 
+    // ---- 世代标尺(装饰层) ----
+    // 锚点由 layoutFamilyTree 写进 cy.scratch("gd-kin-rows"), 这里画成一列小签:
+    // 主块每一行一枚「第 N 代」, 其它独立家系只在左上角标一次「独立家系」(不编号, 免得被读成同代),
+    // 文案由纯函数算好. 固定字号(不随 zoom 缩), 缩到 40% 也能读.
+    // 刻意不用假人节点: 假节点会被算进人数、家数和搜索, 还会被 cy.png 导出.
+    let rulerSignature = "";
+    let rulerMarks: { el: HTMLDivElement; x: number; y: number }[] = [];
+    const syncKinRuler = () => {
+      const host = rulerHost;
+      if (!host) return;
+      const rows = (cy.scratch("gd-kin-rows") as KinTreeRulerRow[] | null | undefined) ?? [];
+      const signature = rows.map((row) => `${row.x}|${row.y}|${row.text}`).join(",");
+      if (signature !== rulerSignature) {
+        rulerSignature = signature;
+        rulerMarks = [];
+        host.replaceChildren();
+        for (const row of rows) {
+          const mark = document.createElement("div");
+          mark.textContent = row.text;
+          mark.className =
+            "absolute left-0 top-0 rounded-md border border-border/70 bg-surface/85 px-1.5 py-0.5 text-[11px] font-medium leading-[1.35] text-muted-foreground shadow-sm backdrop-blur-sm";
+          host.appendChild(mark);
+          rulerMarks.push({ el: mark, x: row.x, y: row.y });
+        }
+      }
+      if (rulerMarks.length === 0) return;
+      const pan = cy.pan();
+      const zoom = cy.zoom();
+      for (const mark of rulerMarks) {
+        const screenX = pan.x + mark.x * zoom;
+        const screenY = pan.y + mark.y * zoom;
+        // 优先贴在这一行左边缘的外侧; 留白不够(fit 之后左右各只有 fitPadding)就贴视口左边
+        const width = mark.el.offsetWidth || 54;
+        const left = Math.max(screenX - width - 8, 6);
+        mark.el.style.transform = `translate(${Math.round(left)}px, ${Math.round(screenY)}px) translateY(-50%)`;
+      }
+    };
+
+    // 视口一动(pan/zoom/fit)标尺就要跟着走, 否则会浮在错的代上
+    cy.on("viewport", () => syncKinRuler());
+
     // 主题切换(明/暗/护眼)时重建样式表: canvas 读不到 CSS 变量
     const themeObserver = new MutationObserver(() => {
       syncFactionTitleFont(cy, fontScale);
@@ -944,6 +1000,7 @@ function GraphDemoView({ injected = null, onRegenerate = null }: GraphDemoViewPr
         });
       });
       fitZoomRef.current = layoutAndLabel(cy, mode);
+      syncKinRuler();
       routesOn = cy.zoom() >= DETOUR_MIN_ZOOM;
       applyFontScale();
       syncEdgeLabelsHere();
@@ -968,6 +1025,10 @@ function GraphDemoView({ injected = null, onRegenerate = null }: GraphDemoViewPr
       themeObserver.disconnect();
       apiRef.current = null;
       measureOccludersRef.current = null;
+      // 切模式/切章都会重建这张图, 标尺小签跟着一起清掉, 免得留在画布上指错代
+      rulerMarks = [];
+      rulerSignature = "";
+      rulerHost?.replaceChildren();
       cy.destroy();
       cyRef.current = null;
     };
@@ -1036,6 +1097,7 @@ function GraphDemoView({ injected = null, onRegenerate = null }: GraphDemoViewPr
     if (!cy) return;
     apiRef.current?.select(null);
     measureOccludersRef.current?.();
+    // 适配视图 = 全图 fit: 家族树默认按最大一家 + 贴合画布, 这一步才是「一眼看全」
     fitZoomRef.current = layoutAndLabel(cy, modeRef.current);
   };
 
@@ -1072,6 +1134,13 @@ function GraphDemoView({ injected = null, onRegenerate = null }: GraphDemoViewPr
         {/* 注意: 这里不能用 absolute inset-0 —— cytoscape 初始化时会把容器改成 position: relative,
             绝对定位一旦失效高度就塌成 0, 画布什么都不画. 用 h-full w-full 让高度由父容器撑开. */}
         <div ref={containerRef} className="h-full w-full" />
+
+        {/* 世代标尺: 纯 DOM 装饰层, aria-hidden 且不吃事件; 只在家族树模式下有内容 */}
+        <div
+          ref={rulerRef}
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-10 overflow-hidden"
+        />
 
         {/* 顶部: 标题/状态 + 布局/搜索/导出 */}
         <div

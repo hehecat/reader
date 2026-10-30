@@ -39,13 +39,25 @@ export interface RelationVisual {
   arrow: boolean;
   /** 极性: 血亲 / 正向 / 负向 / 中性 —— 全景布局用它强调冲突 */
   polarity: "kin" | "pos" | "neg" | "neutral";
+  /** 线条透明度(默认 1). 手足边是同父同母的冗余信息, 淡一档让 parent 边当主角 */
+  opacity?: number;
 }
 
 export const RELATION_VISUAL: Record<RelationType, RelationVisual> = {
   parent: { name: "亲子", color: "#8f949b", lineStyle: "solid", width: 2, arrow: false, polarity: "kin" },
   // 夫妻: cytoscape 的边只有 solid/dashed/dotted, 没有双线, 用粉紫长虚线区分
   spouse: { name: "夫妻", color: "#cf6d92", lineStyle: "dashed", width: 2.2, arrow: false, polarity: "kin" },
-  sibling: { name: "手足", color: "#b3b8be", lineStyle: "solid", width: 1.1, arrow: false, polarity: "kin" },
+  // 手足边: 同一对父母之间的兄弟姊妹边在家族树里是「冗余」的(parent 边已经把上下代说清楚了),
+  // 家族树按代排行之后它会横穿好几列, 所以再淡一档 —— 只当参考线, 不跟 parent 边抢注意力
+  sibling: {
+    name: "手足",
+    color: "#c2c7cd",
+    lineStyle: "solid",
+    width: 1,
+    arrow: false,
+    polarity: "kin",
+    opacity: 0.5,
+  },
   master: { name: "师承", color: "#3d7ee0", lineStyle: "solid", width: 2, arrow: true, polarity: "pos" },
   disciple: { name: "弟子", color: "#3aa6d8", lineStyle: "solid", width: 1.8, arrow: true, polarity: "pos" },
   ally: { name: "同盟", color: "#2f9e64", lineStyle: "solid", width: 1.7, arrow: false, polarity: "pos" },
@@ -251,6 +263,7 @@ export function buildGraphStylesheet(theme: GraphTheme, options: StylesheetOptio
         width: visual.width,
         "target-arrow-shape": visual.arrow ? "triangle" : "none",
         "target-arrow-color": visual.color,
+        ...(visual.opacity === undefined ? {} : { opacity: visual.opacity }),
       },
     });
   }
