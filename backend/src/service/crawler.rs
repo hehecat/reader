@@ -1262,6 +1262,31 @@ pub async fn session_for(ns: &str, url: &str) -> Option<(String, String)> {
 
 // ==================== 书源抓取（带 cookie + Cloudflare 质询绕过） ====================
 
+/// 抓取作用域：决定是否允许「浏览器优先」（`READER_BROWSER_FIRST` + 反爬 host 缓存）。
+///
+/// `browser_first_enabled()` 默认 true，且 `browser_needed()` 是**进程内全局** host 缓存
+/// （30 分钟 TTL，与书源/命名空间/调用场景无关）——只关 `browser_first_enabled()` 会被它
+/// 绕过，所以必须按作用域在 `(A || B)` **整条表达式的外层**短路。
+///
+/// 搜索是广度扇出（一次 full_scan 派发 ~134 源），单次浏览器导航 5~30s，会把单源墙钟
+/// 拖到 110s+；书信息/目录/正文是**深度串行**抓取，需要浏览器指纹绕反爬，行为
+/// 必须与历史完全一致。CF 求解本身（`CF_SOLVE_MAX_WAIT_MS`）不在本参数管辖范围。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FetchScope {
+    /// 书信息/目录/正文/登录/发现/OPDS/调试等一切非搜索路径——行为不变（默认）
+    #[default]
+    Book,
+    /// 搜索路径：浏览器优先整条表达式（含 `browser_needed` 全局缓存）外层短路
+    Search,
+}
+
+impl FetchScope {
+    /// 该作用域是否允许「浏览器优先」，也决定是否向反爬 host 缓存 pre-warm 写入
+    fn browser_first_allowed(self) -> bool {
+        matches!(self, Self::Book)
+    }
+}
+
 /// 书源 GET（自动附加书源 cookie；CF 质询自动转 FlareSolverr；proxy = 书源级代理——
 /// 求解浏览器出口，None = 回退环境变量 READER_OBSCURA_PROXY；
 /// charset 非空非 utf-8 时 URL query 值按该编码百分号编码——legacy analyzeFields）
@@ -1273,7 +1298,41 @@ pub async fn http_get(
     charset: Option<&str>,
     proxy: Option<&str>,
 ) -> Result<FetchResponse> {
-    http_fetch(ns, url, headers, timeout_secs, "GET", None, charset, proxy).await
+    http_get_scoped(
+        FetchScope::Book,
+        ns,
+        url,
+        headers,
+        timeout_secs,
+        charset,
+        proxy,
+    )
+    .await
+}
+
+/// [`http_get`] 的作用域版本：搜索路径传 [`FetchScope::Search`] 关闭浏览器优先
+#[allow(clippy::too_many_arguments)] // 抓取/OPDS 内部管线参数，拆结构体会让调用点更长，暂不拆
+pub async fn http_get_scoped(
+    scope: FetchScope,
+    ns: &str,
+    url: &str,
+    headers: &HashMap<String, String>,
+    timeout_secs: u64,
+    charset: Option<&str>,
+    proxy: Option<&str>,
+) -> Result<FetchResponse> {
+    http_fetch(
+        scope,
+        ns,
+        url,
+        headers,
+        timeout_secs,
+        "GET",
+        None,
+        charset,
+        proxy,
+    )
+    .await
 }
 
 /// 书源 POST（自动附加书源 cookie；CF 质询自动转 FlareSolverr；proxy 同 http_get）
@@ -1286,7 +1345,43 @@ pub async fn http_post(
     charset: Option<&str>,
     proxy: Option<&str>,
 ) -> Result<FetchResponse> {
-    http_fetch(ns, url, headers, timeout_secs, "POST", body, charset, proxy).await
+    http_post_scoped(
+        FetchScope::Book,
+        ns,
+        url,
+        headers,
+        timeout_secs,
+        body,
+        charset,
+        proxy,
+    )
+    .await
+}
+
+/// [`http_post`] 的作用域版本（POST 本就不会浏览器优先，scope 只影响 CF 求解后的 pre-warm）
+#[allow(clippy::too_many_arguments)] // 抓取/OPDS 内部管线参数，拆结构体会让调用点更长，暂不拆
+pub async fn http_post_scoped(
+    scope: FetchScope,
+    ns: &str,
+    url: &str,
+    headers: &HashMap<String, String>,
+    timeout_secs: u64,
+    body: Option<&str>,
+    charset: Option<&str>,
+    proxy: Option<&str>,
+) -> Result<FetchResponse> {
+    http_fetch(
+        scope,
+        ns,
+        url,
+        headers,
+        timeout_secs,
+        "POST",
+        body,
+        charset,
+        proxy,
+    )
+    .await
 }
 
 /// [`http_get`] 带 legacy UrlOption.retry 重试：retry=None/0 → 单次请求；
@@ -1301,8 +1396,33 @@ pub async fn http_get_retry(
     proxy: Option<&str>,
     retry: Option<u32>,
 ) -> Result<FetchResponse> {
+    http_get_retry_scoped(
+        FetchScope::Book,
+        ns,
+        url,
+        headers,
+        timeout_secs,
+        charset,
+        proxy,
+        retry,
+    )
+    .await
+}
+
+/// [`http_get_retry`] 的作用域版本（搜索路径传 [`FetchScope::Search`]）
+#[allow(clippy::too_many_arguments)] // 抓取/OPDS 内部管线参数，拆结构体会让调用点更长，暂不拆
+pub async fn http_get_retry_scoped(
+    scope: FetchScope,
+    ns: &str,
+    url: &str,
+    headers: &HashMap<String, String>,
+    timeout_secs: u64,
+    charset: Option<&str>,
+    proxy: Option<&str>,
+    retry: Option<u32>,
+) -> Result<FetchResponse> {
     fetch_with_retry(retry, || {
-        http_get(ns, url, headers, timeout_secs, charset, proxy)
+        http_get_scoped(scope, ns, url, headers, timeout_secs, charset, proxy)
     })
     .await
 }
@@ -1319,8 +1439,35 @@ pub async fn http_post_retry(
     proxy: Option<&str>,
     retry: Option<u32>,
 ) -> Result<FetchResponse> {
+    http_post_retry_scoped(
+        FetchScope::Book,
+        ns,
+        url,
+        headers,
+        timeout_secs,
+        body,
+        charset,
+        proxy,
+        retry,
+    )
+    .await
+}
+
+/// [`http_post_retry`] 的作用域版本（搜索路径传 [`FetchScope::Search`]）
+#[allow(clippy::too_many_arguments)] // 抓取/OPDS 内部管线参数，拆结构体会让调用点更长，暂不拆
+pub async fn http_post_retry_scoped(
+    scope: FetchScope,
+    ns: &str,
+    url: &str,
+    headers: &HashMap<String, String>,
+    timeout_secs: u64,
+    body: Option<&str>,
+    charset: Option<&str>,
+    proxy: Option<&str>,
+    retry: Option<u32>,
+) -> Result<FetchResponse> {
     fetch_with_retry(retry, || {
-        http_post(ns, url, headers, timeout_secs, body, charset, proxy)
+        http_post_scoped(scope, ns, url, headers, timeout_secs, body, charset, proxy)
     })
     .await
 }
@@ -1351,6 +1498,7 @@ where
 /// 书源抓取统一入口：cookie 注入 → 直连 → CF 质询检测 → FlareSolverr 兜底
 #[allow(clippy::too_many_arguments)] // 抓取/OPDS 内部管线参数，拆结构体会让调用点更长，暂不拆
 async fn http_fetch(
+    scope: FetchScope,
     ns: &str,
     url: &str,
     headers: &HashMap<String, String>,
@@ -1360,8 +1508,18 @@ async fn http_fetch(
     charset: Option<&str>,
     proxy: Option<&str>,
 ) -> Result<FetchResponse> {
-    let first =
-        http_fetch_inner(ns, url, headers, timeout_secs, method, body, charset, proxy).await;
+    let first = http_fetch_inner(
+        scope,
+        ns,
+        url,
+        headers,
+        timeout_secs,
+        method,
+        body,
+        charset,
+        proxy,
+    )
+    .await;
     match first {
         Err(e) if proxy.is_none() => {
             let conn_fail = e
@@ -1384,8 +1542,18 @@ async fn http_fetch(
                         "DoH 解析 {h} -> {ips:?}（本地 DNS 疑似劫持/fake-ip）——钉扎重试"
                     );
                     pin_dns(&h, ips);
-                    http_fetch_inner(ns, url, headers, timeout_secs, method, body, charset, proxy)
-                        .await
+                    http_fetch_inner(
+                        scope,
+                        ns,
+                        url,
+                        headers,
+                        timeout_secs,
+                        method,
+                        body,
+                        charset,
+                        proxy,
+                    )
+                    .await
                 }
                 None => Err(e),
             }
@@ -1396,6 +1564,7 @@ async fn http_fetch(
 
 #[allow(clippy::too_many_arguments)] // 抓取/OPDS 内部管线参数，拆结构体会让调用点更长，暂不拆
 async fn http_fetch_inner(
+    scope: FetchScope,
     ns: &str,
     url: &str,
     headers: &HashMap<String, String>,
@@ -1504,9 +1673,7 @@ async fn http_fetch_inner(
     // ② 浏览器优先（默认开启）：GET 先经内置 camoufox 导航，跳过 reqwest 直连。
     //    浏览器后端不可用时自动回退直连（不因缺浏览器而整体不可用）。
     tracing::debug!("http_fetch 直连 {method} {url}");
-    let browser_first_get = (browser_first_enabled() || browser_needed(&url))
-        && method.eq_ignore_ascii_case("GET")
-        && browser_solver_available();
+    let browser_first_get = browser_first_for(scope, method, &url);
     let resp = if browser_first_get {
         // 浏览器优先模式：跳过 reqwest 直连，直接进入下方浏览器求解链；
         // status=0 是“未直连”哨兵（不伪造 200，避免被当作真实成功响应）
@@ -1549,7 +1716,9 @@ async fn http_fetch_inner(
                 {
                     match solve_cf_builtin(ns, &url, &cookie, proxy).await {
                         Ok((fallback, merged, solved_ua)) => {
-                            if cf_browser_available() {
+                            // 搜索作用域不写全局 host 缓存：否则一次搜索把书信息/正文路径
+                            // 也拖进浏览器优先（30 分钟 TTL 的双向污染）
+                            if cf_browser_available() && scope.browser_first_allowed() {
                                 mark_browser_needed(&url);
                             }
                             let retry_cookie = merged.clone().unwrap_or_default();
@@ -1642,7 +1811,8 @@ async fn http_fetch_inner(
                 // 未配置 FLARESOLVERR_URL → 内置浏览器求解（进程内 CDP，不依赖外部容器；
                 // 带书源级代理 proxy——camoufox spawn --proxy）
                 let solved = solve_cf_builtin(ns, &url, &cookie, proxy).await?;
-                if cf_browser_available() {
+                // 同上：搜索作用域不污染全局 host 缓存
+                if cf_browser_available() && scope.browser_first_allowed() {
                     mark_browser_needed(&url);
                 }
                 Ok(solved)
@@ -1779,6 +1949,15 @@ fn browser_first_enabled() -> bool {
 /// 不可用时浏览器优先自动回退直连。
 fn browser_solver_available() -> bool {
     crate::service::browser::is_browser_available()
+}
+
+/// 浏览器优先判定（纯函数，便于单测）：`scope` 在最外层短路**整条**表达式——
+/// 搜索作用域直接 false，连 `browser_needed()` 的进程内 host 缓存都不读。
+fn browser_first_for(scope: FetchScope, method: &str, url: &str) -> bool {
+    scope.browser_first_allowed()
+        && method.eq_ignore_ascii_case("GET")
+        && (browser_first_enabled() || browser_needed(url))
+        && browser_solver_available()
 }
 
 /// 反爬域名自动优先缓存：内置浏览器成功解过一次质询后，该域名 30 分钟内 GET 直接
@@ -3322,6 +3501,30 @@ mod tests {
         mark_browser_needed("https://Example.COM/some/path");
         assert!(browser_needed("https://example.com/other"));
         assert!(!browser_needed("https://other.example.com/"));
+    }
+
+    /// #3 回归：搜索作用域必须把整条 `(browser_first_enabled || browser_needed)` 短路成
+    /// false——即使 host 已在**进程内全局**缓存里（只关 env 开关救不了这种情况）。
+    #[test]
+    fn test_fetch_scope_search_never_browser_first() {
+        let url = "https://scope-test.example.com/search?q=1";
+        mark_browser_needed(url);
+        assert!(
+            browser_needed(url),
+            "前置：host 已在全局缓存（30min TTL）里"
+        );
+        assert!(
+            !browser_first_for(FetchScope::Search, "GET", url),
+            "搜索作用域下 GET 也不得走浏览器优先"
+        );
+        // 非 GET 本来就 false（行为不变）
+        assert!(!browser_first_for(FetchScope::Book, "POST", url));
+        assert!(!browser_first_for(FetchScope::Search, "POST", url));
+        // 书信息/正文作用域：GET 的判定与历史表达式逐位一致
+        assert_eq!(
+            browser_first_for(FetchScope::Book, "GET", url),
+            (browser_first_enabled() || browser_needed(url)) && browser_solver_available()
+        );
     }
 
     // ==================== charset 表单/query 字段编码（legacy analyzeFields） ====================

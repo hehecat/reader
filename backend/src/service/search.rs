@@ -559,11 +559,81 @@ pub(crate) async fn concurrent_rate_acquire_raw(ns: &str, source_url: &str, rate
     win.acquire().await;
 }
 
+/// 单源端到端 deadline 默认值（秒）。
+///
+/// 60s 是共识档：45s 会把量产 ~40~48s 的 12 个源整体截断（命中 111 → 99），60s 只
+/// 截断「110s 级」尾部源（实测命中 111 → 110）。
+const SEARCH_SOURCE_DEADLINE_DEFAULT_SECS: u64 = 60;
+
+/// 单源端到端 deadline：`READER_SEARCH_SOURCE_DEADLINE_SECS`
+/// - 未设置/解析失败 → 默认 60s
+/// - `0` → 关闭（None = 不包 `tokio::time::timeout`，回到改造前行为）
+/// - 其余 → clamp(5, 120)：5s 以下等于人为制造超时，120s 以上没有意义（已知最长 ~120s）
+fn search_source_deadline() -> Option<Duration> {
+    let secs = std::env::var("READER_SEARCH_SOURCE_DEADLINE_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(SEARCH_SOURCE_DEADLINE_DEFAULT_SECS);
+    deadline_from_secs(secs)
+}
+
+/// env 秒数 → deadline（纯函数，便于单测；0 = None = 关闭）
+fn deadline_from_secs(secs: u64) -> Option<Duration> {
+    if secs == 0 {
+        None
+    } else {
+        Some(Duration::from_secs(secs.clamp(5, 120)))
+    }
+}
+
 /// 执行单个书源搜索；搜索成功（命中 ≥1 条）时记录书源使用统计（use_count+1）
 ///
 /// legacy 对齐：抓取报错时标记运行期失效快照（getInvalidBookSources 600 秒内直接返回），
 /// 成功则清除该源标记。
+///
+/// 外层再包一层端到端 deadline（见 [`search_source_deadline`]）：超时以 `Elapsed` 错误
+/// 返回，派发处 `SearchOutcome::from_error` 会把它归成 `Timeout`（只记 timeouts，不计连败）。
 pub async fn search_one_source(
+    storage: &Storage,
+    ns: &str,
+    source: &BookSource,
+    key: &str,
+    page: i64,
+    timeout_secs: u64,
+) -> Result<Vec<SearchBook>> {
+    // 单源端到端 deadline（#2）：单次 HTTP 的 timeout 参数是**乘性**的——
+    // `for attempt in 0..=retries`（默认 2）× DoH 钉扎重跑（2 次）≈ 4 次 60s，
+    // 再叠 CF 求解预算 30s，于是 timeout=15 也可能跑出 110~120s。把 timeout 调小没用
+    // （实测 timeout=3 仍 45s），只能在整条单源链路外面加一层绝对上界。
+    let Some(deadline) = search_source_deadline() else {
+        return search_one_source_unbounded(storage, ns, source, key, page, timeout_secs).await;
+    };
+    match tokio::time::timeout(
+        deadline,
+        search_one_source_unbounded(storage, ns, source, key, page, timeout_secs),
+    )
+    .await
+    {
+        Ok(res) => res,
+        Err(elapsed) => {
+            // 保留 Elapsed 本体（`is_timeout_error` 靠 downcast 归类 Timeout，
+            // 派发处 SearchOutcome::from_error → 记 attempts+1/timeouts+1，连败不涨）
+            tracing::warn!(
+                "搜索单源 deadline 超时 url={} deadline={}s ns={ns} book_source={} —— 按 Timeout 记账（不计连败）",
+                source.book_source_url,
+                deadline.as_secs(),
+                source.book_source_name,
+            );
+            Err(anyhow::Error::new(elapsed).context(format!(
+                "搜索单源端到端超时（deadline {}s，READER_SEARCH_SOURCE_DEADLINE_SECS=0 可关闭）",
+                deadline.as_secs()
+            )))
+        }
+    }
+}
+
+/// 单源完整搜索（无端到端 deadline 版本，逻辑与历史完全一致）
+async fn search_one_source_unbounded(
     storage: &Storage,
     ns: &str,
     source: &BookSource,
@@ -694,7 +764,8 @@ async fn search_one_source_impl(
             Err(e) => {
                 tracing::warn!("webView 搜索渲染失败，回退 HTTP [{url}]: {e}");
                 if method.eq_ignore_ascii_case("POST") {
-                    crawler::http_post_retry(
+                    crawler::http_post_retry_scoped(
+                        crawler::FetchScope::Search,
                         ns,
                         &url,
                         &req_headers,
@@ -706,7 +777,8 @@ async fn search_one_source_impl(
                     )
                     .await?
                 } else {
-                    crawler::http_get_retry(
+                    crawler::http_get_retry_scoped(
+                        crawler::FetchScope::Search,
                         ns,
                         &url,
                         &req_headers,
@@ -720,7 +792,10 @@ async fn search_one_source_impl(
             }
         }
     } else if method.eq_ignore_ascii_case("POST") {
-        crawler::http_post_retry(
+        // 搜索作用域（#3）：整条浏览器优先表达式在外层短路——搜索是广度扇出，
+        // 不能让 134 个源各自去赌一次 5~30s 的浏览器导航
+        crawler::http_post_retry_scoped(
+            crawler::FetchScope::Search,
             ns,
             &url,
             &req_headers,
@@ -732,7 +807,8 @@ async fn search_one_source_impl(
         )
         .await?
     } else {
-        crawler::http_get_retry(
+        crawler::http_get_retry_scoped(
+            crawler::FetchScope::Search,
             ns,
             &url,
             &req_headers,
@@ -1479,6 +1555,24 @@ pub(crate) fn opt_field_with_bridge_vars(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 任务 #2：deadline env 语义（0 = 关闭；其余 clamp(5,120)；未设置走默认 60）
+    #[test]
+    fn test_search_source_deadline_semantics() {
+        assert_eq!(deadline_from_secs(0), None, "0 = 关闭");
+        assert_eq!(deadline_from_secs(60), Some(Duration::from_secs(60)));
+        assert_eq!(
+            deadline_from_secs(1),
+            Some(Duration::from_secs(5)),
+            "过小值抬到 5s 下限"
+        );
+        assert_eq!(
+            deadline_from_secs(999),
+            Some(Duration::from_secs(120)),
+            "过大值压到 120s 上限"
+        );
+        assert_eq!(SEARCH_SOURCE_DEADLINE_DEFAULT_SECS, 60);
+    }
 
     /// E8：字段清洗四件套（legacy formatBookName/Author/wordCountFormat/kind 归一）
     #[test]
