@@ -1,7 +1,15 @@
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useCallback, useMemo, useEffect, useRef, useState } from "react";
 
-import { getBookInfoCache, getBookInfoCacheEntry, rememberBookInfo } from "@/lib/bookInfoCache";
+import {
+  bookInfoQueryKey,
+  bookInfoQueryPrefix,
+  chaptersQueryKey,
+  chaptersQueryPrefix,
+  getBookInfoCache,
+  getBookInfoCacheEntry,
+  rememberBookInfo,
+} from "@/lib/bookInfoCache";
 import { getChapters, putChapters } from "@/lib/chapterCache";
 import { getBookInfo, getChapterList } from "@/services/book";
 import {
@@ -110,7 +118,9 @@ export function useBookData(bookUrl: string, sourceHint?: string): UseBookDataRe
     shelfBook !== undefined ? shelfQuery.dataUpdatedAt : cachedInfo?.ts;
 
   const bookQuery = useQuery({
-    queryKey: ["bookInfo", bookUrl],
+    // 键工厂与详情弹窗共用 (lib/bookInfoCache): 同一本书同一书源在弹窗里取过的详情,
+    // 进阅读页直接命中, 不再重抓 1~2s。
+    queryKey: bookInfoQueryKey(bookUrl, bookSourceUrl),
     queryFn: () => {
       const promise =
         bookSourceUrl === undefined ? getBookInfo(bookUrl) : getBookInfo({ url: bookUrl, bookSourceUrl });
@@ -157,7 +167,9 @@ export function useBookData(bookUrl: string, sourceHint?: string): UseBookDataRe
       : undefined;
 
   const chaptersQuery = useQuery({
-    queryKey: ["chapters", bookUrl],
+    // 键带书源 (见 lib/bookInfoCache.chaptersQueryKey): 详情弹窗用的是同一个工厂,
+    // 「详情 → 开始阅读」不再把整份目录重拉一遍 (冷目录路径 15.9-32.9s)。
+    queryKey: chaptersQueryKey(bookUrl, bookSourceUrl),
     queryFn: async () => {
       // 普通路径就是 refresh=0 (服务端优先用目录缓存); 只有当用户显式点「刷新目录」才
       // 走 refreshChapters(refresh=1), 两者互不影响。
@@ -187,6 +199,18 @@ export function useBookData(bookUrl: string, sourceHint?: string): UseBookDataRe
   });
   const queryClient = useQueryClient();
 
+  // 旧 2 段目录键的镜像写: useChapterContent 取「上一章」时按 2 段键**精确**读取
+  // (src/hooks/useChapterContent.ts:266, 不在本次改动范围内)。新键把书源编进去之后,
+  // 2 段条目不会自然存在, 不镜像就等于静默丢掉上一章预取 (翻回上一章要现抓)。
+  // 2 段键正好是新键的前缀, 故下面失效/换源时的 prefix 匹配会同时命中两者。
+  const chaptersData = chaptersQuery.data;
+  useEffect(() => {
+    if (chaptersData === undefined) {
+      return;
+    }
+    queryClient.setQueryData<BookChapter[]>(chaptersQueryPrefix(bookUrl), chaptersData);
+  }, [chaptersData, bookUrl, queryClient]);
+
   // origin 迟到/换源自愈: 起跑时如果还没拿到选源提示 (书架接口慢 / 冷启动深链 / 断网),
   // 那次目录可能是服务端默认源的; origin 到了就失效重取, 避免「错源目录 + staleTime
   // 内不再回源」的僵死状态 (配合上面"origin 未知不落盘")。
@@ -203,12 +227,12 @@ export function useBookData(bookUrl: string, sourceHint?: string): UseBookDataRe
     if (!sameBook || bookSourceUrl === undefined || !originChanged) {
       return;
     }
-    void queryClient.invalidateQueries({ queryKey: ["chapters", bookUrl] });
-    void queryClient.invalidateQueries({ queryKey: ["bookInfo", bookUrl] });
+    void queryClient.invalidateQueries({ queryKey: chaptersQueryPrefix(bookUrl) });
+    void queryClient.invalidateQueries({ queryKey: bookInfoQueryPrefix(bookUrl) });
   }, [bookSourceUrl, bookUrl, queryClient]);
   const refreshChapters = useCallback(async (): Promise<BookChapter[]> => {
     const list = await getChapterList(bookUrl, true, { bookSourceUrl });
-    queryClient.setQueryData<BookChapter[]>(["chapters", bookUrl], list);
+    queryClient.setQueryData<BookChapter[]>(chaptersQueryKey(bookUrl, bookSourceUrl), list);
     void putChapters(bookUrl, list);
     return list;
   }, [bookUrl, bookSourceUrl, queryClient]);

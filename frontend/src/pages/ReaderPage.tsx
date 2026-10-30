@@ -31,6 +31,7 @@ import { useReaderTheme } from "@/hooks/useReaderTheme";
 import { useToc } from "@/hooks/useToc";
 import { useTts } from "@/hooks/useTts";
 import { humanizeError } from "@/lib/errors";
+import { resolveReaderBoot } from "@/lib/bookInfoCache";
 import { BOOKS_QUERY_KEY, errorMessage } from "@/hooks/useBookshelf";
 import { getAiStatus } from "@/services/ai";
 import { saveBook } from "@/services/bookshelf";
@@ -379,7 +380,13 @@ export default function ReaderPage() {
 
   const handleAddBookmark = React.useCallback(() => {
     const target = chapters[progress.index];
-    if (book === undefined || target === undefined) {
+    // 元信息没到就不再整页挡了 (见 resolveReaderBoot), 但书签要写 bookUrl/书名/作者:
+    // 这里只拦「加书签」这一个动作, 并把原因说清楚 (原来一律提示「正文加载完成」, 会误导)
+    if (book === undefined) {
+      toast.info("书籍信息加载完成后才能加入书签");
+      return;
+    }
+    if (target === undefined) {
       toast.info("正文加载完成后才能加入书签");
       return;
     }
@@ -566,7 +573,19 @@ export default function ReaderPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  if (bookUrl === "") {
+  // 首屏门控 (纯函数, 见 lib/bookInfoCache.resolveReaderBoot 及其单测):
+  // 以前这里只看「书籍元信息到了没」(book === undefined → 整页骨架), 于是 IDB 里
+  // 正文/目录都已就绪的二次进书, 还要陪等一次 getBookInfo 实时抓源站 (~1-2s, 冷路径更久),
+  // 期间就是白屏. 现在只问「有没有东西可画」: 正文/目录/元信息任一到位就进阅读框架,
+  // 元信息缺失只降级 (书名占位 + 依赖元信息的能力自行降级), 不再整页挡.
+  const boot = resolveReaderBoot({
+    hasBookUrl: bookUrl !== "",
+    bookReady: book !== undefined,
+    chapterCount: chapters.length,
+    bodyReady,
+  });
+
+  if (boot.phase === "missing-url") {
     return (
       <ReaderFrame centered>
         <EmptyState
@@ -588,9 +607,20 @@ export default function ReaderPage() {
   /** 目录失败的人话版: 只在和原文不同时作为补充 hint 出现 */
   const chaptersHint = humanizeError(chaptersError, "");
 
-  if (book === undefined) {
-    // 书籍信息未就绪 (含书架列表未就绪 → 查询还没发起): 全屏加载/错误态,
-    // 左上角恒有返回, 失败给重试 + 返回书架 —— 原来这里是一个没有任何出口的死转圈
+  // 元信息降级: 正文/目录先到、书籍信息还在路上时, 书名/作者用书架记录兜底, 再兜不住给占位。
+  // 以前这里是整页门控, 已就绪的正文得陪等一次 getBookInfo 实时抓源站才有第一帧。
+  // 依赖元信息的能力各自降级: 书签写入要求 book (见 handleAddBookmark), 换源面板要求 book,
+  // 目录抽屉/顶栏只吃字符串 —— 所以统一走 display* 变量, 别再直接取 book.name。
+  const bookName = (book?.name ?? shelfBook?.name ?? "").trim();
+  const bookAuthor = (book?.author ?? shelfBook?.author ?? "").trim();
+  const displayBookName = bookName !== "" ? bookName : "正在加载书名…";
+  /** 章头「书名 · 作者」小字用: 作者缺失按本书其他处的惯例写「佚名」, 不给空串 */
+  const displayBookAuthor = bookAuthor !== "" ? bookAuthor : "佚名";
+
+  if (boot.phase === "blocked") {
+    // 正文/目录/元信息三样都还没到 —— 这才是真正的「没东西可画」, 整页 loading/错误态,
+    // 左上角恒有返回, 失败给重试 + 返回书架 —— 原来这里是一个没有任何出口的死转圈.
+    // (元信息已到、只等目录的中间态现在也留在阅读框架里, 由框架内的目录状态卡呈现)
     const bootError = bookError !== "" ? bookError : chaptersError;
     const bootHint = humanizeError(bootError, "");
     const missingSource = isMissingBookSource(bootError);
@@ -674,7 +704,7 @@ export default function ReaderPage() {
       <div className="flex h-full">
         <div className="relative flex min-w-0 flex-1 flex-col">
         <ReaderTopBar
-          bookName={book.name}
+          bookName={displayBookName}
           chapterTitle={chapter?.title ?? ""}
           percent={readPercent}
           onBack={handleBack}
@@ -711,6 +741,23 @@ export default function ReaderPage() {
               onClick={handleRefreshToc}
             >
               {tocRefreshing ? "刷新中…" : "刷新"}
+            </button>
+          </div>
+        ) : null}
+
+        {/* 书籍信息拿不到但正文/目录可读 (整页门控已解除): 只给一条轻提示 + 重试,
+            不用整块错误卡盖掉能读的正文 —— 缺的只是书名/总章数这类元信息,
+            正文、翻章、目录都不依赖它 */}
+        {boot.metaDegraded && bookError !== "" ? (
+          <div className="flex items-center justify-center gap-2 border-b border-border bg-surface px-3 py-1 text-xs text-muted-foreground">
+            <span className="truncate">书籍信息获取失败({bookError}), 书名可能不是最新</span>
+            <button
+              type="button"
+              className="shrink-0 cursor-pointer font-medium text-accent disabled:opacity-50"
+              disabled={bookQuery.isFetching}
+              onClick={() => void bookQuery.refetch()}
+            >
+              {bookQuery.isFetching ? "重试中…" : "重试"}
             </button>
           </div>
         ) : null}
@@ -798,8 +845,8 @@ export default function ReaderPage() {
             isReloading={content.isReloading}
             onSwitchSource={openSwitchSource}
             readMode={readMode}
-            bookName={book.name}
-            bookAuthor={book.author}
+            bookName={displayBookName}
+            bookAuthor={displayBookAuthor}
             restorePos={progress.restorePos}
             onPosChange={progress.reportPos}
             onReadRatio={handleReadRatio}
@@ -835,7 +882,7 @@ export default function ReaderPage() {
           open={aiAssistant && aiOpen}
           onClose={() => setAiOpen(false)}
           bookUrl={bookUrl}
-          bookName={book.name}
+          bookName={displayBookName}
           titles={chapters.map((c) => c.title)}
           currentTitle={chapters[progress.index]?.title ?? ""}
           configured={aiStatusQuery.data?.enabled === true}
@@ -851,8 +898,8 @@ export default function ReaderPage() {
       <TocDrawer
         open={toc.tocOpen}
         onOpenChange={toc.setTocOpen}
-        bookName={book.name}
-        bookAuthor={book.author}
+        bookName={displayBookName}
+        bookAuthor={displayBookAuthor}
         chapters={chapters}
         currentIndex={progress.index}
         totalChapterNum={shelfBook?.totalChapterNum ?? book?.totalChapterNum}
@@ -896,7 +943,7 @@ export default function ReaderPage() {
         open={graphOpen}
         onOpenChange={setGraphOpen}
         bookUrl={bookUrl}
-        bookName={book.name}
+        bookName={displayBookName}
       />
       <AddBookmarkDialog
         draft={draft}

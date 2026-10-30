@@ -32,6 +32,7 @@ import {
   readerPath,
   useBookshelf,
 } from "@/hooks/useBookshelf";
+import { bookInfoQueryKey, chaptersQueryKey } from "@/lib/bookInfoCache";
 import { humanizeError } from "@/lib/errors";
 import { getBookInfo, getChapterList, getCoverUrl } from "@/services/book";
 import {
@@ -50,6 +51,15 @@ export interface BookDetailDialogProps {
   onOpenChange: (open: boolean) => void;
   /** 加入书架成功回报(可选): 调用方用它兜住后端读缓存约 5 秒的成员态窗口 */
   onAdded?: (saved: Book) => void;
+}
+
+/**
+ * 弹窗里的书源 → 统一键工厂的源段.
+ * 本地书 (LOCAL_ORIGIN) 没有书源: 阅读页那边 bookSourceUrl 对本地书就是 undefined,
+ * 两边都归一成 undefined 才能落到同一份缓存条目; 源未知同样归一成 ""。
+ */
+function sourceOf(origin: string | undefined): string | undefined {
+  return origin === LOCAL_ORIGIN ? undefined : origin;
 }
 
 /** 目录超过这个章节数就限高滚动, 免得弹窗被一本书的目录撑到几千行 */
@@ -87,8 +97,14 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
   /** 本次会话里刚加入书架: 后端用户存储读取有数秒缓存, 书架列表不会立刻反映 */
   const [added, setAdded] = React.useState(false);
 
+  // 键走 lib/bookInfoCache 的统一工厂 (阅读页/useBookData 用同一个):
+  // 弹窗里取过的详情与目录, 进阅读页直接命中同一份缓存, 不再二次抓取。
   const detailKey = React.useMemo(
-    () => ["bookInfo", identity?.bookUrl ?? book.bookUrl, identity?.origin ?? book.origin],
+    () =>
+      bookInfoQueryKey(
+        identity?.bookUrl ?? book.bookUrl,
+        sourceOf(identity?.origin ?? book.origin),
+      ),
     [identity, book.bookUrl, book.origin],
   );
   const detail = useQuery({
@@ -110,7 +126,9 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
 
   // 书不在书架时后端需要显式书源才能取目录(getChapterList 的 bookSourceUrl 入参)
   const chapters = useQuery({
-    queryKey: ["chapters", currentBookUrl, currentOrigin],
+    // 同一工厂 (见 detailKey): 「详情 → 开始阅读」复用这份目录, 否则阅读页要从头再拉
+    // 一次目录 (冷目录路径 15.9-32.9s, 期间整页白屏)。
+    queryKey: chaptersQueryKey(currentBookUrl, sourceOf(currentOrigin)),
     queryFn: () => getChapterList(currentBookUrl, false, { bookSourceUrl: currentOrigin }),
   });
   const chapterList = chapters.data ?? [];
@@ -190,7 +208,7 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
       }),
     onSuccess: (saved) => {
       // 先用后端返回的新书籍信息填充详情(免一次往返), 新 query key 挂载后再由 getBookInfo 后台复核
-      queryClient.setQueryData(["bookInfo", saved.bookUrl, saved.origin], saved);
+      queryClient.setQueryData(bookInfoQueryKey(saved.bookUrl, sourceOf(saved.origin)), saved);
       setIdentity({ bookUrl: saved.bookUrl, origin: saved.origin });
       setDeepSearch(false);
       void queryClient.invalidateQueries({ queryKey: BOOKS_QUERY_KEY });
