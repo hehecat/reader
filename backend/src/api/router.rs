@@ -2925,15 +2925,7 @@ async fn search_book_multi(
     if !include_dead && single_source_url.is_empty() {
         let now = chrono::Utc::now().timestamp_millis();
         if let Ok(stats) = state.storage.get_source_stats(&namespace).await {
-            let dead: std::collections::HashSet<String> = stats
-                .iter()
-                .filter(|st| {
-                    st.confidence() <= 0.05
-                        && st.attempts >= 5
-                        && now - st.last_failure_at <= 6 * 3_600_000
-                })
-                .map(|st| st.source_url.clone())
-                .collect();
+            let dead = dead_source_urls(&stats, now);
             if !dead.is_empty() {
                 sources.retain(|s| !dead.contains(&s.book_source_url));
             }
@@ -2967,23 +2959,24 @@ async fn search_book_multi(
             )
             .await;
             let lat = t0.elapsed().as_millis() as i64;
-            let (ok, intro_hits, intro_count) = match &res {
+            let (outcome, intro_hits, intro_count) = match &res {
                 Ok(books) => (
-                    true,
+                    crate::storage::SearchOutcome::Ok,
                     books
                         .iter()
                         .filter(|b| b.intro.as_deref().is_some_and(|t| !t.trim().is_empty()))
                         .count() as i64,
                     books.len() as i64,
                 ),
-                Err(_) => (false, 0, 0),
+                // 三态：超时不记作失败（不写连败），只记 timeouts + last_failure_at
+                Err(e) => (crate::storage::SearchOutcome::from_error(e), 0, 0),
             };
             let surl = source.book_source_url.clone();
             let st = storage.clone();
             let nsx = ns.clone();
             tokio::spawn(async move {
                 let _ = st
-                    .record_search_outcome(&nsx, &surl, ok, lat, intro_hits, intro_count)
+                    .record_search_outcome_state(&nsx, &surl, outcome, lat, intro_hits, intro_count)
                     .await;
             });
             res.unwrap_or_default()
@@ -6874,23 +6867,31 @@ async fn search_book_source_sse(
                     crate::service::search::search_one_source(&storage, &ns, &source, &key, 1, 15)
                         .await;
                 let lat = t0.elapsed().as_millis() as i64;
-                let (ok, intro_hits, intro_count) = match &res {
+                let (outcome, intro_hits, intro_count) = match &res {
                     Ok(books) => (
-                        true,
+                        crate::storage::SearchOutcome::Ok,
                         books
                             .iter()
                             .filter(|b| b.intro.as_deref().is_some_and(|t| !t.trim().is_empty()))
                             .count() as i64,
                         books.len() as i64,
                     ),
-                    Err(_) => (false, 0, 0),
+                    // 三态：超时不记作失败（不写连败），只记 timeouts + last_failure_at
+                    Err(e) => (crate::storage::SearchOutcome::from_error(e), 0, 0),
                 };
                 let surl = source.book_source_url.clone();
                 let st = storage.clone();
                 let nsx = ns.clone();
                 tokio::spawn(async move {
                     let _ = st
-                        .record_search_outcome(&nsx, &surl, ok, lat, intro_hits, intro_count)
+                        .record_search_outcome_state(
+                            &nsx,
+                            &surl,
+                            outcome,
+                            lat,
+                            intro_hits,
+                            intro_count,
+                        )
                         .await;
                 });
                 let books = res.unwrap_or_default();
@@ -9391,15 +9392,7 @@ async fn search_book_multi_sse(
     let include_dead = params.get("all").map(|v| v == "1").unwrap_or(false);
     if !include_dead && single_source_url.is_empty() {
         let now = chrono::Utc::now().timestamp_millis();
-        let dead: std::collections::HashSet<String> = stats_rows
-            .iter()
-            .filter(|st| {
-                st.confidence() <= 0.05
-                    && st.attempts >= 5
-                    && now - st.last_failure_at <= 6 * 3_600_000
-            })
-            .map(|st| st.source_url.clone())
-            .collect();
+        let dead = dead_source_urls(&stats_rows, now);
         if !dead.is_empty() {
             sources.retain(|s| !dead.contains(&s.book_source_url));
         }
@@ -9499,23 +9492,32 @@ async fn search_book_multi_sse(
                 )
                 .await;
                 let lat = t0.elapsed().as_millis() as i64;
-                let (ok, intro_hits, intro_count) = match &res {
+                let (outcome, intro_hits, intro_count) = match &res {
                     Ok(books) => (
-                        true,
+                        crate::storage::SearchOutcome::Ok,
                         books
                             .iter()
                             .filter(|b| b.intro.as_deref().is_some_and(|t| !t.trim().is_empty()))
                             .count() as i64,
                         books.len() as i64,
                     ),
-                    Err(_) => (false, 0, 0),
+                    // 三态：超时不记作失败（不写连败），只记 timeouts + last_failure_at
+                    Err(e) => (crate::storage::SearchOutcome::from_error(e), 0, 0),
                 };
+                let ok = outcome == crate::storage::SearchOutcome::Ok;
                 let surl = source.book_source_url.clone();
                 let st = storage.clone();
                 let nsx = ns.clone();
                 tokio::spawn(async move {
                     let _ = st
-                        .record_search_outcome(&nsx, &surl, ok, lat, intro_hits, intro_count)
+                        .record_search_outcome_state(
+                            &nsx,
+                            &surl,
+                            outcome,
+                            lat,
+                            intro_hits,
+                            intro_count,
+                        )
                         .await;
                 });
                 let books = res.unwrap_or_default();
@@ -9565,6 +9567,8 @@ async fn search_book_multi_sse(
         // 本窗派发结论：(下标, 是否成功) —— 收口后回写会话账本，跨窗不再重派
         let mut results: Vec<(usize, bool)> = Vec::new();
         let mut hard_capped = false;
+        // 客户端断开：收口后仍要补账（否则断开那一刻在跑的源全部漏记）
+        let mut client_gone = false;
         loop {
             if !full_scan
                 && sse_should_close(done.len(), window_t0.elapsed(), window_budget, hard_cap)
@@ -9600,15 +9604,44 @@ async fn search_book_multi_sse(
             results.push((i as usize, ok));
             discovered.extend(found);
             if tx.send(Ok(Bytes::from(text))).await.is_err() {
+                client_gone = true;
                 break; // 客户端断开
             }
         }
+        // —— 收口补账（共识 #9）——
+        // 交付不变式：**每个被派发的源都必须有且只有一次结论落进 source_stats**。
+        // 窗硬顶收口 / 软预算收口 / 客户端断开时，`tasks` 里还留着「已派发、没跑完」的源：
+        // 这里一 drop `FuturesUnordered`，那些 future 就被取消，既不进 results 也没人记账
+        // —— 实测分窗路径 167 次派发只有 142 台有结论，15% 静默漏记。
+        // ① 先吃掉「已经算完、只是没被消费」的结果：它们可能已经写过账本（结论在 search_one_source
+        //    返回后立刻 spawn 记账），再补记一次就成重复结论。
+        while let Some(Some((i, text, found, ok))) = futures::FutureExt::now_or_never(tasks.next())
+        {
+            let i = i as usize;
+            done.insert(i);
+            results.push((i, ok));
+            discovered.extend(found);
+            if !client_gone {
+                let _ = tx.send(Ok(Bytes::from(text))).await;
+            }
+        }
+        // ② 剩下的才是真·没跑完：逐台补记 Timeout（不记 Fail，见 record_unfinished_timeouts）
+        let unfinished = record_unfinished_timeouts(
+            &storage,
+            &ns,
+            &session_urls,
+            &dispatch,
+            &done,
+            window_t0.elapsed().as_millis() as i64,
+        )
+        .await;
         // 回写本窗结论：派过的源从此进会话账本，后面的窗不会再派它（dup 16 → 0 的来源）
         sched_finish(&sched_key, &session_urls, &results, last_index);
         // 续接点(纯函数, 见 sse_next_from): 第一个未完成源下标 - 1, 不倒退也不吞整窗;
         // 被硬上限强行收口时整窗前进(窗内源都太慢, 留着只会把游标卡在窗首)。
         // 「已完成」= 本请求之前就已有结论的源 ∪ 本窗刚收口的源；本窗因预算/客户端断开
-        // 没跑完的源不在此列 —— 它们没有结论，下一窗会重新派（不算重复）。
+        // 没跑完的源不在此列 —— 它们只在 source_stats 里留下了 Timeout 痕迹（补账用），
+        // 会话账本里仍算「无结论」，下一窗会重新派（不算重复）。
         let mut concluded = marks.done.clone();
         concluded.extend(done.iter().copied());
         // 计划游标（plan_window 的返回值）是下限保护：即便本窗一台源都没派（全被账本
@@ -9617,10 +9650,11 @@ async fn search_book_multi_sse(
             .min(next_from_planned)
             .max(last_index);
         tracing::info!(
-            "SSE 窗口收口 lastIndex={} 计划派={} 实际完成={} 硬顶={} next_from={} 计划游标={} 命中={}",
+            "SSE 窗口收口 lastIndex={} 计划派={} 实际完成={} 补记超时={} 硬顶={} next_from={} 计划游标={} 命中={}",
             last_index,
             dispatch.len(),
             done.len(),
+            unfinished,
             hard_capped,
             next_from,
             next_from_planned,
@@ -9735,6 +9769,48 @@ fn sse_hard_cap(window_budget: std::time::Duration, timeout_secs: u64) -> std::t
         ))
 }
 
+/// 收口补账：给「已派发、但因窗硬顶/收口没跑完」的源逐台记一次
+/// [`crate::storage::SearchOutcome::Timeout`]，返回补记台数。
+///
+/// 为什么必须是 `Timeout` 不能是 `Fail`：`Fail` 会 `consec_failures + 1`，连败 3 次就把
+/// 好源压到 `confidence() = 0.05`，再被「死源 6h 跳过」滤掉 —— 被窗关掉不等于源死了。
+/// `Timeout` 只加 `timeouts`，同时写 `last_failure_at`（6h 豁免窗口要靠它才生效），
+/// 不动 `consec_failures`。
+///
+/// `waited_ms` 用「从窗开始到收口」的实际耗时：被取消的源拿不到自己的耗时，而它确实是
+/// 跑到窗关都没返回，用窗龄做上界比记 0 更接近真相。
+///
+/// **纯记账**：不改 `results` / 会话账本，所以不影响 `sse_next_from` 游标与 `isEnd` 语义；
+/// 这些源下一窗照旧会被重派（与改动前一致，区别只是这次它们留下了痕迹）。
+async fn record_unfinished_timeouts(
+    storage: &crate::storage::Storage,
+    ns: &str,
+    urls: &[String],
+    dispatched: &[usize],
+    done: &std::collections::HashSet<usize>,
+    waited_ms: i64,
+) -> usize {
+    let mut n = 0usize;
+    for &idx in dispatched {
+        if done.contains(&idx) {
+            continue;
+        }
+        let Some(url) = urls.get(idx) else { continue };
+        let _ = storage
+            .record_search_outcome_state(
+                ns,
+                url,
+                crate::storage::SearchOutcome::Timeout,
+                waited_ms,
+                0,
+                0,
+            )
+            .await;
+        n += 1;
+    }
+    n
+}
+
 /// SSE 续接点（纯函数）：下一窗的 `lastIndex`。
 ///
 /// 规则：第一个未完成源的**前一台**（不重搜已完成的连续段）；窗首源就没完成时跳过它本身
@@ -9767,6 +9843,32 @@ fn sse_next_from(
         // 窗内全完成: 游标落到窗末, 下一窗从 end 起(最后一窗则 isEnd=true)
         None => (end as i64 - 1).max(last_index),
     }
+}
+
+// ---------- 死源过滤（非 SSE / SSE 两条路径共用同一口径） ----------
+
+/// 死源判定（唯一口径）：置信度被打到垫底 + 样本足够 + 6h 内还失败过。
+///
+/// 抽函数前这段判定在非 SSE（`search_book_sources`）与 SSE（`search_book_sources_sse`）里各抄
+/// 了一份，改一处漏一处就会让两条搜索路径的「跳过哪些源」不一致。**阈值语义一字未改**：
+/// `confidence() <= 0.05 && attempts >= 5 && now_ms - last_failure_at <= 6h`。
+///
+/// 注意超时**不进** `consec_failures`（见 `storage::SearchOutcome`），所以慢源不会
+/// 因为三连超时被压到 0.05 然后在这里被当死源跳过。
+fn is_dead_source(st: &crate::model::SourceStat, now_ms: i64) -> bool {
+    st.confidence() <= 0.05 && st.attempts >= 5 && now_ms - st.last_failure_at <= 6 * 3_600_000
+}
+
+/// 统计行 → 「6h 内跳过」的死源 url 集合（非 SSE 与 SSE 共用，行为必须一致）
+fn dead_source_urls(
+    stats: &[crate::model::SourceStat],
+    now_ms: i64,
+) -> std::collections::HashSet<String> {
+    stats
+        .iter()
+        .filter(|st| is_dead_source(st, now_ms))
+        .map(|st| st.source_url.clone())
+        .collect()
 }
 
 // ---------- 多源搜索调度：窗口内排序 + 跨窗去重 ----------
@@ -26257,5 +26359,149 @@ mod tests {
         assert_eq!(parse_cache_url("https://s.com/b/1/"), None);
 
         cleanup(state, dir).await;
+    }
+
+    // ---------------- 分窗收口补账（共识 #9：不允许静默漏记） ----------------
+
+    /// 分窗收口补账：派发 N 台、其中 M 台被窗硬顶截断 →
+    /// ① 账本里 N 台**全部**有结论（不再有 15% 静默漏记）；
+    /// ② 被截断的 M 台 `timeouts +1`、`consec_failures` 不变（不记 Fail）。
+    #[tokio::test]
+    async fn test_record_unfinished_timeouts_closes_the_ledger() {
+        let (state, dir) = test_state("sse-tally").await;
+        let storage = state.storage.clone();
+        let ns = "default";
+        // N = 6 台派发，其中 3 台（下标 3/4/5）没跑完就被窗关掉
+        let urls: Vec<String> = (0..6).map(|i| format!("https://tally{i}.test")).collect();
+        let dispatched: Vec<usize> = (0..6).collect();
+        let mut done: std::collections::HashSet<usize> = Default::default();
+        // 已跑完的 3 台：正常情况下它们的结论已由 search_one_source 那条路径写进账本
+        for (i, url) in urls.iter().enumerate().take(3) {
+            storage
+                .record_search_outcome_state(ns, url, crate::storage::SearchOutcome::Ok, 1000, 1, 1)
+                .await
+                .unwrap();
+            done.insert(i);
+        }
+
+        let recorded =
+            record_unfinished_timeouts(&storage, ns, &urls, &dispatched, &done, 15_000).await;
+        assert_eq!(recorded, 3, "只有被截断的 3 台需要补记");
+        assert_eq!(
+            recorded,
+            dispatched.len() - done.len(),
+            "补记数 = 派发数 - 有结论数"
+        );
+
+        let stats = storage.get_source_stats(ns).await.unwrap();
+        assert_eq!(stats.len(), 6, "派发 6 台 → 账本必须有 6 行（漏记为 0）");
+        for (i, url) in urls.iter().enumerate() {
+            let st = stats
+                .iter()
+                .find(|s| &s.source_url == url)
+                .unwrap_or_else(|| panic!("{url} 漏记"));
+            assert_eq!(st.attempts, 1, "{url} 应恰好一次结论");
+            if i < 3 {
+                assert_eq!(
+                    (st.successes, st.timeouts, st.consec_failures),
+                    (1, 0, 0),
+                    "跑完的源记 Ok"
+                );
+            } else {
+                assert_eq!(
+                    (st.successes, st.timeouts, st.consec_failures),
+                    (0, 1, 0),
+                    "被截断的源记 Timeout：timeouts+1 且不涨连败"
+                );
+                assert!(st.last_failure_at > 0, "Timeout 也要写 last_failure_at");
+            }
+        }
+
+        cleanup(state, dir).await;
+    }
+
+    /// 补账不能碰「已有结论」的源：`done` 里的下标一律跳过（一源一结论）。
+    #[tokio::test]
+    async fn test_record_unfinished_timeouts_skips_concluded() {
+        let (state, dir) = test_state("sse-tally-skip").await;
+        let storage = state.storage.clone();
+        let ns = "default";
+        let urls: Vec<String> = vec!["https://a.test".into(), "https://b.test".into()];
+        // 全部有结论 → 补记 0 台，账本不被二次写入
+        storage
+            .record_search_outcome_state(ns, &urls[0], crate::storage::SearchOutcome::Ok, 10, 0, 0)
+            .await
+            .unwrap();
+        let done: std::collections::HashSet<usize> = [0usize, 1usize].into_iter().collect();
+        let recorded = record_unfinished_timeouts(&storage, ns, &urls, &[0, 1], &done, 5000).await;
+        assert_eq!(recorded, 0);
+        let stats = storage.get_source_stats(ns).await.unwrap();
+        assert_eq!(stats.len(), 1, "b.test 没派发成功就不该被补记");
+        assert_eq!(stats[0].attempts, 1, "已结论的源不得重复记账");
+
+        cleanup(state, dir).await;
+    }
+
+    // ---------------- 死源过滤（两条路径共用一份判定） ----------------
+
+    /// 死源判定阈值：`confidence()<=0.05 && attempts>=5 && now-last_failure_at<=6h`
+    /// 三条同时成立才算死源；这里是**纯重构**，语义必须与改造前逐条一致。
+    #[test]
+    fn test_is_dead_source_thresholds() {
+        let now = 1_700_000_000_000i64;
+        let mut st = crate::model::SourceStat {
+            user_namespace: "default".into(),
+            source_url: "https://dead.test".into(),
+            attempts: 0,
+            successes: 0,
+            timeouts: 0,
+            lat_sum_ms: 0,
+            intro_hits: 0,
+            intro_count: 0,
+            toc_attempts: 0,
+            toc_successes: 0,
+            content_attempts: 0,
+            content_successes: 0,
+            consec_failures: 0,
+            last_failure_at: 0,
+            updated_at: 0,
+        };
+        // 冷启动（attempts=0）不是死源
+        assert!(!is_dead_source(&st, now));
+
+        // 连败 5 次、刚失败 → 死源
+        st.attempts = 5;
+        st.successes = 0;
+        st.consec_failures = 5;
+        st.last_failure_at = now - 1000;
+        assert!(is_dead_source(&st, now));
+
+        // 6h 界内仍算死源；超过 6h 就放行一次探针
+        st.last_failure_at = now - 6 * 3_600_000;
+        assert!(is_dead_source(&st, now), "恰好 6h 仍在窗口内");
+        st.last_failure_at = now - 6 * 3_600_000 - 1;
+        assert!(!is_dead_source(&st, now), "超过 6h 放行探针");
+
+        // 样本不足（attempts<5）不算死源
+        st.attempts = 4;
+        st.last_failure_at = now - 1000;
+        assert!(!is_dead_source(&st, now));
+
+        // 死源集合过滤：只挑满足判定的 url
+        let mut alive = st.clone();
+        alive.source_url = "https://alive.test".into();
+        alive.attempts = 9;
+        alive.successes = 9;
+        alive.consec_failures = 0;
+        alive.last_failure_at = 0;
+        let mut dead = st.clone();
+        dead.source_url = "https://dead2.test".into();
+        dead.attempts = 6;
+        dead.successes = 0;
+        dead.consec_failures = 6;
+        dead.last_failure_at = now - 1000;
+        let set = dead_source_urls(&[alive, dead], now);
+        assert!(set.contains("https://dead2.test"));
+        assert!(!set.contains("https://alive.test"));
     }
 }

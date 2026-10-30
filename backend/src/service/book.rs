@@ -586,8 +586,9 @@ pub async fn analyze_toc(
     }
 }
 
-/// 目录抓取总预算(秒, env READER_TOC_BUDGET_SECS 覆盖, 默认 30): 链表分页串行抓,
-/// 卡源单页 CF 求解+超时可到 25-35s, 无总预算时实测 100s+ 无响应; 到点即报错可重试
+/// 目录抓取总预算(秒, env READER_TOC_BUDGET_SECS 覆盖, 默认 30): 整次目录抓取的墙钟上限。
+/// 到点后不再发起新页, 用**已抓到的页**产出部分目录(日志 warn 标注「目录不完整」),
+/// 只有一页都没抓成才报错——慢源不再把整次进书拖成失败。
 fn toc_budget_secs() -> u64 {
     static B: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     let base = *B.get_or_init(|| {
@@ -610,6 +611,63 @@ fn set_toc_budget_secs(v: u64) {
     TOC_BUDGET_OVERRIDE.store(v, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// 目录单页并发上限(env READER_TOC_CONCURRENCY 覆盖, 默认 4, clamp 1..=8)
+///
+/// 语义: 单次目录抓取**同时在飞**的页请求数上限；= 1 时退化为改造前的串行语义
+/// (逐页抓、逐页处理，用于对照/回滚)。
+/// 说明: 链式翻页(nextTocUrl 由上一页 HTML 解析得出)时任一时刻只有下一页地址已知,
+/// 在飞数结构上就是 1；该上限真正约束的是「下一页预取」与「当前页解析/变量落盘」
+/// 重叠阶段的在飞请求数, 以及一次解析出多个候选地址时的扇出。
+/// 跨用户不会放大: 每个目录请求自带一个小池, 源站级限速仍由
+/// [`crate::service::search::concurrent_rate_acquire`] 按书源统一把关。
+fn toc_concurrency() -> usize {
+    static C: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let base = *C.get_or_init(|| {
+        clamp_toc_concurrency(
+            std::env::var("READER_TOC_CONCURRENCY")
+                .ok()
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .unwrap_or(4),
+        )
+    });
+    match TOC_CONCURRENCY_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => base,
+        v => clamp_toc_concurrency(v),
+    }
+}
+
+/// 并发上限收敛到 1..=8(0/超大值都夹回合法区间, 防止误配把源站打爆)
+fn clamp_toc_concurrency(v: usize) -> usize {
+    v.clamp(1, 8)
+}
+
+/// 测试覆盖并发上限(0 = 用 env/默认)
+static TOC_CONCURRENCY_OVERRIDE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
+fn set_toc_concurrency(v: usize) {
+    TOC_CONCURRENCY_OVERRIDE.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 单页目录抓取: 偶发失败(连接抖动/5xx/CF 质询临失败)重试 1 次, 仍失败则上抛
+async fn fetch_toc_page_retry(
+    ns: &str,
+    url: &str,
+    source: &BookSource,
+) -> Result<crawler::FetchResponse> {
+    match fetch_url(ns, url, source).await {
+        Ok(r) => Ok(r),
+        Err(e) => {
+            tracing::warn!("目录页抓取失败, 重试 1 次 [{url}]: {e:#}");
+            fetch_url(ns, url, source).await
+        }
+    }
+}
+
+/// 目录抓取主体: 有界并发抓页 + **严格保序**处理（按页序 → 页内序合并）
+///
+/// 并发只影响「谁先抓回来」，不影响合并顺序：每页结果按页序索引落到 ready 表，
+/// 主循环永远只处理当前队首页，所以最终目录与串行抓取逐条一致。
 async fn analyze_toc_impl(
     ns: &str,
     toc_url: &str,
@@ -621,7 +679,7 @@ async fn analyze_toc_impl(
     let mut all: Vec<BookChapter> = Vec::new();
     let toc_t0 = std::time::Instant::now();
     let toc_budget = std::time::Duration::from_secs(toc_budget_secs());
-    let mut current_url = toc_url.to_string();
+    let concurrency = toc_concurrency();
     let mut reverse = false;
     // legado Book.putVariable：详情（getBookInfo）写入的变量在目录/正文流程共享
     // P1 双键合并：book_url 级作底、toc_url 级覆盖
@@ -629,15 +687,116 @@ async fn analyze_toc_impl(
         crate::parser::rule::load_book_vars_merged(ns, &source.book_source_url, book_url, toc_url);
     vars.book_name = book_name.map(str::to_string);
 
-    for _page in 0..max_pages {
-        if toc_t0.elapsed() > toc_budget {
-            return Err(anyhow::anyhow!(
-                "目录抓取超时(预算 {}s, 已抓 {} 页): 源响应过慢, 可点刷新目录重试",
-                toc_budget.as_secs(),
-                _page
-            ));
+    // ---- 抓取泵 ----
+    // pending: 已发现但未发起的页地址; inflight: 在飞请求(≤ concurrency);
+    // ready: 已抓完但还没轮到处理的页(按页序索引 → 完成顺序不影响合并顺序)
+    let mut pending: std::collections::VecDeque<(usize, String)> =
+        std::collections::VecDeque::new();
+    let mut ready: std::collections::BTreeMap<usize, Result<crawler::FetchResponse>> =
+        std::collections::BTreeMap::new();
+    let mut inflight: tokio::task::JoinSet<(
+        usize,
+        std::time::Instant,
+        usize,
+        Result<crawler::FetchResponse>,
+    )> = tokio::task::JoinSet::new();
+    if max_pages > 0 {
+        pending.push_back((0, toc_url.to_string()));
+    }
+    let mut head = 0usize; // 下一个待处理页序（严格递增）
+    let mut pages_done = 0usize; // 成功合并的页数
+    let mut failures_in_row = 0usize; // 连续失败页数（重试后仍失败）
+    let mut stop_reason: Option<String> = None;
+    // 诊断: 在飞峰值 / 抓取耗时累计 / 页内解析落盘耗时累计（RUST_LOG=debug 可见）
+    let mut max_inflight = 0usize;
+    let mut fetch_ms_sum = 0u128;
+    let mut parse_ms_sum = 0u128;
+
+    loop {
+        // ① 预算：到点后不再发起新页(已拿到的页照常产出)
+        let remaining = toc_budget.saturating_sub(toc_t0.elapsed());
+        if remaining.is_zero() && (!pending.is_empty() || !inflight.is_empty()) {
+            stop_reason = Some(format!("预算 {}s 用完", toc_budget.as_secs()));
+            break;
         }
-        let resp = fetch_url(ns, &current_url, source).await?;
+        // ② 入池：按并发上限发起页请求（同时最多 concurrency 个在飞）
+        while inflight.len() < concurrency {
+            let Some((idx, url)) = pending.pop_front() else {
+                break;
+            };
+            let ns_owned = ns.to_string();
+            let src_owned = source.clone();
+            inflight.spawn(async move {
+                let t_fetch = std::time::Instant::now();
+                let r = fetch_toc_page_retry(&ns_owned, &url, &src_owned).await;
+                (idx, t_fetch, url.len(), r)
+            });
+            max_inflight = max_inflight.max(inflight.len());
+        }
+        if inflight.is_empty() {
+            break; // 没有待抓地址也没有在飞请求 → 目录抓完
+        }
+        // ③ 等队首页(其余页先回来就先进 ready 等着，顺序不变)
+        let mut wait_abort = false;
+        while !ready.contains_key(&head) && !wait_abort {
+            tokio::select! {
+                joined = inflight.join_next() => match joined {
+                    Some(Ok((idx, t_fetch, _, r))) => {
+                        tracing::debug!(
+                            "目录页抓取完成 #{idx} 耗时 {}ms status={} 在飞={} 队列={} [{toc_url}]",
+                            t_fetch.elapsed().as_millis(),
+                            r.as_ref()
+                                .map(|resp| resp.status.to_string())
+                                .unwrap_or_else(|_| "ERR".to_string()),
+                            inflight.len(),
+                            pending.len()
+                        );
+                        fetch_ms_sum += t_fetch.elapsed().as_millis();
+                        ready.insert(idx, r);
+                    }
+                    Some(Err(e)) => {
+                        stop_reason = Some(format!("目录页抓取任务异常: {e}"));
+                        wait_abort = true;
+                    }
+                    None => wait_abort = true,
+                },
+                _ = tokio::time::sleep(remaining) => {
+                    stop_reason = Some(format!("预算 {}s 用完", toc_budget.as_secs()));
+                    wait_abort = true;
+                }
+            }
+        }
+        let Some(page) = ready.remove(&head) else {
+            break;
+        };
+        let resp = match page {
+            Ok(r) => r,
+            Err(e) => {
+                failures_in_row += 1;
+                // 链式翻页的下一页地址只能从本页解析出来——本页(重试 1 次后仍)失败即链断，
+                // 没有别的待抓页就只能收尾；若 pending 里还有已知页，则连续失败 2 页才收尾，
+                // 避免对已经不稳的源站无谓放大压力。
+                if failures_in_row >= 2 || pending.is_empty() {
+                    stop_reason = Some(if failures_in_row >= 2 {
+                        format!("连续 {failures_in_row} 页抓取失败: {e:#}")
+                    } else {
+                        format!("第 {} 页抓取失败: {e:#}", head + 1)
+                    });
+                    break;
+                }
+                tracing::warn!(
+                    "目录第 {} 页抓取失败(重试后仍失败, 连续 {failures_in_row} 页), 跳过继续: {e:#}",
+                    head + 1
+                );
+                head += 1;
+                if head >= max_pages {
+                    break;
+                }
+                continue;
+            }
+        };
+        failures_in_row = 0;
+        let t_parse = std::time::Instant::now();
         // legado WebBook.getChapterList：目录页抓取后执行 loginCheckJs
         let page_body = apply_login_check_js(ns, source, &resp.body, &resp.url, None).await;
         let base = resp.url.clone();
@@ -674,6 +833,8 @@ async fn analyze_toc_impl(
         let urls: Vec<String> = chapters.iter().map(|ch| ch.url.clone()).collect();
         crate::parser::rule::save_book_vars_batch(ns, &source.book_source_url, &urls, &vars);
         all.extend(chapters);
+        pages_done += 1;
+        parse_ms_sum += t_parse.elapsed().as_millis();
 
         // 多页目录
         let next = rule
@@ -694,8 +855,14 @@ async fn analyze_toc_impl(
         }
         // E7：翻页 URL 过模板/JS 管线后再绝对化
         let next = expand_next_url(&next, &base, source, ns);
-        current_url = to_abs(&next, &base);
-        crate::parser::rule::save_book_vars(ns, &source.book_source_url, &current_url, &vars);
+        let next_abs = to_abs(&next, &base);
+        crate::parser::rule::save_book_vars(ns, &source.book_source_url, &next_abs, &vars);
+        head += 1;
+        if head >= max_pages {
+            break;
+        }
+        // ④ 下一页地址已知 → 立刻入池（与当前页后续处理/下一轮解析重叠）
+        pending.push_back((head, next_abs));
     }
 
     crate::parser::rule::save_book_vars_two_level(
@@ -712,6 +879,30 @@ async fn analyze_toc_impl(
     }
     for (i, ch) in all.iter_mut().enumerate() {
         ch.index = i as i64;
+    }
+
+    // 诊断汇总（RUST_LOG=debug 可见）：页数 / 在飞峰值 / 抓取与解析耗时占比
+    tracing::debug!(
+        "目录抓取汇总 [{toc_url}]: 页数={pages_done} 并发上限={concurrency} 在飞峰值={max_inflight} \
+         抓取累计={fetch_ms_sum}ms 解析累计={parse_ms_sum}ms 总耗时={}ms 停止原因={stop_reason:?}",
+        toc_t0.elapsed().as_millis()
+    );
+    if let Some(reason) = stop_reason {
+        if all.is_empty() {
+            return Err(anyhow::anyhow!(
+                "目录抓取失败(预算 {}s, 已抓 {} 页): {reason}; 源响应过慢, 可点刷新目录重试",
+                toc_budget.as_secs(),
+                pages_done
+            ));
+        }
+        // 不假装成功：日志明确标注不完整（API 返回值形状不变，仍是章节数组；
+        // 路由侧质量门(plausible_chapter_total)会拦住残缺目录写缓存/回写章数）
+        tracing::warn!(
+            "目录不完整（已抓 {}/{} 页, {reason}）[{toc_url}]：返回已抓到的部分目录, 共 {} 章",
+            pages_done,
+            head + 1,
+            all.len()
+        );
     }
     Ok(all)
 }
@@ -1903,6 +2094,205 @@ mod tests {
             err.contains("预算") && elapsed < std::time::Duration::from_secs(10),
             "应报预算超时且快: err={err} elapsed={elapsed:?}"
         );
+    }
+
+    /// 多页目录 mock：按路径前缀返回 (body, 延迟ms)；`flaky` 路径首次请求直接断连（模拟偶发失败）
+    async fn serve_toc_pages(
+        pages: Vec<(&'static str, &'static str, u64)>,
+        flaky: Option<&'static str>,
+    ) -> String {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                let pages = pages.clone();
+                let hits = hits.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    let mut req = String::new();
+                    loop {
+                        let n = sock.read(&mut buf).await.unwrap_or(0);
+                        if n == 0 {
+                            break;
+                        }
+                        req.push_str(&String::from_utf8_lossy(&buf[..n]));
+                        if req.contains("\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
+                    let Some((_, body, delay)) =
+                        pages.iter().find(|(p, _, _)| path.starts_with(*p)).copied()
+                    else {
+                        let _ = sock.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+                        return;
+                    };
+                    if Some(path.as_str()) == flaky && hits.fetch_add(1, Ordering::SeqCst) == 0 {
+                        // 首次请求直接断开（无响应体）→ 抓取侧得到连接错误
+                        drop(sock);
+                        return;
+                    }
+                    if delay > 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    }
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    /// 并发上限夹取：0/超大值夹回 1..=8，默认 4
+    #[test]
+    fn test_toc_concurrency_clamp() {
+        assert_eq!(clamp_toc_concurrency(0), 1);
+        assert_eq!(clamp_toc_concurrency(1), 1);
+        assert_eq!(clamp_toc_concurrency(4), 4);
+        assert_eq!(clamp_toc_concurrency(8), 8);
+        assert_eq!(clamp_toc_concurrency(99), 8);
+    }
+
+    /// 有界并发抓页必须保序：中间页故意慢，合并结果仍按页序 → 页内序
+    #[tokio::test]
+    async fn test_toc_bounded_concurrency_preserves_page_order() {
+        let _ssrf = crate::service::crawler::ssrf_allow_private_guard(true);
+        let base = serve_toc_pages(
+            vec![
+                (
+                    "/p1",
+                    r#"{"ch":[{"t":"A1","u":"/a1"},{"t":"A2","u":"/a2"}],"next":"/p2"}"#,
+                    0,
+                ),
+                ("/p2", r#"{"ch":[{"t":"B1","u":"/b1"}],"next":"/p3"}"#, 300),
+                ("/p3", r#"{"ch":[{"t":"C1","u":"/c1"}]}"#, 0),
+            ],
+            None,
+        )
+        .await;
+        let mut src = test_source();
+        src.book_source_url = format!("{base}/src");
+        src.rule_toc = Some(serde_json::json!({
+            "chapterList": "$.ch",
+            "chapterName": "$.t",
+            "chapterUrl": "$.u",
+            "nextTocUrl": "$.next"
+        }));
+        for concurrency in [1usize, 4] {
+            set_toc_concurrency(concurrency);
+            let chapters = analyze_toc("default", &format!("{base}/p1"), &src, 20, None, "")
+                .await
+                .unwrap();
+            let titles: Vec<&str> = chapters.iter().map(|c| c.title.as_str()).collect();
+            assert_eq!(
+                titles,
+                vec!["A1", "A2", "B1", "C1"],
+                "并发={concurrency} 时必须按页序合并（实际 {titles:?}）"
+            );
+            let indexes: Vec<i64> = chapters.iter().map(|c| c.index).collect();
+            assert_eq!(indexes, vec![0, 1, 2, 3], "章节 index 需按合并序重排");
+        }
+        set_toc_concurrency(0);
+    }
+
+    /// 预算到点用已抓到的页产出部分目录（不再整体失败）
+    #[tokio::test]
+    async fn test_toc_budget_returns_partial_directory() {
+        let _ssrf = crate::service::crawler::ssrf_allow_private_guard(true);
+        let base = serve_toc_pages(
+            vec![
+                ("/p1", r#"{"ch":[{"t":"A1","u":"/a1"}],"next":"/slow"}"#, 0),
+                ("/slow", r#"{"ch":[{"t":"Z1","u":"/z1"}]}"#, 3000),
+            ],
+            None,
+        )
+        .await;
+        let mut src = test_source();
+        src.book_source_url = format!("{base}/src");
+        src.rule_toc = Some(serde_json::json!({
+            "chapterList": "$.ch",
+            "chapterName": "$.t",
+            "chapterUrl": "$.u",
+            "nextTocUrl": "$.next"
+        }));
+        set_toc_budget_secs(1);
+        set_toc_concurrency(1);
+        let t0 = std::time::Instant::now();
+        let res = analyze_toc("default", &format!("{base}/p1"), &src, 20, None, "").await;
+        let elapsed = t0.elapsed();
+        set_toc_budget_secs(0);
+        set_toc_concurrency(0);
+        let chapters = res.expect("预算到点应返回部分目录而不是失败");
+        assert_eq!(chapters.len(), 1, "只应拿到第一页的章节");
+        assert_eq!(chapters[0].title, "A1");
+        assert!(
+            elapsed < std::time::Duration::from_secs(3),
+            "预算到点后应立即收尾: {elapsed:?}"
+        );
+    }
+
+    /// 单页偶发失败重试 1 次：首次断连，重试成功后目录完整
+    #[tokio::test]
+    async fn test_toc_page_retries_once_on_transient_failure() {
+        let _ssrf = crate::service::crawler::ssrf_allow_private_guard(true);
+        let base = serve_toc_pages(
+            vec![
+                ("/p1", r#"{"ch":[{"t":"A1","u":"/a1"}],"next":"/flaky"}"#, 0),
+                ("/flaky", r#"{"ch":[{"t":"B1","u":"/b1"}]}"#, 0),
+            ],
+            Some("/flaky"),
+        )
+        .await;
+        let mut src = test_source();
+        src.book_source_url = format!("{base}/src");
+        src.rule_toc = Some(serde_json::json!({
+            "chapterList": "$.ch",
+            "chapterName": "$.t",
+            "chapterUrl": "$.u",
+            "nextTocUrl": "$.next"
+        }));
+        let chapters = analyze_toc("default", &format!("{base}/p1"), &src, 20, None, "")
+            .await
+            .unwrap();
+        let titles: Vec<&str> = chapters.iter().map(|c| c.title.as_str()).collect();
+        assert_eq!(titles, vec!["A1", "B1"], "重试成功后第二页应并入");
+    }
+
+    /// 某页重试后仍失败：停止翻页，返回已抓到的部分目录（不整体失败、不无限重试）
+    #[tokio::test]
+    async fn test_toc_stops_after_persistent_page_failure() {
+        let _ssrf = crate::service::crawler::ssrf_allow_private_guard(true);
+        let base = serve_toc_pages(
+            vec![("/p1", r#"{"ch":[{"t":"A1","u":"/a1"}],"next":"/dead"}"#, 0)],
+            // /dead 一直断连（mock 里未知路径返回 404，这里靠 next 指向不存在路径）
+            None,
+        )
+        .await;
+        let mut src = test_source();
+        src.book_source_url = format!("{base}/src");
+        src.rule_toc = Some(serde_json::json!({
+            "chapterList": "$.ch",
+            "chapterName": "$.t",
+            "chapterUrl": "$.u",
+            "nextTocUrl": "$.next"
+        }));
+        let t0 = std::time::Instant::now();
+        let chapters = analyze_toc("default", &format!("{base}/p1"), &src, 20, None, "")
+            .await
+            .expect("第二页失败应返回已抓到的部分目录");
+        assert_eq!(chapters.len(), 1, "只保留第一页章节");
+        assert!(t0.elapsed() < std::time::Duration::from_secs(5));
     }
 
     /// 详情 @put → 目录 @get：书级变量跨 getBookInfo/getChapterList 贯通

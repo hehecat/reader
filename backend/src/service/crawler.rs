@@ -471,16 +471,20 @@ pub(crate) fn insert_capped<V>(
 /// 构建失败不缓存、按原路径直接返回错误（调用方 [`fetch`] 另有降级：缓存路径整体失败时
 /// 退回「每请求新建」的原逻辑），保证缓存不引入新的失败点。
 pub(crate) fn shared_direct_client(timeout_secs: u64) -> Result<reqwest::Client> {
+    shared_direct_client_cached(&DIRECT_CLIENTS, timeout_secs)
+}
+
+/// 缓存本体与静态表解耦：单测注入私有表，断言不再受其它用例并发抓取影响
+fn shared_direct_client_cached(
+    cache: &Mutex<HashMap<String, reqwest::Client>>,
+    timeout_secs: u64,
+) -> Result<reqwest::Client> {
     let key = client_cache_key(&ClientCacheKeyInputs::current(timeout_secs));
-    if let Some(c) = DIRECT_CLIENTS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&key)
-    {
+    if let Some(c) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
         return Ok(c.clone()); // Client 内部 Arc，clone 廉价
     }
     let client = build_http_client(timeout_secs, source_redirect_policy(), None)?;
-    let mut m = DIRECT_CLIENTS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut m = cache.lock().unwrap_or_else(|e| e.into_inner());
     insert_capped(&mut m, key, client.clone(), DIRECT_CLIENT_CACHE_MAX);
     Ok(client)
 }
@@ -518,6 +522,34 @@ fn retryable_http_error(e: &anyhow::Error) -> bool {
         "reading a body",
         "tls",
         "error sending request",
+    ]
+    .iter()
+    .any(|k| lower.contains(k))
+}
+
+/// 是否「超时」类错误——三态账本用（`storage::SearchOutcome::Timeout`）。
+///
+/// 与 [`retryable_http_error`] 的区别：那个判「值不值得重试」，这个只判「是不是慢」。
+/// 超时**不写 `consec_failures`**（超时源多半是慢源，按连败定罪会把好源压成死源）；
+/// 连接被拒/DNS 失败/证书错误这类确定性失败仍记 `Fail`。
+pub fn is_timeout_error(e: &anyhow::Error) -> bool {
+    // 优先用类型信息：reqwest 的超时 / tokio 的 deadline，避免字符串匹配误判
+    if e.chain().any(|c| {
+        c.downcast_ref::<reqwest::Error>()
+            .map(|re| re.is_timeout())
+            .unwrap_or(false)
+            || c.downcast_ref::<tokio::time::error::Elapsed>().is_some()
+    }) {
+        return true;
+    }
+    // 兜底匹配错误链文本（自定义报文里常有 “timed out”）
+    let lower = format!("{e:#}").to_ascii_lowercase();
+    [
+        "operation timed out",
+        "timed out",
+        "deadline has elapsed",
+        "timeout",
+        "超时",
     ]
     .iter()
     .any(|k| lower.contains(k))
@@ -1576,6 +1608,9 @@ async fn http_fetch_inner(
         // 求解：返回兜底响应 + 合并后 cookie 串（内存直传重试——不依赖 storage 注册状态/
         // 并发覆盖）+ 浏览器 UA。浏览器优先模式下求解失败降级直连（默认浏览器优先不能
         // 因为某站点 WAF/浏览器异常就让所有请求失败）；非优先模式保持原“失败即报错”。
+        // 求解耗时（日志用：求解失败必须能看出「跑了多久/预算多少」，否则超时/服务未就绪
+        // 这类问题在日志里完全不可观测）
+        let solve_t0 = std::time::Instant::now();
         let solved_result: Result<(FetchResponse, Option<String>, String)> = async {
             if let Some(fs) =
                 flaresolverr_request(&url, &cookie, method, body.as_deref(), timeout_secs).await?
@@ -1614,10 +1649,11 @@ async fn http_fetch_inner(
             }
         }
         .await;
+        let solve_waited_ms = solve_t0.elapsed().as_millis();
         let (fallback, merged_cookie, solved_ua) = match solved_result {
             Ok(v) => v,
             Err(e) if browser_first_get => {
-                log_solve_failure_cooled(&url, &e);
+                log_solve_failure_cooled(&url, &e, solve_waited_ms, true);
                 // 冷却期内 debug 静默降级——避免服务未就绪时每请求刷屏
                 return match fetch(
                     &url,
@@ -1634,7 +1670,13 @@ async fn http_fetch_inner(
                     Err(fetch_err) => Err(fetch_err),
                 };
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                // 非浏览器优先模式：求解失败即报错。这里曾是**完全静默**分支——CF 求解
+                // 失败（含 camoufox 未就绪/超时）在整个日志里没有任何痕迹，只能靠猜。
+                // 求解逻辑本身不变，只补可观测性。
+                log_solve_failure_cooled(&url, &e, solve_waited_ms, false);
+                return Err(e);
+            }
         };
 
         // ④ 重试原请求（原 method/body/headers + 求解后的 cookie——POST 场景关键：
@@ -1692,19 +1734,31 @@ fn browser_fallback_enabled() -> bool {
 static SOLVE_FAIL_COOLDOWN_UNTIL: std::sync::atomic::AtomicI64 =
     std::sync::atomic::AtomicI64::new(0);
 
-fn log_solve_failure_cooled(url: &str, e: &dyn std::fmt::Display) {
+/// `waited_ms` = 本次求解实际耗时；`degraded` = 失败后是降级直连还是直接返回错误。
+/// 日志必须同时带 url / 耗时 / 预算（[`CF_SOLVE_MAX_WAIT_MS`]）/ 失败原因——否则
+/// 「求解卡了 30s 然后放弃」和「浏览器进程没起来（1ms 内报错）」在日志里长得一样。
+fn log_solve_failure_cooled(url: &str, e: &anyhow::Error, waited_ms: u128, degraded: bool) {
     use std::sync::atomic::Ordering;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or_default();
     let until = SOLVE_FAIL_COOLDOWN_UNTIL.load(Ordering::Relaxed);
+    let action = if degraded {
+        "降级直连并静默"
+    } else {
+        "直接返回错误"
+    };
     if now >= until {
         // 首条/冷却结束：warn 并续期 60s
         SOLVE_FAIL_COOLDOWN_UNTIL.store(now + 60_000, Ordering::Relaxed);
-        tracing::warn!("浏览器求解失败（{url}），60s 内降级直连并静默: {e:#}");
+        tracing::warn!(
+            "CF 求解失败（{url}）耗时 {waited_ms}ms / 预算 {CF_SOLVE_MAX_WAIT_MS}ms，{action}: {e:#}"
+        );
     } else {
-        tracing::debug!("浏览器求解失败（{url}）[冷却静默]: {e:#}");
+        tracing::debug!(
+            "CF 求解失败（{url}）耗时 {waited_ms}ms / 预算 {CF_SOLVE_MAX_WAIT_MS}ms，{action}[冷却静默]: {e:#}"
+        );
     }
 }
 
@@ -2269,6 +2323,35 @@ fn merge_login_header(headers: &mut HashMap<String, String>, login_header: &str)
 mod tests {
     use super::*;
 
+    /// 三态记账的「超时」判定：超时归 Timeout（不写连败），确定性失败归 Fail。
+    /// 判定宽了会把死源当慢源放过（永远不降级），窄了又会把慢源当死源（本轮要修的病）。
+    #[test]
+    fn timeout_detection_separates_slow_from_dead() {
+        // 超时类：文本与类型两条路都要认
+        assert!(is_timeout_error(&anyhow::anyhow!("operation timed out")));
+        assert!(is_timeout_error(&anyhow::anyhow!(
+            "error sending request: timed out"
+        )));
+        assert!(is_timeout_error(&anyhow::anyhow!("单源搜索超时（15s）")));
+        assert!(is_timeout_error(&anyhow::anyhow!("deadline has elapsed")));
+        // 确定性失败：不是超时（应记 Fail，让它照常累计连败）
+        for msg in [
+            "connection refused",
+            "dns error: failed to lookup address",
+            "invalid peer certificate: UnknownIssuer",
+            "http 404",
+        ] {
+            assert!(
+                !is_timeout_error(&anyhow::anyhow!("{msg}")),
+                "{msg} 不该被判成超时"
+            );
+        }
+        // cause 链里的超时也要认（顶层常是 “error decoding response body”）
+        let chained =
+            anyhow::anyhow!("outer").context(anyhow::anyhow!("inner: operation timed out"));
+        assert!(is_timeout_error(&chained));
+    }
+
     fn base_key_inputs() -> ClientCacheKeyInputs {
         ClientCacheKeyInputs {
             timeout_secs: 15,
@@ -2340,50 +2423,40 @@ mod tests {
     }
 
     /// shared_direct_client 复用同一个底层 Client（连接池/TLS 会话跨抓取共享）：
-    /// 同一配置组合第二次调用不再 build、也不再新增条目；不同 timeout 各占一条
+    /// 同一配置第二次调用不再新增条目；不同 timeout 各占一条。
+    /// 用私有缓存表断言：不依赖进程级静态表的绝对长度，避免与其它用例并发抓取互相干扰。
     #[test]
     fn shared_direct_client_is_reused() {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        DIRECT_CLIENTS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
-        let key = client_cache_key(&ClientCacheKeyInputs::current(17));
-        let _ = shared_direct_client(17).expect("构建 client");
+        let cache: std::sync::Mutex<HashMap<String, reqwest::Client>> =
+            std::sync::Mutex::new(HashMap::new());
+        let key17 = client_cache_key(&ClientCacheKeyInputs::current(17));
+        let key18 = client_cache_key(&ClientCacheKeyInputs::current(18));
+        assert_ne!(key17, key18, "不同 timeout 必须是不同条目");
         assert_eq!(
-            DIRECT_CLIENTS
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .len(),
-            1
+            client_cache_key(&ClientCacheKeyInputs::current(17)),
+            key17,
+            "同一配置的 key 必须稳定"
         );
-        assert!(DIRECT_CLIENTS
+
+        let _ = shared_direct_client_cached(&cache, 17).expect("构建 client");
+        let n1 = cache.lock().unwrap_or_else(|e| e.into_inner()).len();
+        assert_eq!(n1, 1, "首次调用插入一条");
+        assert!(cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .contains_key(&key));
-        let _ = shared_direct_client(17).expect("构建 client");
+            .contains_key(&key17));
+
+        let _ = shared_direct_client_cached(&cache, 17).expect("构建 client");
         assert_eq!(
-            DIRECT_CLIENTS
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .len(),
-            1,
+            cache.lock().unwrap_or_else(|e| e.into_inner()).len(),
+            n1,
             "同一配置不应重复插入"
         );
-        let _ = shared_direct_client(18).expect("构建 client");
-        assert_eq!(
-            DIRECT_CLIENTS
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .len(),
-            2,
-            "不同 timeout 必须是不同条目"
-        );
-        DIRECT_CLIENTS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+
+        let _ = shared_direct_client_cached(&cache, 18).expect("构建 client");
+        let m = cache.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(m.len(), 2, "不同 timeout 必须是不同条目");
+        assert!(m.contains_key(&key17) && m.contains_key(&key18));
     }
 
     /// E6：cookie 域键 = legacy getSubDomain（host[:port] 去最左标签）

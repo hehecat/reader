@@ -5,6 +5,9 @@ pub struct SourceStat {
     pub source_url: String,
     pub attempts: i64,
     pub successes: i64,
+    /// 超时次数（含「被窗硬顶截断」的补记）。**不计入 successes，也不计入 `consec_failures`**：
+    /// 超时是「慢」不是「死」，用它和连败区分开，避免把好源误判成死源。
+    pub timeouts: i64,
     pub lat_sum_ms: i64,
     pub intro_hits: i64,
     pub intro_count: i64,

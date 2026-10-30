@@ -9,6 +9,41 @@ use crate::AppConfig;
 
 pub mod migrate;
 
+/// 单次搜索的结论三态（`source_stats` 的记账口径）。
+///
+/// 为什么不是 `bool`：**超时不是失败**。老实现只有一个 `ok`，超时被记成普通失败 →
+/// `consec_failures++` → 连败 3 次把好源压到 `confidence()=0.05`，再被「死源 6h 跳过」
+/// 逻辑滤掉（实测超时源多为 15s 单源预算下的慢源，不是死源）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchOutcome {
+    /// 有结论的成功（拿到响应/解析出结果）
+    Ok,
+    /// 真失败：网络错误、解析失败、HTTP 业务错误
+    Fail,
+    /// 超时 / 被窗硬顶截断：不给 `consec_failures` 定罪，但要记 `last_failure_at`
+    Timeout,
+}
+
+impl SearchOutcome {
+    /// 老布尔入口的映射（`true → Ok`、`false → Fail`）——**表达不了超时**
+    pub fn from_bool(ok: bool) -> Self {
+        if ok {
+            Self::Ok
+        } else {
+            Self::Fail
+        }
+    }
+
+    /// 抓取/搜索错误 → 结论：网络层超时归 [`SearchOutcome::Timeout`]，其余归 `Fail`
+    pub fn from_error(e: &anyhow::Error) -> Self {
+        if crate::service::crawler::is_timeout_error(e) {
+            Self::Timeout
+        } else {
+            Self::Fail
+        }
+    }
+}
+
 /// 存储句柄
 #[derive(Clone)]
 pub struct Storage {
@@ -1017,6 +1052,10 @@ pub async fn init(config: &AppConfig) -> Result<Storage> {
     if let Err(e) = storage.migrate_user_permission_defaults().await {
         tracing::warn!("用户默认权限一次性迁移失败: {e:#}");
     }
+    // source_stats（含 timeouts 三态列的幂等补列）必须建在下面的快照刷新**之前**：
+    // ALTER TABLE 之后若还抱着旧读快照，首次 SELECT * 会读不到新列（见下条注释）。
+    storage.ensure_source_stats_table().await?;
+    storage.ensure_search_cache_table().await?;
     // WAL 快照刷新：WAL 模式下隐式读事务跨语句保持——建表/ALTER/重建期间
     // 执行过 pragma 检查的池连接会持有 DDL 提交前的旧读快照，后续查询可能
     // 读不到新表结构/新数据（sqlx-sqlite 0.7.4 下表现为 row.rs 越界 panic 或
@@ -1028,8 +1067,6 @@ pub async fn init(config: &AppConfig) -> Result<Storage> {
         let mut conn = storage.pool.acquire().await?;
         sqlx::query("BEGIN; COMMIT;").execute(&mut *conn).await?;
     }
-    storage.ensure_source_stats_table().await?;
-    storage.ensure_search_cache_table().await?;
     Ok(storage)
 }
 
@@ -1670,6 +1707,7 @@ impl Storage {
                 source_url TEXT NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0,
                 successes INTEGER NOT NULL DEFAULT 0,
+                timeouts INTEGER NOT NULL DEFAULT 0,
                 lat_sum_ms INTEGER NOT NULL DEFAULT 0,
                 intro_hits INTEGER NOT NULL DEFAULT 0,
                 intro_count INTEGER NOT NULL DEFAULT 0,
@@ -1685,9 +1723,82 @@ impl Storage {
         )
         .execute(&self.pool)
         .await?;
+        // 旧库升级：timeouts 三态列（超时计数）幂等补上——列已存在时是 no-op，
+        // 连跑两次不会报错、也不会重复加列（`pragma_table_info` 判存在，见 ensure_column_typed）。
+        ensure_column_typed(
+            &self.pool,
+            "source_stats",
+            "timeouts",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        .await?;
         Ok(())
     }
 
+    /// 三态记账（**新增调用点必须走这个**，不要再用 bool 表达「超时」）
+    ///
+    /// 语义严格三分：
+    /// - [`SearchOutcome::Ok`]：`attempts+1`、`successes+1`、`consec_failures=0`
+    /// - [`SearchOutcome::Fail`]：`attempts+1`、`consec_failures+1`、`last_failure_at=now_ms`
+    /// - [`SearchOutcome::Timeout`]：`attempts+1`、`timeouts+1`、`consec_failures` **不变**、
+    ///   `last_failure_at=now_ms`
+    ///
+    /// 为什么超时不能记成失败：老实现用一个 `ok: bool`，超时被记成普通失败 → `consec_failures++`
+    /// → 连败 3 次就把好源压到 `confidence()=0.05`，再被「死源 6h 跳过」逻辑过滤掉。
+    /// 时间戳一律毫秒（`timestamp_millis()`）；秒/毫秒混用会让 6h 豁免窗口变成 6 秒或 25 天。
+    pub async fn record_search_outcome_state(
+        &self,
+        ns: &str,
+        source_url: &str,
+        outcome: SearchOutcome,
+        lat_ms: i64,
+        intro_hits: i64,
+        intro_count: i64,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().timestamp_millis();
+        // 三个互斥增量，SQL 里用它们表达三态，避免「布尔 + CASE」把超时混进连败
+        let ok_delta = (outcome == SearchOutcome::Ok) as i64;
+        let timeout_delta = (outcome == SearchOutcome::Timeout) as i64;
+        let consec_inc = (outcome == SearchOutcome::Fail) as i64;
+        let consec_reset = (outcome == SearchOutcome::Ok) as i64;
+        // Ok 不动 last_failure_at；Fail/Timeout 都写（死源 6h 豁免靠它才生效）
+        let fail_ts = if outcome == SearchOutcome::Ok { 0 } else { now };
+        sqlx::query(
+            "INSERT INTO source_stats (user_namespace, source_url, attempts, successes, timeouts, lat_sum_ms, intro_hits, intro_count, consec_failures, last_failure_at, updated_at)
+             VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT(user_namespace, source_url) DO UPDATE SET
+                attempts = attempts + 1,
+                successes = successes + ?3,
+                timeouts = timeouts + ?4,
+                lat_sum_ms = lat_sum_ms + ?5,
+                intro_hits = intro_hits + ?6,
+                intro_count = intro_count + ?7,
+                consec_failures = CASE WHEN ?11 = 1 THEN 0
+                                       WHEN ?8 = 1 THEN consec_failures + 1
+                                       ELSE consec_failures END,
+                last_failure_at = CASE WHEN ?9 > 0 THEN ?9 ELSE last_failure_at END,
+                updated_at = ?10",
+        )
+        .bind(ns)
+        .bind(source_url)
+        .bind(ok_delta)
+        .bind(timeout_delta)
+        .bind(lat_ms)
+        .bind(intro_hits)
+        .bind(intro_count)
+        .bind(consec_inc)
+        .bind(fail_ts)
+        .bind(now)
+        .bind(consec_reset)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// 向后兼容入口（老签名：`ok: bool`）——只是 [`Self::record_search_outcome_state`] 的薄包装。
+    ///
+    /// ⚠️ `ok=false` 一律记 `Fail`：**它表达不了超时**。凡是「超时/被窗硬顶截断」的新调用点
+    /// 必须显式传 [`SearchOutcome::Timeout`]，否则又会污染 `consec_failures`。
     pub async fn record_search_outcome(
         &self,
         ns: &str,
@@ -1697,32 +1808,15 @@ impl Storage {
         intro_hits: i64,
         intro_count: i64,
     ) -> Result<()> {
-        let now = chrono::Utc::now().timestamp_millis();
-        sqlx::query(
-            "INSERT INTO source_stats (user_namespace, source_url, attempts, successes, lat_sum_ms, intro_hits, intro_count, consec_failures, last_failure_at, updated_at)
-             VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-             ON CONFLICT(user_namespace, source_url) DO UPDATE SET
-                attempts = attempts + 1,
-                successes = successes + ?3,
-                lat_sum_ms = lat_sum_ms + ?4,
-                intro_hits = intro_hits + ?5,
-                intro_count = intro_count + ?6,
-                consec_failures = CASE WHEN ?3 = 1 THEN 0 ELSE consec_failures + 1 END,
-                last_failure_at = CASE WHEN ?3 = 1 THEN last_failure_at ELSE ?9 END,
-                updated_at = ?9",
+        self.record_search_outcome_state(
+            ns,
+            source_url,
+            SearchOutcome::from_bool(ok),
+            lat_ms,
+            intro_hits,
+            intro_count,
         )
-        .bind(ns)
-        .bind(source_url)
-        .bind(if ok { 1i64 } else { 0 })
-        .bind(lat_ms)
-        .bind(intro_hits)
-        .bind(intro_count)
-        .bind(if ok { 0i64 } else { 1 })
-        .bind(if ok { 0i64 } else { now })
-        .bind(now)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        .await
     }
 
     pub async fn record_path_outcome(
@@ -12019,5 +12113,239 @@ mod tests {
         assert_eq!(m.len(), 2, "超额表应一次收敛到上限");
         assert!(m.contains_key("new"));
         assert!(m.contains_key("old4"), "最近写的旧条目应留下");
+    }
+
+    // ---------------- 三态记账（SearchOutcome） ----------------
+
+    /// 取单源统计行（不存在则 panic，便于断言）
+    async fn stat_of(storage: &Storage, ns: &str, url: &str) -> crate::model::SourceStat {
+        storage
+            .get_source_stats(ns)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|st| st.source_url == url)
+            .unwrap_or_else(|| panic!("{url} 应有统计行"))
+    }
+
+    /// Ok / Fail / Timeout 三种 outcome 的 SQL 结果。
+    ///
+    /// 关键断言（本轮改造的全部意义）：**Timeout 不 ++ `consec_failures`，但必须写
+    /// `last_failure_at`**——前者防止把慢源误判成死源，后者是「死源 6h 豁免」的判据。
+    #[tokio::test]
+    async fn test_record_search_outcome_three_states() {
+        let storage = test_storage("outcome3").await;
+        let ns = "default";
+        let url = "https://three-state.test";
+
+        // ① Ok：attempts+1 / successes+1 / consec_failures 归零 / 不动 last_failure_at
+        storage
+            .record_search_outcome_state(ns, url, SearchOutcome::Ok, 1200, 3, 5)
+            .await
+            .unwrap();
+        let st = stat_of(&storage, ns, url).await;
+        assert_eq!(
+            (st.attempts, st.successes, st.timeouts, st.consec_failures),
+            (1, 1, 0, 0)
+        );
+        assert_eq!(st.last_failure_at, 0, "Ok 不写 last_failure_at");
+        assert_eq!((st.intro_hits, st.intro_count), (3, 5));
+        assert_eq!(st.lat_sum_ms, 1200);
+
+        // ② Fail：attempts+1 / consec_failures+1 / last_failure_at=now_ms，不动 successes
+        let before = chrono::Utc::now().timestamp_millis();
+        storage
+            .record_search_outcome_state(ns, url, SearchOutcome::Fail, 800, 0, 0)
+            .await
+            .unwrap();
+        let st = stat_of(&storage, ns, url).await;
+        assert_eq!(
+            (st.attempts, st.successes, st.timeouts, st.consec_failures),
+            (2, 1, 0, 1)
+        );
+        assert!(st.last_failure_at >= before, "Fail 必须写 last_failure_at");
+        assert!(
+            st.last_failure_at > 1_000_000_000_000,
+            "last_failure_at 必须是毫秒（秒级时间戳 ~1e9，毫秒 ~1.7e12）"
+        );
+
+        // ③ Timeout：attempts+1 / timeouts+1 / successes 不变 /
+        //    **consec_failures 不动** / last_failure_at 必须写 now_ms
+        let before = chrono::Utc::now().timestamp_millis();
+        storage
+            .record_search_outcome_state(ns, url, SearchOutcome::Timeout, 15_000, 0, 0)
+            .await
+            .unwrap();
+        let st = stat_of(&storage, ns, url).await;
+        assert_eq!(
+            (st.attempts, st.successes, st.timeouts, st.consec_failures),
+            (3, 1, 1, 1),
+            "Timeout: attempts/timeouts +1，successes 与 consec_failures 都不变"
+        );
+        assert!(
+            st.last_failure_at >= before,
+            "Timeout 也必须写 last_failure_at（6h 死源豁免靠它）"
+        );
+    }
+
+    /// 连续超时不累积连败：`consec_failures` 一直不涨，因此
+    /// `confidence()` 不会被压到 0.05，源也不会被「死源 6h 跳过」滤掉。
+    ///
+    /// 改造前这里是：3 次超时 = 3 次失败 → `consec_failures=3` → confidence 0.05 → 6h 不搜。
+    #[tokio::test]
+    async fn test_timeout_does_not_poison_consec_failures() {
+        let storage = test_storage("outcome-timeout").await;
+        let ns = "default";
+        let url = "https://slow-but-alive.test";
+
+        // 先成功一次打底，再连续 5 次超时
+        storage
+            .record_search_outcome_state(ns, url, SearchOutcome::Ok, 900, 1, 1)
+            .await
+            .unwrap();
+        for _ in 0..5 {
+            storage
+                .record_search_outcome_state(ns, url, SearchOutcome::Timeout, 15_000, 0, 0)
+                .await
+                .unwrap();
+        }
+        let st = stat_of(&storage, ns, url).await;
+        assert_eq!(st.attempts, 6);
+        assert_eq!(st.successes, 1);
+        assert_eq!(st.timeouts, 5);
+        assert_eq!(st.consec_failures, 0, "超时不计连败");
+
+        // 对照：一次真失败才 +1
+        storage
+            .record_search_outcome_state(ns, url, SearchOutcome::Fail, 100, 0, 0)
+            .await
+            .unwrap();
+        let st = stat_of(&storage, ns, url).await;
+        assert_eq!(st.consec_failures, 1, "只有 Fail 计连败");
+        // 再成功一次归零
+        storage
+            .record_search_outcome_state(ns, url, SearchOutcome::Ok, 100, 1, 1)
+            .await
+            .unwrap();
+        let st = stat_of(&storage, ns, url).await;
+        assert_eq!(st.consec_failures, 0, "Ok 清零连败");
+    }
+
+    /// 向后兼容入口：老 `bool` 签名仍然编译且行为不变（true→Ok / false→Fail）
+    #[tokio::test]
+    async fn test_record_search_outcome_bool_compat() {
+        let storage = test_storage("outcome-bool").await;
+        let ns = "default";
+        let url = "https://bool-compat.test";
+        storage
+            .record_search_outcome(ns, url, true, 500, 0, 0)
+            .await
+            .unwrap();
+        storage
+            .record_search_outcome(ns, url, false, 500, 0, 0)
+            .await
+            .unwrap();
+        let st = stat_of(&storage, ns, url).await;
+        assert_eq!((st.attempts, st.successes, st.timeouts), (2, 1, 0));
+        assert_eq!(st.consec_failures, 1, "bool=false 仍记 Fail");
+        assert!(st.last_failure_at > 0);
+        // bool 入口表达不了超时：from_bool 只有 Ok/Fail
+        assert_eq!(SearchOutcome::from_bool(true), SearchOutcome::Ok);
+        assert_eq!(SearchOutcome::from_bool(false), SearchOutcome::Fail);
+    }
+
+    /// 迁移幂等：对**已有生产库形态**（source_stats 无 timeouts 列）补列——
+    /// 连跑两次不报错、列不重复加、老数据不丢、默认值 0。
+    #[tokio::test]
+    async fn test_source_stats_timeouts_migration_idempotent() {
+        let dir = std::env::temp_dir().join(format!(
+            "reader-storage-migrate-{}-timeouts",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("legacy.db");
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(&db_path)
+                    .create_if_missing(true),
+            )
+            .await
+            .unwrap();
+        // 旧生产库的表结构：没有 timeouts 列
+        sqlx::query(
+            "CREATE TABLE source_stats (
+                user_namespace TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                successes INTEGER NOT NULL DEFAULT 0,
+                lat_sum_ms INTEGER NOT NULL DEFAULT 0,
+                intro_hits INTEGER NOT NULL DEFAULT 0,
+                intro_count INTEGER NOT NULL DEFAULT 0,
+                toc_attempts INTEGER NOT NULL DEFAULT 0,
+                toc_successes INTEGER NOT NULL DEFAULT 0,
+                content_attempts INTEGER NOT NULL DEFAULT 0,
+                content_successes INTEGER NOT NULL DEFAULT 0,
+                consec_failures INTEGER NOT NULL DEFAULT 0,
+                last_failure_at INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_namespace, source_url)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO source_stats (user_namespace, source_url, attempts, successes, consec_failures)
+             VALUES ('default', 'https://legacy.test', 7, 5, 2)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let storage = Storage {
+            pool: pool.clone(),
+            config: AppConfig::from_env(),
+            cache_tag: 0,
+        };
+        // 第一次补列；第二次（模拟服务再次启动）必须是 no-op
+        storage.ensure_source_stats_table().await.unwrap();
+        storage.ensure_source_stats_table().await.unwrap();
+
+        // 列恰好一列，不重复
+        let cols: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM pragma_table_info('source_stats') WHERE name = 'timeouts'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(cols.len(), 1, "timeouts 列应恰好一列");
+        // 老数据不丢，新列默认 0
+        let stats = storage.get_source_stats("default").await.unwrap();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].attempts, 7);
+        assert_eq!(stats[0].successes, 5);
+        assert_eq!(stats[0].consec_failures, 2);
+        assert_eq!(stats[0].timeouts, 0);
+        // 补列后照常能记账
+        storage
+            .record_search_outcome_state(
+                "default",
+                "https://legacy.test",
+                SearchOutcome::Timeout,
+                15_000,
+                0,
+                0,
+            )
+            .await
+            .unwrap();
+        let stats = storage.get_source_stats("default").await.unwrap();
+        assert_eq!((stats[0].attempts, stats[0].timeouts), (8, 1));
+
+        // 全新建库（init 路径）同样带列且幂等
+        storage.pool.close().await;
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
