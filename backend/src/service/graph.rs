@@ -12,7 +12,10 @@ pub mod normalize;
 pub mod plan;
 
 pub use job::{cancel, estimate, progress_of, start_job, GraphProgress, JobOptions, StartOutcome};
-pub use normalize::{normalize, repair_parent_direction};
+pub use normalize::{
+    normalize, normalize_kin_permanence, repair_parent_direction, serve_stored, GraphHealth,
+    PERMANENT_RELATION_TYPES,
+};
 pub use plan::{
     build_batch_messages, content_hash, number_chapters_keyed, plan_batches, plan_incremental,
     select_incremental, ChapterEntry, Covered, IncrementalPlan,

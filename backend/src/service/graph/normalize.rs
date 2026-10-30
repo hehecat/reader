@@ -15,6 +15,7 @@
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::Mutex;
 
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -2205,7 +2206,7 @@ pub fn normalize(raws: &[Value], chapters: &[Chapter], hints: &BookHints) -> Val
         "graph normalize 丢弃统计"
     );
 
-    json!({
+    let mut graph = json!({
         "meta": {
             "book": book_name(&batches, &hints.book_name),
             "totalChapters": total,
@@ -2226,7 +2227,307 @@ pub fn normalize(raws: &[Value], chapters: &[Chapter], hints: &BookHints) -> Val
             "chaptersScanned": chapters.len(),
             "sampledChapters": chapters.len(),
         },
-    })
+    });
+    // 血缘边不该有结束章：落盘前先归一，保证写进去的和读出来的是一个口径（幂等）
+    normalize_kin_permanence(&mut graph);
+    graph
+}
+
+// ---------------------------------------------------------------- 血缘「至今仍在」归一 + 体检
+
+/// 「一旦成立就至今仍在」的关系类型：血缘（父子 / 兄弟姐妹）。
+///
+/// 抽取模型把「最后一次提到 / 人物死亡」写进了 `to_chapter`，于是血缘也会过期：
+/// 生产实例《玄鉴仙族》里 `李木田 → 李长湖 [parent] 4..1711`，前端按
+/// `to_chapter >= 当前章` 判「还成不成立」，读到 1749 章就把这条边藏了——同一个
+/// 37 人的亲缘连通分量在画面上裂成两块。血缘是身份不是状态，收盘章一律 `null`
+/// （= 至今仍在）；`spouse`/`enemy`/`ally`/`other`/`master`/`disciple` 保留原区间语义。
+pub const PERMANENT_RELATION_TYPES: &[&str] = &["parent", "sibling"];
+
+/// 日志里每类告警最多带几条样例（别逐条刷屏）
+const HEALTH_SAMPLES: usize = 5;
+
+/// 一次归一的体检结果：数量给日志，样例给排障。
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct GraphHealth {
+    /// 关系总数
+    pub relations: usize,
+    /// 端点缺失（`from`/`to` 的人物 id 不在 characters 里）的关系数
+    pub dangling: usize,
+    /// 端点缺失样例（至多 [`HEALTH_SAMPLES`] 条）
+    pub dangling_samples: Vec<String>,
+    /// 本次被抹掉结束章的血缘边数（`to_chapter` 原本非 null）
+    pub kin_ended: usize,
+    /// 血缘边样例（至多 [`HEALTH_SAMPLES`] 条）
+    pub kin_samples: Vec<String>,
+    /// 同一势力内却与主家不连通的血缘小块数（疑似抽取漏边）
+    pub stranded: usize,
+    /// 孤离小块样例（至多 [`HEALTH_SAMPLES`] 条）
+    pub stranded_samples: Vec<String>,
+}
+
+/// 写路径的归一 + 体检：`normalize()` 落盘前调用（一本书归一一次，日志照发）。
+///
+/// 归一口径见 [`kin_permanence_pass`]；这层只多一步「落日志」。
+pub fn normalize_kin_permanence(graph: &mut Value) -> GraphHealth {
+    let health = kin_permanence_pass(graph);
+    log_graph_health(&health);
+    health
+}
+
+/// 归一本体（纯函数、幂等、不打日志）：
+/// 1. `parent`/`sibling` 的 `to_chapter` → `null`（血缘不随最后一次提及过期）；
+/// 2. 顺带体检：端点缺失、血缘边带结束章，数量与前几条样例回给调用方落日志。
+///
+/// 已存成品（`book_graphs.data_json`）不用重新生成，走一遍这个函数就修好了；
+/// 幂等：跑两遍的结果与跑一遍完全一致（第二遍 `kin_ended` 为 0，JSON 不变）。
+/// 不增删关系、不改顺序、不动其他字段——前端 zod 契约里 `to_chapter` 本就允许 null。
+fn kin_permanence_pass(graph: &mut Value) -> GraphHealth {
+    let mut health = GraphHealth::default();
+
+    // 第三种体检：同势力内的孤离血缘小块。只读 characters/relations/factions，
+    // 与「抹结束章」互不干扰，所以放在借用 relations 之前先算。
+    let (stranded, stranded_samples) = stranded_kin_blocks(graph);
+    health.stranded = stranded;
+    health.stranded_samples = stranded_samples;
+
+    // id → 名字：告警样例要能被人读懂（「李木田(c5) → 李长湖(c7)」），不是纯 c 编号
+    let names: HashMap<String, String> = graph
+        .get("characters")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| {
+                    let id = c.get("id").and_then(|v| v.as_str())?;
+                    let name = c.get("name").and_then(|v| v.as_str()).unwrap_or(id);
+                    Some((id.to_string(), name.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let Some(rels) = graph.get_mut("relations").and_then(|v| v.as_array_mut()) else {
+        // 没有 relations（未生成/坏数据）：无事可做，也没得体检
+        return health;
+    };
+    health.relations = rels.len();
+
+    for rel in rels.iter_mut() {
+        let Some(obj) = rel.as_object_mut() else {
+            continue;
+        };
+        let t = obj
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("other")
+            .to_string();
+        let a = obj
+            .get("from")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let b = obj
+            .get("to")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if !names.contains_key(&a) || !names.contains_key(&b) {
+            health.dangling += 1;
+            if health.dangling_samples.len() < HEALTH_SAMPLES {
+                health.dangling_samples.push(format!(
+                    "{} → {} [{t}]",
+                    person(&names, &a),
+                    person(&names, &b)
+                ));
+            }
+        }
+
+        if !PERMANENT_RELATION_TYPES.contains(&t.as_str()) {
+            continue;
+        }
+        let ended = obj.get("to_chapter").cloned().unwrap_or(Value::Null);
+        if ended.is_null() {
+            continue;
+        }
+        health.kin_ended += 1;
+        if health.kin_samples.len() < HEALTH_SAMPLES {
+            let from = obj
+                .get("from_chapter")
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "?".to_string());
+            health.kin_samples.push(format!(
+                "{} → {} [{t}] {from}..{}",
+                person(&names, &a),
+                person(&names, &b),
+                ended
+            ));
+        }
+        obj.insert("to_chapter".to_string(), Value::Null);
+    }
+
+    health
+}
+
+/// 告警样例里的人物写法：`李木田(c5)`；id 缺失/查不到时退回原始 id
+fn person(names: &HashMap<String, String>, id: &str) -> String {
+    match names.get(id) {
+        Some(n) => format!("{n}({id})"),
+        None => format!("{id}(?)"),
+    }
+}
+
+/// 判亲缘连通时算进去的关系类型：父子、兄弟姐妹、夫妻
+const KIN_GRAPH_TYPES: &[&str] = &["parent", "sibling", "spouse"];
+
+/// 孤离小块的下限：主块至少这么大（人），且至少是小块的这么多倍
+const STRANDED_MAIN_MIN: usize = 10;
+const STRANDED_RATIO: usize = 3;
+
+/// 同势力内「孤离血缘小块」检测（疑似抽取漏边，只报不改）。
+///
+/// 生产实例：《玄鉴仙族》「黎泾李家」35 人里 27 人连成一片，只剩
+/// `李承福 → 李秋阳 [parent]` 两人自成一小块——两人都在 `characters` 里、
+/// 端点没缺，所以端点检查看不见它；缺的是把这一小撮并回主家的那条边，
+/// 画面上就是一座飘着的孤岛。补边要重跑模型，本次不修，先让日志看见。
+fn stranded_kin_blocks(graph: &Value) -> (usize, Vec<String>) {
+    let Some(chars) = graph.get("characters").and_then(|v| v.as_array()) else {
+        return (0, Vec::new());
+    };
+    let mut names: Vec<&str> = vec![""; chars.len()];
+    let mut idx: HashMap<&str, usize> = HashMap::with_capacity(chars.len());
+    for (i, c) in chars.iter().enumerate() {
+        let Some(id) = c.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        idx.insert(id, i);
+        names[i] = c.get("name").and_then(|v| v.as_str()).unwrap_or(id);
+    }
+
+    // 并查集：亲缘边把人物连成块（端点缺失的边天然被跳过）
+    let mut uf: Vec<usize> = (0..names.len()).collect();
+    if let Some(rels) = graph.get("relations").and_then(|v| v.as_array()) {
+        for r in rels {
+            let t = r.get("type").and_then(|v| v.as_str()).unwrap_or("other");
+            if !KIN_GRAPH_TYPES.contains(&t) {
+                continue;
+            }
+            let end = |k: &str| {
+                r.get(k)
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| idx.get(s).copied())
+            };
+            let (Some(a), Some(b)) = (end("from"), end("to")) else {
+                continue;
+            };
+            uf_union(&mut uf, a, b);
+        }
+    }
+
+    let Some(factions) = graph.get("factions").and_then(|v| v.as_array()) else {
+        return (0, Vec::new());
+    };
+    let mut total = 0;
+    let mut samples: Vec<String> = Vec::new();
+    for f in factions {
+        let fname = f.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+        let Some(members) = f.get("members").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        // 本势力成员按亲缘连通块归组
+        let mut blocks: HashMap<usize, Vec<usize>> = HashMap::new();
+        for m in members {
+            let Some(i) = m.as_str().and_then(|s| idx.get(s).copied()) else {
+                continue;
+            };
+            let root = uf_root(&mut uf, i);
+            blocks.entry(root).or_default().push(i);
+        }
+        let mut sizes: Vec<(usize, Vec<usize>)> =
+            blocks.into_values().map(|v| (v.len(), v)).collect();
+        sizes.sort_by_key(|b| std::cmp::Reverse(b.0));
+        let Some(main) = sizes.first().map(|(n, _)| *n) else {
+            continue;
+        };
+        if main < STRANDED_MAIN_MIN || sizes.len() < 2 {
+            continue;
+        }
+        for (len, who) in sizes.iter().skip(1) {
+            // 单人块多半是「属员/管事」这类本来就没血缘的人，噪音大，只报 ≥2 人的
+            if *len < 2 || *len * STRANDED_RATIO > main {
+                continue;
+            }
+            total += 1;
+            if samples.len() < HEALTH_SAMPLES {
+                let who: Vec<&str> = who.iter().map(|i| names[*i]).collect();
+                samples.push(format!(
+                    "{fname}: {}（{len} 人）与主块 {main} 人之间没有任何血缘/姻亲边相连",
+                    who.join("、")
+                ));
+            }
+        }
+    }
+    (total, samples)
+}
+
+/// 两类数据缺口各汇总一条 `warn!`（数量 + 前几条样例），不逐条刷屏
+fn log_graph_health(h: &GraphHealth) {
+    if h.dangling > 0 {
+        tracing::warn!(
+            dangling = h.dangling,
+            total = h.relations,
+            samples = ?h.dangling_samples,
+            "图谱关系端点缺失：from/to 的人物 id 不在 characters 里（抽取漏边/合并丢人，本次只报不改）"
+        );
+    }
+    if h.kin_ended > 0 {
+        tracing::warn!(
+            kin_ended = h.kin_ended,
+            total = h.relations,
+            samples = ?h.kin_samples,
+            "血缘边被写成有结束章，已归一为 to_chapter = null（父子/兄弟姐妹不随最后一次提及过期）"
+        );
+    }
+    if h.stranded > 0 {
+        tracing::warn!(
+            stranded_blocks = h.stranded,
+            samples = ?h.stranded_samples,
+            "同势力内出现孤离的血缘小块：块内人物与主家无任何血缘/姻亲边相连，疑似抽取漏边（本次只报不改）"
+        );
+    }
+}
+
+/// 读取路径入口：把「已存成品」过一遍幂等归一后交给路由。
+///
+/// 存在的理由是**老数据**：`book_graphs` 里已经躺着的成品是旧口径生成的（血缘边带
+/// 结束章），重跑模型又贵又没必要——每次读出来归一一次即可，且幂等所以不会漂移。
+/// 独立成一个函数是为了让路由侧只多一行调用，改动面最小。
+pub fn serve_stored(mut graph: Value) -> Value {
+    let health = kin_permanence_pass(&mut graph);
+    // 成品不会被写回，所以 `kin_ended` 每次读都 > 0：同一本书每进程只告警一次，
+    // 否则刷新页面就会反复刷 warn。
+    let key = format!(
+        "{}#{}",
+        graph
+            .pointer("/meta/book")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+        health.relations
+    );
+    let first_time = {
+        let mut warned = warned_books().lock().unwrap_or_else(|e| e.into_inner());
+        warned.insert(key)
+    };
+    if first_time {
+        log_graph_health(&health);
+    }
+    graph
+}
+
+/// 读路径已告警过的书（进程内去重）
+fn warned_books() -> &'static Mutex<BTreeSet<String>> {
+    static WARNED: Lazy<Mutex<BTreeSet<String>>> = Lazy::new(|| Mutex::new(BTreeSet::new()));
+    &WARNED
 }
 
 /// 全书真实总章数。
@@ -2901,6 +3202,167 @@ mod tests {
         assert!(
             matches!(alias, "李氏" | "黎泾李家") && Some(alias) != li["name"].as_str(),
             "被并掉的写法应进 aliases：{li}"
+        );
+    }
+
+    // ---------------------------------------------- 血缘「至今仍在」归一（落盘形状：端点是 c 编号）
+
+    /// 一份「已经躺在 book_graphs 里」的成品：端点用 c 编号，血缘边带结束章，
+    /// 另有 spouse 一条（区间要保住）和一条端点缺失的 parent（抽取漏边）。
+    fn stored_graph() -> Value {
+        json!({
+            "meta": { "book": "玄鉴仙族", "totalChapters": 1749 },
+            "characters": [
+                {"id": "c1", "name": "李木田"},
+                {"id": "c2", "name": "李长湖"},
+                {"id": "c3", "name": "李项平"},
+                {"id": "c4", "name": "田芸"},
+                {"id": "c5", "name": "李承福"},
+            ],
+            "relations": [
+                {"id": "r1", "from": "c1", "to": "c2", "type": "parent", "label": "父亲",
+                 "from_chapter": 4, "to_chapter": 1711, "quote": "李木田之子李长湖"},
+                {"id": "r2", "from": "c1", "to": "c3", "type": "sibling", "label": "兄弟",
+                 "from_chapter": 2, "to_chapter": 1711, "quote": "李木田亲弟李项平"},
+                {"id": "r3", "from": "c3", "to": "c4", "type": "spouse", "label": "夫妻",
+                 "from_chapter": 192, "to_chapter": 1648, "quote": "李项平之妻田芸"},
+                {"id": "r4", "from": "c5", "to": "c99", "type": "parent", "label": "父亲",
+                 "from_chapter": 300, "to_chapter": null, "quote": "李承福之子李秋阳"},
+            ],
+        })
+    }
+
+    fn rel_by_id<'a>(data: &'a Value, id: &str) -> &'a Value {
+        rels_of(data)
+            .iter()
+            .find(|r| r["id"].as_str() == Some(id))
+            .unwrap_or_else(|| panic!("应有关系 {id}"))
+    }
+
+    /// ① parent / sibling 的 to_chapter 归一为 null（血缘不随最后一次提及过期）
+    #[test]
+    fn kin_edges_become_open_ended() {
+        let mut graph = stored_graph();
+        let health = normalize_kin_permanence(&mut graph);
+        assert!(
+            rel_by_id(&graph, "r1")["to_chapter"].is_null(),
+            "parent 的收盘章必须抹成 null：{}",
+            rel_by_id(&graph, "r1")
+        );
+        assert!(
+            rel_by_id(&graph, "r2")["to_chapter"].is_null(),
+            "sibling 的收盘章必须抹成 null：{}",
+            rel_by_id(&graph, "r2")
+        );
+        // 起始章照留（前端靠它判「这条边还没开始」）
+        assert_eq!(rel_by_id(&graph, "r1")["from_chapter"], json!(4));
+        assert_eq!(health.kin_ended, 2, "两条血缘边被归一");
+        assert_eq!(health.kin_samples.len(), 2, "样例按条给，但总数封顶");
+    }
+
+    /// ② spouse 保留原区间（夫妻会离/丧偶，是有状态的关系）
+    #[test]
+    fn spouse_keeps_its_range() {
+        let mut graph = stored_graph();
+        normalize_kin_permanence(&mut graph);
+        let spouse = rel_by_id(&graph, "r3");
+        assert_eq!(spouse["from_chapter"], json!(192));
+        assert_eq!(
+            spouse["to_chapter"],
+            json!(1648),
+            "spouse 不该被归一：{spouse}"
+        );
+    }
+
+    /// ③ 归一幂等：跑两遍输出完全一致（第二遍已经没有可改的边）
+    #[test]
+    fn kin_normalization_is_idempotent() {
+        let mut once = stored_graph();
+        let mut twice = stored_graph();
+        let h1 = normalize_kin_permanence(&mut once);
+        normalize_kin_permanence(&mut twice);
+        let h2 = normalize_kin_permanence(&mut twice);
+        assert_eq!(once, twice, "两遍归一后的 JSON 必须一模一样");
+        assert_eq!(h1.kin_ended, 2);
+        assert_eq!(h2.kin_ended, 0, "第二遍没东西可归一");
+        assert_eq!(h2.dangling, h1.dangling, "体检结论不随次数变化");
+    }
+
+    /// ④ 端点缺失要有告警数据（数量 + 前几条样例），且不因归一挂掉
+    #[test]
+    fn dangling_endpoints_are_reported() {
+        let mut graph = stored_graph();
+        let health = normalize_kin_permanence(&mut graph);
+        assert_eq!(health.relations, 4);
+        assert_eq!(health.dangling, 1, "c99 不在 characters 里：{health:?}");
+        let sample = health.dangling_samples[0].as_str();
+        assert!(
+            sample.contains("李承福") && sample.contains("c99") && sample.contains("parent"),
+            "样例要能直接看出是谁：{sample:?}"
+        );
+        // 只报不改：关系还在（本函数不负责补漏边）
+        assert_eq!(rels_of(&graph).len(), 4);
+    }
+
+    /// ⑤ 已存成品走读取路径后血缘区间被修正（不重跑模型、不写回库）
+    #[test]
+    fn stored_graph_is_fixed_on_read_path() {
+        let stored = serde_json::to_string(&stored_graph()).expect("序列化旧成品");
+        let served = serve_stored(serde_json::from_str::<Value>(&stored).expect("解析旧成品"));
+        assert!(
+            rel_by_id(&served, "r1")["to_chapter"].is_null()
+                && rel_by_id(&served, "r2")["to_chapter"].is_null(),
+            "读取路径必须把旧成品的血缘边修好"
+        );
+        // 别的字段一个都不许动
+        assert_eq!(rel_by_id(&served, "r3")["to_chapter"], json!(1648));
+        assert_eq!(served["meta"]["totalChapters"], json!(1749));
+        assert_eq!(chars_of(&served).len(), 5);
+        // 同一份旧成品连读两次，输出一致（幂等）
+        let again = serve_stored(serde_json::from_str::<Value>(&stored).expect("再解析旧成品"));
+        assert_eq!(served, again);
+    }
+
+    /// ⑥ 同势力内的孤离血缘小块（生产实例里的李承福 / 李秋阳）要进告警数据
+    #[test]
+    fn stranded_kin_block_is_reported() {
+        let mut chars: Vec<Value> = (0..10)
+            .map(|i| json!({"id": format!("m{i}"), "name": format!("主{i}")}))
+            .collect();
+        let mut rels: Vec<Value> = (1..10)
+            .map(|i| {
+                json!({"id": format!("e{i}"), "from": format!("m{}", i - 1),
+                       "to": format!("m{i}"), "type": "parent", "from_chapter": i})
+            })
+            .collect();
+        // 一对父子自成一小块：两人都在 characters 里（端点不缺），缺的是并回主家的边
+        chars.push(json!({"id": "s1", "name": "李承福"}));
+        chars.push(json!({"id": "s2", "name": "李秋阳"}));
+        rels.push(
+            json!({"id": "e99", "from": "s1", "to": "s2", "type": "parent", "from_chapter": 54}),
+        );
+        let members: Vec<String> = (0..12)
+            .map(|i| {
+                if i < 10 {
+                    format!("m{i}")
+                } else {
+                    format!("s{}", i - 9)
+                }
+            })
+            .collect();
+        let mut graph = json!({
+            "meta": {"book": "玄鉴仙族"},
+            "characters": chars,
+            "relations": rels,
+            "factions": [{"id": "f1", "name": "黎泾李家", "members": members}],
+        });
+        let health = normalize_kin_permanence(&mut graph);
+        assert_eq!(health.dangling, 0, "两人都在 characters 里，端点并不缺");
+        assert_eq!(health.stranded, 1, "孤离小块没被看见：{health:?}");
+        let sample = health.stranded_samples[0].as_str();
+        assert!(
+            sample.contains("黎泾李家") && sample.contains("李承福") && sample.contains("李秋阳"),
+            "样例要能直接指认是谁：{sample:?}"
         );
     }
 }

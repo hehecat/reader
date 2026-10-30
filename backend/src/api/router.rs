@@ -10509,7 +10509,11 @@ async fn book_graph(
     }
     match state.storage.graph_get(&namespace, &url).await {
         Ok(Some(raw)) => match serde_json::from_str::<Value>(&raw) {
-            Ok(graph) => Json(ReturnData::ok(json!({ "graph": graph }))),
+            // 读取路径幂等归一：已存成品不必重新生成，血缘边（parent/sibling）的
+            // to_chapter 抹成 null，老图谱也立刻修好（见 service::graph::serve_stored）
+            Ok(graph) => Json(ReturnData::ok(
+                json!({ "graph": crate::service::graph::serve_stored(graph) }),
+            )),
             Err(e) => {
                 tracing::error!("graph 成品 JSON 损坏 [{namespace}/{url}]: {e}");
                 Json(ReturnData::err("成品数据损坏，请重新生成"))
