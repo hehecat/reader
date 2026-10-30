@@ -1122,11 +1122,27 @@ fn merge_cookie_strings(stored: &str, explicit: &str) -> String {
         .join("; ")
 }
 
+/// 短寿命 Set-Cookie（Max-Age ≤ 300s）不是登录态，而是反爬/限流的节流印章
+/// （如 bqg.info 的 `ss_search_delay=1; Max-Age=30`）。cookie 表没有过期列，
+/// 一旦回存就永久携带，等于把源自己锁死在限流页上，所以这类直接丢弃。
+fn is_throttle_cookie(raw: &str) -> bool {
+    raw.split(';').skip(1).any(|attr| {
+        let Some((k, v)) = attr.trim().split_once('=') else {
+            return false;
+        };
+        k.trim().eq_ignore_ascii_case("max-age")
+            && v.trim().parse::<i64>().map(|s| s <= 300).unwrap_or(false)
+    })
+}
+
 /// 从响应头提取 Set-Cookie 的 name=value 对（忽略 Path/Expires 等属性）
 fn extract_set_cookie_pairs(headers: &[(String, String)]) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for (name, value) in headers {
         if !name.eq_ignore_ascii_case("set-cookie") {
+            continue;
+        }
+        if is_throttle_cookie(value) {
             continue;
         }
         let first = value.split(';').next().unwrap_or("");
@@ -2501,6 +2517,37 @@ fn merge_login_header(headers: &mut HashMap<String, String>, login_header: &str)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 限流印章（Max-Age 很短的 Set-Cookie）不许回存成登录态：cookie 表没有过期列，
+    /// 存进去就永久携带，源会被自己的节流 cookie 锁死（bqg.info 的 ss_search_delay 事故）。
+    #[test]
+    fn throttle_cookies_are_not_persisted() {
+        let hdrs = vec![
+            (
+                "set-cookie".to_string(),
+                "ss_search_delay=1; Max-Age=30; Path=/".to_string(),
+            ),
+            (
+                "set-cookie".to_string(),
+                "reader_session=abc123; Max-Age=2592000; Path=/".to_string(),
+            ),
+            (
+                "set-cookie".to_string(),
+                "plain_cookie=v; Path=/".to_string(),
+            ),
+        ];
+        let pairs = extract_set_cookie_pairs(&hdrs);
+        assert_eq!(
+            pairs,
+            vec![
+                ("reader_session".to_string(), "abc123".to_string()),
+                ("plain_cookie".to_string(), "v".to_string()),
+            ]
+        );
+        assert!(is_throttle_cookie("a=1; max-age=0; path=/"));
+        assert!(!is_throttle_cookie("a=1; Max-Age=3600"));
+        assert!(!is_throttle_cookie("a=1; Path=/; HttpOnly"));
+    }
 
     /// 三态记账的「超时」判定：超时归 Timeout（不写连败），确定性失败归 Fail。
     /// 判定宽了会把死源当慢源放过（永远不降级），窄了又会把慢源当死源（本轮要修的病）。
