@@ -45,10 +45,6 @@ export default defineConfig({
           ) {
             return "vendor-core";
           }
-          // Radix 无头组件(仅部分页面用到, 独立缓存)
-          if (/node_modules[\\/]@radix-ui[\\/]/.test(id)) {
-            return "vendor-radix";
-          }
           // 关系图谱 demo 重依赖: cytoscape 内核 + klay/fcose 布局引擎(只有 /graph-demo 用到)
           if (
             /node_modules[\\/](cytoscape|cytoscape-klay|cytoscape-fcose|cytoscape-dagre|cytoscape-node-html-label|klayjs|cose-base|layout-base)[\\/]/.test(

@@ -58,7 +58,45 @@
     </style>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- 启动骨架: 零请求零 JS, React 挂载即替换; 尺寸对齐 AppShell/RouteFallback. -->
+    <div id="root">
+      <style>
+#root{height:100%;background:#fcfaf6}
+.bs{display:flex;height:100%;overflow:hidden;background:#fcfaf6}
+.b{display:block;flex:none;background:#ece8df;border-radius:6px;animation:bp 1.6s ease-in-out infinite}
+.cl{display:flex;min-width:0;flex-direction:column}
+.as{display:none;width:224px;flex-direction:column;border-right:1px solid #e6e1d6;background:#fbf9f4}
+.hd{display:flex;height:64px;align-items:center;gap:12px;border-bottom:1px solid #eae5da;padding:0 16px}
+.lg{width:36px;height:36px;border-radius:8px;background:#8c3b28;animation:none}
+.nv{display:flex;flex-direction:column;gap:10px;padding:16px 12px}
+.it{width:100%;height:32px}
+.mn{display:flex;min-width:0;flex:1;flex-direction:column}
+.tp{display:flex;height:64px;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid #eae5da;padding:0 16px}
+.lf{display:flex;min-width:0;align-items:center;gap:12px}
+.hm{width:36px;height:36px;border-radius:8px}
+.rg{display:flex;align-items:center;gap:8px}
+.pl{width:88px;height:30px;border-radius:999px;border:1px solid #e6e1d6;background:#f7f4ee}
+.ac{width:36px;height:36px;border-radius:999px}
+.bd{display:flex;flex:1;flex-direction:column;gap:16px;padding:12px}
+.rw{display:flex;align-items:center;gap:12px}
+.rw .cl{flex:1}
+.th{width:48px;height:48px;border-radius:8px}
+.t1{width:60%;height:12px;margin-bottom:8px}
+.t2{width:40%;height:12px}
+.bt{display:block;color:#29231e;font:600 18px/1 "Noto Serif SC",Georgia,serif}
+.h1{display:none}
+@keyframes bp{50%{opacity:.5}}
+@media(min-width:768px){.as{display:flex}.tp{padding:0 32px}.bd{padding:16px 24px}.h1{display:block}.mo,.hm{display:none}}
+@media(prefers-color-scheme:dark){#root,.bs{background:#16120f}.b{background:#2e2823}.as{background:#1b1714;border-color:rgba(255,255,255,.12)}.hd,.tp{border-color:rgba(255,255,255,.12)}.lg{background:#e8916f}.bt{color:#e1ded7}.pl{border-color:rgba(255,255,255,.12);background:#211c18}}
+</style>
+<div class="bs">
+<div class="as"><div class="hd"><span class="b lg" aria-hidden="true"></span><div class="cl"><span class="bt">砚台</span><span class="b" style="width:72px;height:8px;margin-top:8px" aria-hidden="true"></span></div></div><div class="nv" aria-hidden="true"><span class="b it"></span><span class="b it"></span><span class="b it"></span><span class="b it"></span><span class="b it"></span></div></div>
+<div class="mn">
+<div class="tp"><div class="lf"><span class="b hm" aria-hidden="true"></span><div class="cl"><span class="b" style="width:64px;height:16px" aria-hidden="true"></span><span class="bt mo">砚台</span><span class="b h1" style="width:112px;height:16px;margin-top:8px" aria-hidden="true"></span></div></div><div class="rg" aria-hidden="true"><span class="pl"></span><span class="b ac"></span></div></div>
+<div class="bd" aria-hidden="true"><span class="b" style="width:96px;height:20px"></span><span class="b" style="width:100%;max-width:576px;height:40px"></span><div class="rw"><span class="b th"></span><div class="cl"><span class="b t1"></span><span class="b t2"></span></div></div><div class="rw"><span class="b th"></span><div class="cl"><span class="b t1"></span><span class="b t2"></span></div></div><div class="rw"><span class="b th"></span><div class="cl"><span class="b t1"></span><span class="b t2"></span></div></div><div class="rw"><span class="b th"></span><div class="cl"><span class="b t1"></span><span class="b t2"></span></div></div><div class="rw"><span class="b th"></span><div class="cl"><span class="b t1"></span><span class="b t2"></span></div></div></div>
+</div>
+</div>
+</div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
