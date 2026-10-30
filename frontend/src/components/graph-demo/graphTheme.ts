@@ -307,6 +307,20 @@ export function buildGraphStylesheet(theme: GraphTheme, options: StylesheetOptio
     },
     // 时间滑块: 未出现/已结束的元素直接不画
     { selector: ".gd-hidden", style: { display: "none" } },
+    /**
+     * 已故人物(lastSeen < 当前章, 见 graphElements.applyVisibility).
+     * 世系里的老人死了也要留在树上, 只是淡一点: 最轻的一种区分 ——
+     * 不换配色(门派色仍可读), 只用「淡填充 + 中性灰虚线圈」降低存在感.
+     */
+    {
+      selector: "node.gd-deceased",
+      style: {
+        "background-opacity": 0.34,
+        "border-color": NEUTRAL_COLOR,
+        "border-style": "dashed",
+        "border-width": 1.4,
+      },
+    },
     // 家族树视图的车外人员(见 graphElements.applyModeFilter)
     { selector: ".gd-mode-hidden", style: { display: "none" } },
     // 选中邻域之外压暗

@@ -10,6 +10,7 @@ import type cytoscape from "cytoscape";
 import type { GraphDemoData } from "@/types/graphDemo";
 
 import { NEUTRAL_COLOR, RELATION_VISUAL, makeFactionColorMap } from "./graphTheme";
+import { isDeceasedAt, isKinRelation } from "./graphVisibility";
 import type { Visibility } from "./graphVisibility";
 
 export type LayoutMode = "tree" | "faction" | "panorama";
@@ -30,8 +31,7 @@ export const LAYOUT_OPTIONS: LayoutOption[] = [
 const FACTION_NODE_PREFIX = "faction::";
 /** 势力框标题的兜底最大宽度(px); 布局阶段按块宽覆盖 */
 export const FACTION_LABEL_FALLBACK_WIDTH = 150;
-/** 亲缘关系: 家族树视图只渲染这几类边上的人(见 graphLayouts.layoutFamilyTree) */
-const KIN_RELATIONS = new Set(["parent", "spouse", "sibling"]);
+/** 亲缘关系(亲子/夫妻/手足)的类型表在 graphVisibility.KIN_RELATION_TYPES, 这里用 isKinRelation() 判 */
 /** 没有势力归属的人物在势力图里攒成的一块(不是数据里的势力, 不进图例) */
 const UNASSIGNED_FACTION_ID = "__none";
 
@@ -55,7 +55,7 @@ export function buildGraphElements(
 
   const kinIds = new Set<string>();
   for (const relation of data.relations) {
-    if (KIN_RELATIONS.has(relation.type)) {
+    if (isKinRelation(relation.type)) {
       kinIds.add(relation.from);
       kinIds.add(relation.to);
     }
@@ -164,6 +164,8 @@ export function buildGraphElements(
         factionName: faction?.name ?? "无势力",
         generation: character.generation,
         firstSeen: character.firstSeen,
+        // 已故判定: lastSeen < 当前章 → applyVisibility 挂 .gd-deceased(见 graphTheme)
+        lastSeen: character.lastSeen,
       },
     };
     if (mode === "faction") {
@@ -242,8 +244,12 @@ export function kinFamilies(data: GraphDemoData): KinFamily[] {
     degree.set(relation.to, (degree.get(relation.to) ?? 0) + 1);
   }
 
+  // 这里是「整本书里有血缘/婚姻关系的人」的清单, 给家族选择器当底表:
+  // 故意不按章节过滤, 也不看 to_chapter(血缘边上的 to_chapter 只是「最后一次被提到」),
+  // 谁在这一章还算连着的判断交给 graphVisibility.kinLinkedIds / kinComponents,
+  // 两边口径才不会一个说「18 人 1 家」、一个画出三簇互不相连的点.
   for (const relation of data.relations) {
-    if (!KIN_RELATIONS.has(relation.type) || relation.from === relation.to) continue;
+    if (!isKinRelation(relation.type) || relation.from === relation.to) continue;
     for (const id of [relation.from, relation.to]) if (!parent.has(id)) parent.set(id, id);
     const rootA = find(relation.from);
     const rootB = find(relation.to);
@@ -304,7 +310,7 @@ export function applyModeFilter(cy: cytoscape.Core, options: ViewFilterOptions):
   if (mode === "tree") {
     cy.edges().forEach((edge) => {
       if (edge.hasClass("gd-hidden")) return;
-      if (!KIN_RELATIONS.has(String(edge.data("type")))) return;
+      if (!isKinRelation(String(edge.data("type")))) return;
       kinLinked.add(edge.source().id());
       kinLinked.add(edge.target().id());
     });
@@ -327,7 +333,7 @@ export function applyModeFilter(cy: cytoscape.Core, options: ViewFilterOptions):
       const edge = element as cytoscape.EdgeSingular;
       const hiddenEndpoint = edge.source().hasClass("gd-mode-hidden") || edge.target().hasClass("gd-mode-hidden");
       const type = String(edge.data("type"));
-      const isKin = type === "parent" || type === "spouse" || type === "sibling";
+      const isKin = isKinRelation(type);
       let hidden = hiddenEndpoint;
       if (mode === "tree" && !isKin) hidden = true;
       if (mode === "faction" && Boolean(edge.data("sameFaction")) && !showIntraFaction) hidden = true;
@@ -338,7 +344,8 @@ export function applyModeFilter(cy: cytoscape.Core, options: ViewFilterOptions):
 }
 
 /**
- * 把「读到第 N 章」的结果翻成 class: 不可见元素加 gd-hidden(样式表里 display: none).
+ * 把「读到第 N 章」的结果翻成 class: 不可见元素加 gd-hidden(样式表里 display: none),
+ * 已故人物加 gd-deceased(见 graphTheme: 淡填充 + 灰虚线圈).
  * 用 class 而不是删除元素, 这样拖滑块来回切不会反复重建图, 布局也能保留.
  */
 export function applyVisibility(cy: cytoscape.Core, visibility: Visibility): void {
@@ -352,6 +359,10 @@ export function applyVisibility(cy: cytoscape.Core, visibility: Visibility): voi
         ? factionKey === UNASSIGNED_FACTION_ID || visibility.factions.has(factionKey)
         : visibility.characters.has(id);
       node.toggleClass("gd-hidden", !visible);
+      if (!isFactionNode && node.data("type") === "character") {
+        // 已故但仍是世系节点: 保留节点与世系线, 只降低存在感
+        node.toggleClass("gd-deceased", isDeceasedAt(node.data("lastSeen") ?? null, visibility.chapter));
+      }
     });
     cy.edges().forEach((element) => {
       const edge = element as cytoscape.EdgeSingular;

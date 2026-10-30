@@ -42,7 +42,7 @@ import {
   makeFactionColorMap,
   syncFactionTitleFont,
 } from "@/components/graph-demo/graphTheme";
-import { computeVisibility } from "@/components/graph-demo/graphVisibility";
+import { computeVisibility, isKinRelation, kinLinkedIds } from "@/components/graph-demo/graphVisibility";
 import { Button, EmptyState, Input, Slider, Spinner, toast } from "@/components/ui";
 import { cn } from "@/components/ui/cn";
 import { getBookGraph, type BookGraphData } from "@/services/graph";
@@ -574,18 +574,9 @@ function GraphDemoView({ injected = null, onRegenerate = null }: GraphDemoViewPr
   }, [data]);
 
   // 亲缘连通分量清单(家族选择器用): 按人数排序, 名字取分量里关系数最多的人
-  // 这一章里「身边还连着亲缘边」的人: 关系有章节区间, 吴近 → 吴夫人 这种过期后就不算一家人了
-  const kinLinkedNow = React.useMemo(() => {
-    const kinTypes = new Set(["parent", "spouse", "sibling"]);
-    const linked = new Set<string>();
-    for (const index of visibility.relations) {
-      const relation = data.relations[index];
-      if (!relation || !kinTypes.has(relation.type)) continue;
-      linked.add(relation.from);
-      linked.add(relation.to);
-    }
-    return linked;
-  }, [data, visibility]);
+  // 这一章里「身边还连着亲缘边」的人 —— 和 computeVisibility 同一口径(血缘边不过期,
+  // 夫妻边到期就算断了), 否则面板人数会和家族树里真画出来的点对不上.
+  const kinLinkedNow = React.useMemo(() => kinLinkedIds(data, visibility), [data, visibility]);
   // 家族分组: 先算亲缘连通分量, 再把落在同一个「家族」势力里的分量并成一家.
   // 名字用势力的正式名（「李氏」）, 势力认不出来时才退回姓根（「李家」）——
   // 不再沿用连通分量里那个人的名字（「李通崖家 25 人」这种碎片就是这么来的）。
@@ -948,7 +939,7 @@ function GraphDemoView({ injected = null, onRegenerate = null }: GraphDemoViewPr
       cy.batch(() => {
         cy.edges().forEach((element) => {
           const type = String(element.data("type"));
-          const isKin = type === "parent" || type === "spouse" || type === "sibling";
+          const isKin = isKinRelation(type);
           element.toggleClass("gd-muted", mode === "tree" && !isKin);
         });
       });
