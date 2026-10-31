@@ -108,6 +108,9 @@ export interface SetBookSourceInput {
   newBookUrl: string;
   /** 目标书源地址(候选项的 origin) */
   bookSourceUrl: string;
+  /** 书名/作者: 链接不在书架时后端按它们回退到书架那条(未入架副本/换源后未落库) */
+  name?: string;
+  author?: string;
 }
 
 /** 换源: 后端参数名是 `newUrl`, 返回换源后的书架书籍 */
@@ -121,6 +124,8 @@ export async function setBookSource(
       bookUrl: input.bookUrl,
       newUrl: input.newBookUrl,
       bookSourceUrl: input.bookSourceUrl,
+      name: input.name,
+      author: input.author,
     },
     { timeout: 120_000, ...config },
   );

@@ -253,6 +253,8 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
         bookUrl: currentBookUrl,
         newBookUrl: target.bookUrl,
         bookSourceUrl: target.origin,
+        name: book.name,
+        author: book.author,
       }),
     onSuccess: (saved) => {
       // 先用后端返回的新书籍信息填充详情(免一次往返), 新 query key 挂载后再由 getBookInfo 后台复核

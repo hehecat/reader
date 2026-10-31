@@ -3567,9 +3567,31 @@ async fn set_book_source(
     if source_url.is_empty() {
         return Json(ReturnData::err("书源链接不能为空"));
     }
+    // 阅读器里的链接可能来自搜索/书海(未入架副本)或换源后未落库——按 书名+作者 回退到书架那条
+    let mut book_url = book_url;
     let mut book = match state.storage.find_book(&namespace, &book_url).await {
         Ok(Some(b)) => b,
-        Ok(None) => return Json(ReturnData::err("书籍信息错误")),
+        Ok(None) => {
+            let name = param_of(&params, body_json.as_ref(), "name");
+            let author = param_of(&params, body_json.as_ref(), "author");
+            let fallback = if name.is_empty() {
+                None
+            } else {
+                state
+                    .storage
+                    .find_book_by_name_author(&namespace, &name, &author)
+                    .await
+                    .ok()
+                    .flatten()
+            };
+            match fallback {
+                Some(b) => {
+                    book_url = b.book_url.clone();
+                    b
+                }
+                None => return Json(ReturnData::err("书籍信息错误")),
+            }
+        }
         Err(_) => return Json(ReturnData::err("系统错误")),
     };
     // 新书源必须存在（用户源 → default 回退由 resolve_book_source 处理）

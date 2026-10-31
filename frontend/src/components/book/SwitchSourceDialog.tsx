@@ -91,6 +91,8 @@ export function SwitchSourceDialog({
         bookUrl,
         newBookUrl: candidate.bookUrl,
         bookSourceUrl: candidate.origin,
+        name: book?.name,
+        author: book?.author,
       }),
     onSuccess: (_updated, candidate) => {
       onOpenChange(false);
