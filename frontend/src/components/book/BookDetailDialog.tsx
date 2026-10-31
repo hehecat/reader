@@ -66,6 +66,56 @@ function sourceOf(origin: string | undefined): string | undefined {
 /** 目录超过这个章节数就限高滚动, 免得弹窗被一本书的目录撑到几千行 */
 const CHAPTER_SCROLL_LIMIT = 300;
 
+/** 换源面板里「最新章」列: 最多为这么多行现取目录, 再多就只显示搜索带回来的 */
+const LATEST_FETCH_LIMIT = 6;
+
+/**
+ * 换源行「最新章」标题。
+ *
+ * 源站的搜索规则常常不带最新章(`latestChapterTitle` 为空, 顶点小说这类), 而那恰恰是有
+ * 目录的源 —— 只能现取一次该源目录取末章, 并按 bookUrl+源 缓存 10 分钟, 重开面板不重抓。
+ */
+function CandidateLatest({
+  candidate,
+  enabled,
+}: {
+  candidate: AvailableBookSource;
+  enabled: boolean;
+}) {
+  const query = useQuery({
+    queryKey: [...chaptersQueryKey(candidate.bookUrl, sourceOf(candidate.origin)), "latest"],
+    queryFn: () => getChapterList(candidate.bookUrl, false, { bookSourceUrl: candidate.origin }),
+    enabled,
+    staleTime: 10 * 60_000,
+    retry: false,
+  });
+  const last = query.data?.[query.data.length - 1];
+  if (!enabled) {
+    return null;
+  }
+  if (query.isPending) {
+    return <span className="hidden text-xs text-muted-foreground sm:block">读取目录…</span>;
+  }
+  if (query.isError) {
+    return (
+      <span
+        className="hidden text-xs text-muted-foreground sm:block"
+        title="这个源没取到目录, 换源后可能是空目录"
+      >
+        目录未取
+      </span>
+    );
+  }
+  if (last === undefined) {
+    return <span className="hidden text-xs text-muted-foreground sm:block">无目录</span>;
+  }
+  return (
+    <span className="hidden max-w-40 truncate text-xs text-muted-foreground sm:block">
+      {chapterTitleText(last.title) || last.title}
+    </span>
+  );
+}
+
 /**
  * 书籍详情(书海/搜索等非书架来源共用), 结构移植自砚台原型 book-detail:
  * 上半部 hero(左封面 + 右书名/作者·来源/引言/动作行), 下半部章节目录(点击直达该章).
@@ -180,7 +230,9 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
             kind: book.kind,
             coverUrl: book.coverUrl,
             intro: book.intro,
-            latestChapterTitle: book.latestChapterTitle,
+            // 按源取该源自己的最新章原文: 拿共享的 book.latestChapterTitle 会让所有行都显示
+            // 当前源的状态词(「已完结」), 过滤后整列空白 —— 见 graph/搜索聚合的 originLatest
+            latestChapterTitle: book.originLatest?.[origin],
           },
         };
       });
@@ -436,9 +488,13 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
                 </p>
               ) : (
                 <ul className="mt-2 flex flex-col gap-1">
-                  {candidates.map((item) => {
+                  {candidates.map((item, position) => {
                     // 当前源同样可点: 后端会按该源重取书籍信息与目录, 相当于「刷新这本书」
                     const current = item.origin === currentOrigin && item.bookUrl === currentBookUrl;
+                    // 当前源的末章本就在本弹窗的目录里, 不用再取一次
+                    const currentLatest = current
+                      ? (chapterList[chapterList.length - 1]?.title ?? "")
+                      : "";
                     return (
                       <li key={`${item.bookUrl}|${item.origin}`}>
                         <button
@@ -477,7 +533,18 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
                             <span className="hidden max-w-40 truncate text-xs text-muted-foreground sm:block">
                               {chapterTitleText(item.latestChapterTitle)}
                             </span>
-                          ) : null}
+                          ) : current ? (
+                            currentLatest.length > 0 ? (
+                              <span className="hidden max-w-40 truncate text-xs text-muted-foreground sm:block">
+                                {currentLatest}
+                              </span>
+                            ) : null
+                          ) : (
+                            <CandidateLatest
+                              candidate={item}
+                              enabled={position < LATEST_FETCH_LIMIT}
+                            />
+                          )}
                           {current ? (
                             <Badge variant="accent" size="sm">
                               当前

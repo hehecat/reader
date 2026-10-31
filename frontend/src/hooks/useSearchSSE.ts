@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { getBookInfo } from "@/services/book";
 import { stripNullsDeep } from "@/lib/api-client";
+import { mergeOriginLatest } from "@/lib/originLatest";
 import { connectSSE } from "@/lib/sse";
 import { searchSSEBatchSchema } from "@/services/search";
 import { getBookSourcesLite } from "@/services/sources";
@@ -129,7 +130,9 @@ function mergeBook(acc: Accumulator, book: SearchBook): boolean {
         ? [...new Set([book.origin, ...book.origins])]
         : [book.origin];
     const originUrls = { ...(book.originUrls ?? {}), [book.origin]: book.bookUrl };
-    const item: SearchBook = { ...book, origins, originUrls };
+    // 每个源自己的「最新章」原文: 换源面板按源显示, 不能拿聚合后那一个共享值充数
+    const originLatest = mergeOriginLatest(book.originLatest, book.origin, book.latestChapterTitle);
+    const item: SearchBook = { ...book, origins, originUrls, originLatest };
     acc.entries.set(aggKey, { index: acc.items.length, book: item });
     acc.items.push(item);
     return true;
@@ -147,6 +150,12 @@ function mergeBook(acc: Accumulator, book: SearchBook): boolean {
       ...(book.originUrls ?? {}),
       [book.origin]: book.bookUrl,
     },
+    originLatest: mergeOriginLatest(
+      previous.originLatest,
+      book.origin,
+      book.latestChapterTitle,
+      book.originLatest,
+    ),
     kind: previous.kind ?? book.kind,
     coverUrl: previous.coverUrl ?? book.coverUrl,
     intro: previous.intro ?? book.intro,
