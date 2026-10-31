@@ -91,3 +91,10 @@
 | `/getBookSources?simple=1`（615 源） | 117.08 | **53.30 / 65.31** | 去 ORDER BY + 页缓存 |
 
 下一批（未做）：B5 `getCacheInfo` TTL（583 ms → <5 ms）、B6 `list_urls_under_prefix`（493 ms）、B7 `clear_toc_cache_for_book` 覆盖索引、B8 typed `Vec<BookChapter>`；前端 F1/F6（删 klay 与 32 MB 死字体）。
+
+### 第二批（2026-11-01，commit `90f5212` + `e86d55b`）
+
+- **B5 `getCacheInfo` 30s 进程内缓存**（`backend/src/api/router.rs`，`cache_info_store()` + `CACHE_INFO_TTL`）：生产实测 **4365 ms（冷）→ 7 ms（暖）**，`clearCache` 主动失效。冷路径仍是 4 次全表扫（该 ns 已 135 MB），要更快得改成增量计数表，暂不做。
+- **F1 删 `cytoscape-klay`**：`vendor-graph` **1041.59 kB → 568.03 kB**（gzip 329.47 → 176.38），家族树早就是自研 tidy-tree，全仓无 `name:'klay'`。生产 `/graph` 复测与删前逐项一致（zoom 0.3323 / 57 人 / 9 行；全部 0.27 / 71 人）。
+- **F1b 删 `cytoscape-dagre`**：`src` 里零引用，**bundle 无变化**，纯 node_modules 卫生。
+- **F6 删 `frontend/public/fonts`（607 个 noto 子集 woff2）**：`dist` / `deploy/web-dist` **33.1 MB → 2.2 MB**。EPUB 内嵌字体在 `backend/web-ui/public/fonts`（Dockerfile 单独 COPY），不受影响；`index.html` 走 fonts.loli.net 远程。
