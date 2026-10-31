@@ -45,9 +45,9 @@ export default defineConfig({
           ) {
             return "vendor-core";
           }
-          // 关系图谱 demo 重依赖: cytoscape 内核 + klay/fcose 布局引擎(只有 /graph-demo 用到)
+          // 关系图谱 demo 重依赖: cytoscape 内核 + fcose 布局引擎(只有 /graph-demo 用到)
           if (
-            /node_modules[\\/](cytoscape|cytoscape-klay|cytoscape-fcose|cytoscape-dagre|cytoscape-node-html-label|klayjs|cose-base|layout-base)[\\/]/.test(
+            /node_modules[\\/](cytoscape|cytoscape-fcose|cytoscape-node-html-label|cose-base|layout-base)[\\/]/.test(
               id,
             )
           ) {

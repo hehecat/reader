@@ -1,7 +1,7 @@
 /**
  * 三种布局的具体配置.
  *
- * tree     : cytoscape-klay 分层(方向 DOWN) + 按 generation 归行(见下方注释)
+ * tree     : graphTreeLayout.ts 自研 tidy-tree 分层(方向 DOWN, 按 generation 归行)
  * faction  : 每个势力一个 compound 父节点, 成员按「标签放得下」的网格排, 势力框打包成货架
  * panorama : cytoscape-fcose 力导向, 全图铺开看冲突关系
  *

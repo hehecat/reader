@@ -17,7 +17,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import cytoscape from "cytoscape";
 import fcose from "cytoscape-fcose";
-import klay from "cytoscape-klay";
 import { CircleAlert, Download, Focus, Network, RefreshCw, Search, Sparkles } from "lucide-react";
 import * as React from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -58,7 +57,6 @@ const DEGREE_OPTIONS: { value: number; label: string }[] = [
 ];
 
 // 布局扩展只需注册一次
-cytoscape.use(klay);
 cytoscape.use(fcose);
 
 /** 小于这个缩放比例隐藏边标签(否则缩成一片糊) */

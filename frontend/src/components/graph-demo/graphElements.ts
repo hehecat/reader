@@ -22,7 +22,7 @@ export interface LayoutOption {
 }
 
 export const LAYOUT_OPTIONS: LayoutOption[] = [
-  { id: "tree", name: "家族树", hint: "klay 分层, 按 generation 排行" },
+  { id: "tree", name: "家族树", hint: "按代分层, 同代一行" },
   { id: "faction", name: "势力图", hint: "compound 父子分组, 按门派成块" },
   { id: "panorama", name: "全景", hint: "fcose 力导向, 冲突关系显色" },
 ];
