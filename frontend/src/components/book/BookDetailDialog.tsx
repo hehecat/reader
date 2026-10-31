@@ -89,7 +89,15 @@ function CandidateLatest({
     staleTime: 10 * 60_000,
     retry: false,
   });
-  const last = query.data?.[query.data.length - 1];
+  const list = query.data ?? [];
+  // 末章本身可能就是状态词(有的源把「已完结」挂在目录最后), 从后往前找第一个真章节名
+  let lastTitle = "";
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    lastTitle = chapterTitleText(list[i]?.title);
+    if (lastTitle.length > 0) {
+      break;
+    }
+  }
   if (!enabled) {
     return null;
   }
@@ -106,12 +114,12 @@ function CandidateLatest({
       </span>
     );
   }
-  if (last === undefined) {
+  if (lastTitle.length === 0) {
     return <span className="hidden text-xs text-muted-foreground sm:block">无目录</span>;
   }
   return (
     <span className="hidden max-w-40 truncate text-xs text-muted-foreground sm:block">
-      {chapterTitleText(last.title) || last.title}
+      {lastTitle}
     </span>
   );
 }
