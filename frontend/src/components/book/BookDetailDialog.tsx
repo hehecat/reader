@@ -34,6 +34,7 @@ import {
 } from "@/hooks/useBookshelf";
 import { bookInfoQueryKey, chaptersQueryKey } from "@/lib/bookInfoCache";
 import { humanizeError } from "@/lib/errors";
+import { chapterTitleText, looksLikeSearchUrl } from "@/lib/text";
 import { getBookInfo, getChapterList, getCoverUrl } from "@/services/book";
 import {
   getAvailableBookSource,
@@ -461,10 +462,20 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
                               本地
                             </Badge>
                           ) : null}
-                          {item.latestChapterTitle !== undefined &&
-                          item.latestChapterTitle.length > 0 ? (
+                          {looksLikeSearchUrl(item.bookUrl, name) ? (
+                            // 源把关键词搜索页当书籍详情页返回(实测: QQ 浏览器系源搜「一世之尊」→
+                            // .../wechat?keyword=一世之尊), 点进去目录必为 0 章, 先标出来别浪费点击
+                            <span
+                              className="hidden sm:block"
+                              title="该源给的是关键词搜索页而不是书籍详情页, 目录通常抓不到"
+                            >
+                              <Badge variant="muted" size="sm">
+                                无详情页
+                              </Badge>
+                            </span>
+                          ) : chapterTitleText(item.latestChapterTitle) ? (
                             <span className="hidden max-w-40 truncate text-xs text-muted-foreground sm:block">
-                              {item.latestChapterTitle}
+                              {chapterTitleText(item.latestChapterTitle)}
                             </span>
                           ) : null}
                           {current ? (
@@ -533,7 +544,15 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
             </Button>
           </div>
         ) : chapterList.length === 0 ? (
-          <p className="py-4 text-sm text-muted-foreground">这本书没有目录</p>
+          <div className="py-4">
+            <p className="text-sm text-muted-foreground">这本书没有目录</p>
+            {candidates.length > 0 ? (
+              <p className="mt-1 text-xs text-muted-foreground/80">
+                部分书源返回的是关键词搜索页(标了「无详情页」), 目录抓不到 ——
+                点「换源」挑一个别的源, 有目录的源通常立刻就有章节目录。
+              </p>
+            ) : null}
+          </div>
         ) : (
           <div
             className={cn(

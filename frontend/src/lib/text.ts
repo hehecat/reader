@@ -34,3 +34,37 @@ export function plainIntro(raw: string): string {
   }
   return cleaned;
 }
+
+/**
+ * 书源常把「已完结 / 连载中」这类**状态词**塞进 latestChapterTitle
+ * （实测：松鹤庭沐·言璃版搜「一世之尊」→ latestChapterTitle='已完结'）。
+ * 那是源站列表里的状态列，不是章节名；当章节名显示会让人以为「已完结却没有目录」。
+ * 返回可显示的章节名，状态词/空白一律回空串（调用方按「没有最新章节」处理）。
+ */
+const STATUS_WORD =
+  /^(?:已?完结|已?完本|完本|全本|连载中?|连载|太监|断更|停更|休更|上架|新书|推荐|置顶)$/;
+
+export function chapterTitleText(raw?: string | null): string {
+  // 源站也常写「[已完结]」/「状态：已完结」
+  const trimmed = (raw ?? "")
+    .trim()
+    .replace(/^[\[【（(]\s*/, "")
+    .replace(/\s*[\]】）)]$/, "")
+    .replace(/^(?:状态|进度|连载状态)\s*[:：]\s*/, "")
+    .trim();
+  return trimmed.length === 0 || STATUS_WORD.test(trimmed) ? "" : trimmed;
+}
+
+/**
+ * 书源搜索命中的 bookUrl 是不是「关键词搜索页」而不是书籍详情页。
+ * 实测反例：松鹤庭沐·言璃版把 `.../wechat?keyword=一世之尊&start=0&end=19` 当 bookUrl，
+ * 三本不同的书共用一个链接 —— 目录规则喂到这种页只能解出 0 章。
+ */
+export function looksLikeSearchUrl(bookUrl: string | undefined, name: string): boolean {
+  if (!bookUrl) return false;
+  const key = name.trim();
+  if (key.length === 0) return false;
+  const encoded = encodeURIComponent(key);
+  const url = bookUrl.toLowerCase();
+  return url.includes(encoded.toLowerCase()) || url.includes(key.toLowerCase());
+}

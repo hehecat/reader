@@ -12,6 +12,7 @@ import {
   IconButton,
   cn,
 } from "@/components/ui";
+import { chapterTitleText } from "@/lib/text";
 import { bookCover, bookGroupNames, readerPath } from "@/hooks/useBookshelf";
 import { effectiveTotalChapterNum } from "@/lib/chapterCount";
 import type { Book, BookGroup } from "@/types/api";
@@ -85,7 +86,9 @@ export function BookCard({
   const progressText =
     totalChapterNum > 0
       ? `读至第 ${book.durChapterIndex + 1} 章 · 共 ${totalChapterNum} 章`
-      : (book.latestChapterTitle?.trim() ? `最新 ${book.latestChapterTitle.trim()}` : "");
+      : (chapterTitleText(book.latestChapterTitle)
+          ? `最新 ${chapterTitleText(book.latestChapterTitle)}`
+          : "");
   const intro = (book.customIntro ?? book.intro ?? "").trim();
   const groupNames = groups === undefined ? [] : bookGroupNames(book, groups);
 

@@ -13,6 +13,7 @@ import { toast } from "@/components/ui/Toast";
 import { BOOKS_QUERY_KEY, errorMessage } from "@/hooks/useBookshelf";
 import { matchChapter } from "@/lib/chapter-match";
 import { humanizeError } from "@/lib/errors";
+import { chapterTitleText } from "@/lib/text";
 import { getBookContent, getChapterList } from "@/services/book";
 import { getAvailableBookSource, setBookSource, type AvailableBookSource } from "@/services/explore";
 import type { Book } from "@/types/api";
@@ -179,7 +180,7 @@ export function SwitchSourceDialog({
   const rowDetail = (candidate: AvailableBookSource): React.ReactNode => {
     const probe = probes[candidate.bookUrl];
     if (probe === undefined) {
-      return candidate.latestChapterTitle ?? "";
+      return chapterTitleText(candidate.latestChapterTitle);
     }
     if ("missing" in probe) {
       return <span className="text-danger">{probe.missing}</span>;

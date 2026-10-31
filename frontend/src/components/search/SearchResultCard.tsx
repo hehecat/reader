@@ -2,6 +2,7 @@ import { BookPlus, Check } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Badge, CoverImage, IconButton, cn } from "@/components/ui";
+import { chapterTitleText } from "@/lib/text";
 import { useAddToShelf } from "@/hooks/useAddToShelf";
 import { getCoverUrl } from "@/services/book";
 import type { Book, SearchBook } from "@/types/api";
@@ -126,9 +127,9 @@ export function SearchResultCard({
             " "
           )}
         </p>
-        {book.latestChapterTitle?.trim() ? (
+        {chapterTitleText(book.latestChapterTitle) ? (
           <p className="mt-1 truncate text-xs text-muted-foreground/80">
-            最新 {book.latestChapterTitle.trim()}
+            最新 {chapterTitleText(book.latestChapterTitle)}
           </p>
         ) : null}
         {intro.length > 0 ? (

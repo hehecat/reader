@@ -3,6 +3,7 @@ import { ArrowLeftRight, BookMarked, BookOpen, ImagePlus, Play, Trash2 } from "l
 import * as React from "react";
 
 import { SwitchSourceDialog } from "@/components/book/SwitchSourceDialog";
+import { chapterTitleText } from "@/lib/text";
 
 import {
   Badge,
@@ -86,7 +87,7 @@ export function BookInfoDialog({
     { label: "作者", value: book.author || "未知" },
     { label: "书源", value: book.originName || book.origin },
     { label: "分组", value: groupNames.length > 0 ? groupNames.join("、") : "未分组" },
-    { label: "最新章节", value: book.latestChapterTitle ?? "—" },
+    { label: "最新章节", value: chapterTitleText(book.latestChapterTitle) || "—" },
     {
       label: "更新时间",
       value: book.latestChapterTime > 0 ? dayFormatter.format(book.latestChapterTime) : "—",
