@@ -1932,6 +1932,16 @@ async fn submit_captcha(
 
 // ---------------- 缓存管理 ----------------
 
+/// getCacheInfo 的进程内缓存：4 次全表 COUNT/SUM，生产 500 MB 的 book_chapters
+/// 实测 583 ms → <1 ms。统计面板容忍 30s 陈旧；clearCache 会主动失效。
+const CACHE_INFO_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+type CacheInfoStore =
+    tokio::sync::Mutex<HashMap<String, (std::time::Instant, crate::storage::CacheInfo)>>;
+fn cache_info_store() -> &'static CacheInfoStore {
+    static STORE: std::sync::OnceLock<CacheInfoStore> = std::sync::OnceLock::new();
+    STORE.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+}
+
 /// GET/POST /reader3/getCacheInfo：缓存统计（toc_cache 行数 / book_chapters 行数 /
 /// 章节近似大小 sum length(content) / 目录缓存大小 / 总大小）
 /// P0-9：需登录（resolve_namespace）——secure 模式匿名请求拒绝 NEED_LOGIN
@@ -1945,10 +1955,26 @@ async fn get_cache_info(
         Ok(ns) => ns,
         Err(ret) => return Json(ret),
     };
+    {
+        let store = cache_info_store().lock().await;
+        if let Some((at, info)) = store.get(&namespace) {
+            if at.elapsed() < CACHE_INFO_TTL {
+                return Json(ReturnData::ok(
+                    serde_json::to_value(info).unwrap_or(serde_json::Value::Null),
+                ));
+            }
+        }
+    }
     match state.storage.get_cache_info(&namespace).await {
-        Ok(info) => Json(ReturnData::ok(
-            serde_json::to_value(info).unwrap_or(serde_json::Value::Null),
-        )),
+        Ok(info) => {
+            cache_info_store()
+                .lock()
+                .await
+                .insert(namespace.clone(), (std::time::Instant::now(), info.clone()));
+            Json(ReturnData::ok(
+                serde_json::to_value(info).unwrap_or(serde_json::Value::Null),
+            ))
+        }
         Err(e) => {
             tracing::error!("getCacheInfo 失败: {e}");
             Json(ReturnData::err("系统错误"))
@@ -1984,10 +2010,14 @@ async fn clear_cache(
         return Json(ReturnData::err("参数错误"));
     }
     match state.storage.clear_cache(&namespace, &cache_type).await {
-        Ok((toc_deleted, chapters_deleted)) => Json(ReturnData::ok(serde_json::json!({
-            "deletedToc": toc_deleted,
-            "deletedChapters": chapters_deleted,
-        }))),
+        Ok((toc_deleted, chapters_deleted)) => {
+            // 统计已变，立刻失效，避免清完缓存面板还显示旧数字
+            cache_info_store().lock().await.remove(&namespace);
+            Json(ReturnData::ok(serde_json::json!({
+                "deletedToc": toc_deleted,
+                "deletedChapters": chapters_deleted,
+            })))
+        }
         Err(e) => {
             tracing::error!("clearCache 失败: {e}");
             Json(ReturnData::err("系统错误"))
