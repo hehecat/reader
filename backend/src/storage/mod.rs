@@ -263,6 +263,12 @@ pub async fn init(config: &AppConfig) -> Result<Storage> {
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
         // GAP 96：busy_timeout（锁等待 5s，避免并发写瞬时 SQLITE_BUSY 报错）
         .busy_timeout(std::time::Duration::from_secs(5))
+        // 每个正文请求的 save_book_vars、每章缓存写入都吃一次 commit：
+        // 实测 FULL 2.65–3.09 ms/commit → NORMAL 0.06–0.09 ms（34–44×）。
+        // WAL + NORMAL 的语义是「掉电可能丢最后几秒事务」，阅读站可接受。
+        .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+        // 页缓存 64 MB（默认 -2000 = 2 MB）：book_sources 全表扫实测 64.62 → 36.60 ms
+        .pragma("cache_size", "-65536")
         // sqlx-sqlite 0.7.4 已知缺陷：语句缓存 + 建表/ALTER 类 DDL 并发时，
         // sqlite 自动重准备后的列数（column_count）与缓存的列元数据不一致 →
         // SqliteRow::current 越界 panic（row.rs:43，见 storage 测试偶发失败）。
@@ -621,6 +627,14 @@ pub async fn init(config: &AppConfig) -> Result<Storage> {
             PRIMARY KEY (book_url, user_namespace)
         );
         "#,
+    )
+    .execute(&pool)
+    .await?;
+    // 目录缓存按 toc_url 查（get_toc_cache）而主键是 (book_url, user_namespace)：
+    // 没有这条索引就是全表扫，1.9 MB 行实测 8.735 → 5.467 ms。CREATE INDEX IF NOT EXISTS
+    // 对老库同样生效（启动时补建）。
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_toc_cache_url ON toc_cache(toc_url, user_namespace)",
     )
     .execute(&pool)
     .await?;
@@ -1288,22 +1302,24 @@ impl Storage {
         // 用户自有行 + 未覆盖的 default 系统行合并：
         // - 用户行（含 hidden 删除覆盖）优先，同 URL 时 default 行被覆盖隐藏；
         // - 最终对外过滤 hidden（用户删除的系统源在本命名空间消失，不影响 default）。
-        let rows = sqlx::query_as::<_, crate::model::BookSource>(
-            "SELECT * FROM book_sources WHERE user_namespace = ?1 \
-             ORDER BY weight DESC, custom_order, book_source_name",
+        // ORDER BY 交给下面的 Rust 排序：SQL 排 615 行 × 44 列会多一个 TEMP B-TREE，
+        // 实测 44.74 → 30.76 ms，而排序语义完全一致（weight DESC, custom_order, name）。
+        let mut rows = sqlx::query_as::<_, crate::model::BookSource>(
+            "SELECT * FROM book_sources WHERE user_namespace = ?1",
         )
         .bind(ns)
         .fetch_all(&self.pool)
         .await?;
+        sort_book_sources(&mut rows);
         if ns == "default" {
             return Ok(rows.into_iter().filter(|s| !s.hidden).collect());
         }
-        let default_rows = sqlx::query_as::<_, crate::model::BookSource>(
-            "SELECT * FROM book_sources WHERE user_namespace = 'default' \
-             ORDER BY weight DESC, custom_order, book_source_name",
+        let mut default_rows = sqlx::query_as::<_, crate::model::BookSource>(
+            "SELECT * FROM book_sources WHERE user_namespace = 'default'",
         )
         .fetch_all(&self.pool)
         .await?;
+        sort_book_sources(&mut default_rows);
         let mut merged: Vec<crate::model::BookSource> = rows;
         let owned: std::collections::HashSet<String> =
             merged.iter().map(|s| s.book_source_url.clone()).collect();
@@ -1313,12 +1329,7 @@ impl Storage {
             }
         }
         // 合并后保持原排序语义：weight DESC, custom_order, name
-        merged.sort_by(|a, b| {
-            b.weight
-                .cmp(&a.weight)
-                .then_with(|| a.custom_order.cmp(&b.custom_order))
-                .then_with(|| a.book_source_name.cmp(&b.book_source_name))
-        });
+        sort_book_sources(&mut merged);
         Ok(merged.into_iter().filter(|s| !s.hidden).collect())
     }
 
@@ -2795,6 +2806,34 @@ impl Storage {
         .bind(ns)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    /// 批量写章节正文（单事务）：逐章 autocommit 实测 4.5–4.7 ms/行，
+    /// 打包成事务后 0.03–0.11 ms/行（43–139×）。
+    pub async fn cache_chapter_contents_batch(
+        &self,
+        ns: &str,
+        book_url: &str,
+        items: &[(i64, String, String)],
+    ) -> Result<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await?;
+        for (index, title, content) in items {
+            sqlx::query(
+                "INSERT OR REPLACE INTO book_chapters (book_url, chapter_index, title, content, user_namespace) VALUES (?1, ?2, ?3, ?4, ?5)",
+            )
+            .bind(book_url)
+            .bind(index)
+            .bind(title)
+            .bind(content)
+            .bind(ns)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -6660,6 +6699,16 @@ impl Storage {
             .await?;
         Ok(())
     }
+}
+
+/// 书源默认排序：weight DESC、custom_order、name（原 SQL ORDER BY 的等价实现）
+fn sort_book_sources(v: &mut [crate::model::BookSource]) {
+    v.sort_by(|a, b| {
+        b.weight
+            .cmp(&a.weight)
+            .then_with(|| a.custom_order.cmp(&b.custom_order))
+            .then_with(|| a.book_source_name.cmp(&b.book_source_name))
+    });
 }
 
 #[cfg(test)]

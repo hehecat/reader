@@ -240,6 +240,10 @@ async fn run_job(
         }));
     }
 
+    // 每 BATCH_SIZE 章落一次事务：逐章 autocommit 实测 4.5–4.7 ms/行，
+    // 单事务 0.03–0.11 ms/行；50 章一批兼顾收益与内存峰值。
+    const BATCH_SIZE: usize = 50;
+    let mut pending: Vec<(i64, String, String)> = Vec::new();
     let mut cached = 0usize;
     for h in handles {
         // 取消检查（逐任务粒度）
@@ -254,15 +258,24 @@ async fn run_job(
         }
         match h.await {
             Ok(Ok((title, idx, content))) => {
-                let _ = storage
-                    .cache_chapter_content(&ns, url, idx, &title, &content)
-                    .await;
+                pending.push((idx, title, content));
                 cached += 1;
+                if pending.len() >= BATCH_SIZE {
+                    let _ = storage
+                        .cache_chapter_contents_batch(&ns, url, &pending)
+                        .await;
+                    pending.clear();
+                }
             }
             _ => {
                 // 单章失败不中断整书（进度仍推进）
             }
         }
+    }
+    if !pending.is_empty() {
+        let _ = storage
+            .cache_chapter_contents_batch(&ns, url, &pending)
+            .await;
     }
     Ok((book.name, total, cached))
 }
