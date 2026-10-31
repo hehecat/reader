@@ -545,6 +545,11 @@ pub async fn apply_login_check_js(
     }
 }
 
+/// 目录回退判定：首轮 0 章、且书页地址非空又确实不同于目录页地址时，才值得补抓一次
+fn should_retry_toc_with_book_page(toc_url: &str, book_url: &str, got: &[BookChapter]) -> bool {
+    got.is_empty() && !book_url.trim().is_empty() && book_url != toc_url
+}
+
 /// 目录解析（ruleToc：chapterList 定位 + 字段规则；多页 nextTocUrl 循环）
 /// F12/AR4：`book_name` 为当前书名——@get:{bookName} 内建回退源（legacy setBook）
 /// P1 跨阶段：`book_url` 非空时按 book 级作底、tocUrl 级覆盖合并读取（详情 @put 直达目录）；
@@ -560,7 +565,23 @@ pub async fn analyze_toc(
     book_name: Option<&str>,
     book_url: &str,
 ) -> Result<Vec<BookChapter>> {
-    match analyze_toc_impl(ns, toc_url, source, max_pages, book_name, book_url).await {
+    let mut result = analyze_toc_impl(ns, toc_url, source, max_pages, book_name, book_url).await;
+    // 目录页规则落空 → 回退拿书页当目录页再抓一次。
+    // 大量老源的 ruleBookInfo.tocUrl 指向早已失效的镜像域（页面 404/错误页），而书页
+    // 本身仍带完整目录；只在「首轮 0 章且 tocUrl 与 bookUrl 不同」时补抓一次，代价可控。
+    if should_retry_toc_with_book_page(toc_url, book_url, result.as_deref().unwrap_or(&[])) {
+        if let Ok(v) = analyze_toc_impl(ns, book_url, source, max_pages, book_name, book_url).await
+        {
+            if !v.is_empty() {
+                tracing::debug!(
+                    "目录页为空, 回退书页重抓成功 [{toc_url} → {book_url}]: {} 章",
+                    v.len()
+                );
+                result = Ok(v);
+            }
+        }
+    }
+    match result {
         Ok(v) => {
             crate::service::health::clear_source_invalid(ns, &source.book_source_url);
             if let Some(st) = crate::parser::rule::registered_storage() {
@@ -3511,7 +3532,42 @@ mod tests {
         assert!(split_url_list("   ").is_empty());
     }
 
-    /// 多 URL 目录：一次解析出多页 → 并发抓、按页序合并、同 URL 只抓一次
+    /// 目录回退判定：只有「0 章 + 书页地址有效且不同」才补抓书页
+    #[test]
+    fn test_should_retry_toc_with_book_page() {
+        let empty: Vec<BookChapter> = vec![];
+        let one = vec![BookChapter {
+            title: "第1章".to_string(),
+            url: "https://a/1".to_string(),
+            index: 0,
+            ..Default::default()
+        }];
+        // 0 章 + 地址不同 → 回退
+        assert!(should_retry_toc_with_book_page(
+            "https://toc/1",
+            "https://book/1",
+            &empty
+        ));
+        // 已有章节 → 不回退
+        assert!(!should_retry_toc_with_book_page(
+            "https://toc/1",
+            "https://book/1",
+            &one
+        ));
+        // 同一个地址 / 空书页地址 → 不回退（避免同一页重复抓）
+        assert!(!should_retry_toc_with_book_page(
+            "https://book/1",
+            "https://book/1",
+            &empty
+        ));
+        assert!(!should_retry_toc_with_book_page(
+            "https://toc/1",
+            "  ",
+            &empty
+        ));
+    }
+
+    /// 多 URL 目录：一次解析出多 URL → 并发抓、按页序合并、同 URL 只抓一次
     #[tokio::test]
     async fn test_toc_multi_url_fanout_order_and_dedupe() {
         use std::sync::{Arc, Mutex};
