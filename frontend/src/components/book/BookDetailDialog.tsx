@@ -34,7 +34,7 @@ import {
 } from "@/hooks/useBookshelf";
 import { bookInfoQueryKey, chaptersQueryKey } from "@/lib/bookInfoCache";
 import { humanizeError } from "@/lib/errors";
-import { chapterTitleText, looksLikeSearchUrl } from "@/lib/text";
+import { chapterTitleText, looksLikeChapterTitle, looksLikeSearchUrl } from "@/lib/text";
 import { getBookInfo, getChapterList, getCoverUrl } from "@/services/book";
 import {
   getAvailableBookSource,
@@ -93,8 +93,8 @@ function CandidateLatest({
   // 末章本身可能就是状态词(有的源把「已完结」挂在目录最后), 从后往前找第一个真章节名
   let lastTitle = "";
   for (let i = list.length - 1; i >= 0; i -= 1) {
-    lastTitle = chapterTitleText(list[i]?.title);
-    if (lastTitle.length > 0) {
+    if (looksLikeChapterTitle(list[i]?.title)) {
+      lastTitle = chapterTitleText(list[i]?.title);
       break;
     }
   }
@@ -537,7 +537,7 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
                                 无详情页
                               </Badge>
                             </span>
-                          ) : chapterTitleText(item.latestChapterTitle) ? (
+                          ) : looksLikeChapterTitle(item.latestChapterTitle) ? (
                             <span className="hidden max-w-40 truncate text-xs text-muted-foreground sm:block">
                               {chapterTitleText(item.latestChapterTitle)}
                             </span>

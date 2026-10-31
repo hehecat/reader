@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { chapterTitleText, looksLikeSearchUrl } = await import("./text.ts");
+const { chapterTitleText, looksLikeChapterTitle, looksLikeSearchUrl } = await import("./text.ts");
 
 test("chapterTitleText: 状态词不算章节名", () => {
   // 实测样本: 松鹤庭沐·言璃版搜「一世之尊」返回的就是这几个字
@@ -33,4 +33,15 @@ test("looksLikeSearchUrl: 关键词搜索页要认出来", () => {
   assert.equal(looksLikeSearchUrl("https://www.zzdushu.com/book/0/169/", name), false);
   assert.equal(looksLikeSearchUrl(undefined, name), false);
   assert.equal(looksLikeSearchUrl("http://x/book?keyword=一世之尊", ""), false, "无书名不猜");
+});
+
+test("looksLikeChapterTitle: 源规则拼出来的垃圾串不算章节名", () => {
+  // 实测: QQ 浏览器源搜「剑来」, latestChapterTitle = "17|0|OK"
+  assert.equal(looksLikeChapterTitle("17|0|OK"), false);
+  assert.equal(looksLikeChapterTitle("已完结"), false, "状态词先被 chapterTitleText 滤掉");
+  assert.equal(looksLikeChapterTitle(""), false);
+  assert.equal(looksLikeChapterTitle(undefined), false);
+  assert.equal(looksLikeChapterTitle("第84章 上升地"), true);
+  assert.equal(looksLikeChapterTitle("剑来 第760节"), true);
+  assert.equal(looksLikeChapterTitle("第400节"), true);
 });

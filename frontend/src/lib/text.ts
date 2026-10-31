@@ -56,6 +56,15 @@ export function chapterTitleText(raw?: string | null): string {
 }
 
 /**
+ * 源站搜索规则给的「最新章」偶尔是别的东西: 实测 QQ 浏览器源返回 `17|0|OK`
+ * (源规则里拼出来的状态串)。中文章节名必然带汉字, 不带汉字的当没有。
+ */
+export function looksLikeChapterTitle(raw?: string | null): boolean {
+  const text = chapterTitleText(raw);
+  return text.length > 0 && /\p{Script=Han}/u.test(text);
+}
+
+/**
  * 书源搜索命中的 bookUrl 是不是「关键词搜索页」而不是书籍详情页。
  * 实测反例：松鹤庭沐·言璃版把 `.../wechat?keyword=一世之尊&start=0&end=19` 当 bookUrl，
  * 三本不同的书共用一个链接 —— 目录规则喂到这种页只能解出 0 章。
