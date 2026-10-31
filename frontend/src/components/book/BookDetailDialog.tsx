@@ -66,26 +66,16 @@ function sourceOf(origin: string | undefined): string | undefined {
 /** 目录超过这个章节数就限高滚动, 免得弹窗被一本书的目录撑到几千行 */
 const CHAPTER_SCROLL_LIMIT = 300;
 
-/** 换源面板里「最新章」列: 最多为这么多行现取目录, 再多就只显示搜索带回来的 */
-const LATEST_FETCH_LIMIT = 6;
-
 /**
  * 换源行「最新章」标题。
  *
  * 源站的搜索规则常常不带最新章(`latestChapterTitle` 为空, 顶点小说这类), 而那恰恰是有
  * 目录的源 —— 只能现取一次该源目录取末章, 并按 bookUrl+源 缓存 10 分钟, 重开面板不重抓。
  */
-function CandidateLatest({
-  candidate,
-  enabled,
-}: {
-  candidate: AvailableBookSource;
-  enabled: boolean;
-}) {
+function CandidateLatest({ candidate }: { candidate: AvailableBookSource }) {
   const query = useQuery({
     queryKey: [...chaptersQueryKey(candidate.bookUrl, sourceOf(candidate.origin)), "latest"],
     queryFn: () => getChapterList(candidate.bookUrl, false, { bookSourceUrl: candidate.origin }),
-    enabled,
     staleTime: 10 * 60_000,
     retry: false,
   });
@@ -97,9 +87,6 @@ function CandidateLatest({
       lastTitle = chapterTitleText(list[i]?.title);
       break;
     }
-  }
-  if (!enabled) {
-    return null;
   }
   if (query.isPending) {
     return <span className="hidden text-xs text-muted-foreground sm:block">读取目录…</span>;
@@ -496,7 +483,7 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
                 </p>
               ) : (
                 <ul className="mt-2 flex flex-col gap-1">
-                  {candidates.map((item, position) => {
+                  {candidates.map((item) => {
                     // 当前源同样可点: 后端会按该源重取书籍信息与目录, 相当于「刷新这本书」
                     const current = item.origin === currentOrigin && item.bookUrl === currentBookUrl;
                     // 当前源的末章本就在本弹窗的目录里, 不用再取一次
@@ -548,10 +535,7 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
                               </span>
                             ) : null
                           ) : (
-                            <CandidateLatest
-                              candidate={item}
-                              enabled={position < LATEST_FETCH_LIMIT}
-                            />
+                            <CandidateLatest candidate={item} />
                           )}
                           {current ? (
                             <Badge variant="accent" size="sm">
