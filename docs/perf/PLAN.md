@@ -73,3 +73,21 @@
 ## 复跑脚本
 
 `.tmp/perf/` 下：`v3_sql.py`（B7）、`v5_toc.py`（B3）、`v8_sources.py`（B4）、`pbench/`（B8 的 Rust 解析基准）、`bench-graph.mjs`/`bench-rank.mjs`（H3/H5）、`attr.mjs`/`agg.mjs`/`slicegz.mjs`（体积归因）、`exp/`（F1/F2 对照构建）。
+
+---
+
+## 落地记录（2026-11-01，commit `2ae4d29`）
+
+已上线四条：B1（`synchronous=NORMAL`）、B12（`cache_size=-65536`）、B2（章节正文每 50 章一个事务）、B3（`idx_toc_cache_url`）、B4（`get_book_sources` 去 SQL 排序）。
+门禁：`cargo fmt --check` / `clippy -D warnings` / `test --lib` **842 passed**；CI `41235353307`(ci) + `41235353291`(build) 双绿；`deploy/pull-deploy.sh` 部署后 health=200，`idx_toc_cache_url` 已在生产库 `sqlite_master` 里（老库启动时自动补建），容器日志无 error/panic。
+
+生产实测（4396，keep-alive，n=10，中位/p95，对比 `backend-hy4-verified.md` §0 的改造前数字）：
+
+| 接口 | 改造前 | 改造后 | 备注 |
+|---|---|---|---|
+| `/health` | 1.19 / 2.22 | 1.74 / 3.66 | 不碰 DB，纯噪声 |
+| `/getBookshelf` | 5.18 / 69.75 | **3.40 / 5.81** | p95 掉一个量级 |
+| `/getChapterList`（kushuge 缓存命中） | 21.71 / 68.38 | **5.73 / 9.37** | 索引 + 页缓存 |
+| `/getBookSources?simple=1`（615 源） | 117.08 | **53.30 / 65.31** | 去 ORDER BY + 页缓存 |
+
+下一批（未做）：B5 `getCacheInfo` TTL（583 ms → <5 ms）、B6 `list_urls_under_prefix`（493 ms）、B7 `clear_toc_cache_for_book` 覆盖索引、B8 typed `Vec<BookChapter>`；前端 F1/F6（删 klay 与 32 MB 死字体）。
