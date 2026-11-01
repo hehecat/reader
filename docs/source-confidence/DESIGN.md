@@ -127,3 +127,26 @@ impl SourceStat {
 4. `SourcesPage` 的「差源」清单里，人眼抽查 10 个至少有 7 个确实是坏的（现在是按 `confidence<0.4` 圈，混着大量目录全废但搜索正常的源）。
 
 第一步不需要动表、不需要动前端结构，我可以直接做。
+
+## 6. 第一步落地记录（commit `cbfac07`）
+
+代码：`backend/src/model/source_stat.rs` 重写（Beta/Wilson 三通道 + 加权几何池化 + 温和惩罚 + 滞回判死），`backend/src/api/router.rs` 三处调用点改新 API（排序用下界、`getSourceStats` 下发 `confidence`/`confidenceLo`/`effectiveSamples`），前端 `sources.ts` / `SourcesPage.tsx` / `SourceListItem.tsx` 跟上（无证据显示「未测」）。
+
+门禁：`cargo fmt` / `clippy -D warnings` / `cargo test --lib` **845 passed**；前端 lint 0 error / test 55/55 / build ✓；CI `ci`+`build` 双绿。
+
+上线后生产验收（`/tmp/verify/accept_confidence.py`：分数取 `/getSourceStats` 的真实输出，分类取只读库，口径与上面原型一致——`attempts>=10` 且目录证据 `>=5`）：
+
+| 指标 | 改造前 | 改造后 |
+|---|---|---|
+| 中性带 0.4–0.6 | 62% | **15%**（258/1698） |
+| 矛盾源（搜索≥0.8、目录<0.2，14 个）中位 | 0.445 | **0.235** |
+| 全好源（搜索≥0.8、目录≥0.8，22 个）中位 | 0.409 | **0.750** |
+| 两者差 | −0.036（倒挂） | **+0.515** |
+| 搜索成功率≥0.8 却被压到 ≤0.05 | 9 个 | **0 个** |
+| 无证据返回 null | — | 0 行（1698 行都有证据） |
+
+断崖抽查（原一刀 0.05）：`m.8xianxs.com` 0.31（下界 0.27）、`dmshuzhai.com` 0.34（0.30）、`mangacopy.com` 0.40（0.35）。
+
+分布：p10 0.060 / p50 0.350 / p90 0.760。新判死规则此刻只命中 17 行（全是 0/16 这类真死源），比旧规则 0 行更准，也没有误伤搜索正常的源。
+
+**坑**：宽口径（三通道都 ≥0.7、不要求样本量）会把 220 个小样本源算进"全好源"，中位只有 0.400、差只剩 +0.090——不是公式退化，是拿两把尺子比。验收必须锁定原型口径。
