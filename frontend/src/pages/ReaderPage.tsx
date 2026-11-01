@@ -93,7 +93,7 @@ function rawErrorMessage(error: unknown, fallback: string): string {
 
 /**
  * 阅读器页面 (沉浸式, 不进 AppShell):
- * 常显顶栏 (返回/书签/书架/批注/朗读/自动滚动/沉浸/目录/设置 + 本章进度条) + 正文 + 常显底栏 (切章/书签/日夜)
+ * 常显顶栏 (返回/目录/书签/书架/批注/朗读/自动滚动/沉浸/设置 + 本章进度条) + 正文 + 常显底栏 (切章/书签/日夜)
  * + 目录/书签/批注抽屉 + 设置浮动面板 + 划选批注工具条 + 朗读浮动条.
  * 章末块 (纯标记/上下章导航) 由正文自己渲染, 见 ContentView.
  * 路由: /reader?url={bookUrl}&index={chapterIndex?}

@@ -80,7 +80,7 @@ export interface ReaderTopBarProps {
 }
 
 /**
- * 阅读器顶栏 (常显): 返回 / 书名 + 章节 / 书签开关 / 书架开关 / 批注 / 朗读 / 自动滚动 / 沉浸阅读 / 目录 / 设置,
+ * 阅读器顶栏 (常显): 返回 / 目录 / 书名 + 章节 / 书签开关 / 书架开关 / 批注 / 朗读 / 自动滚动 / 沉浸阅读 / 设置,
  * 栏底一条 2px 进度条随本章阅读比例增长.
  * 自动滚动与沉浸阅读原在章末动作行, 收进这里后章末块只剩纯标记; 两个开关用 aria-pressed 表达激活态.
  */
@@ -126,6 +126,18 @@ export function ReaderTopBar({
       <div className="mx-auto flex h-14 max-w-3xl items-center gap-0 px-1 sm:gap-2 sm:px-4">
         <IconButton variant="ghost" tooltip="返回" tooltipSide="bottom" onClick={onBack}>
           <ArrowLeft />
+        </IconButton>
+
+        {/* 目录: 抽屉从左侧滑出, 触发器就放在同侧(挨着返回) —— 高频动作, 不跟设置挤在最右.
+            图标数没变, 小屏 368px 的宽度预算不变 */}
+        <IconButton
+          variant="ghost"
+          size="sm"
+          tooltip="目录"
+          tooltipSide="bottom"
+          onClick={onOpenToc}
+        >
+          <List />
         </IconButton>
 
         {/* 小屏 gap 归零后, 书名和右侧第一个图标会贴死, 这里留 4px 呼吸 */}
@@ -216,15 +228,6 @@ export function ReaderTopBar({
             <Bot />
           </IconButton>
         )}
-        <IconButton
-          variant="ghost"
-          size="sm"
-          tooltip="目录"
-          tooltipSide="bottom"
-          onClick={onOpenToc}
-        >
-          <List />
-        </IconButton>
         <IconButton
           variant="ghost"
           size="sm"
