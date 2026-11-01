@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Coffee, Leaf, Monitor, Moon, Settings2, Sun } from "lucide-react";
+import { Settings2 } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -12,6 +12,12 @@ import { EngineConfigDialog } from "@/components/settings/EngineConfigDialog";
 import {
   Badge,
   Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
   Drawer,
   DrawerBody,
   DrawerContent,
@@ -38,6 +44,7 @@ import {
   type GatewayEngineKind,
   type HttpTts,
 } from "@/services/httptts";
+import { THEME_OPTIONS } from "@/lib/theme";
 import { useReaderUIStore } from "@/stores/reader-ui-store";
 import {
   AUTO_SCROLL_SPEED_RANGE,
@@ -49,15 +56,6 @@ import {
   type ReadMode,
   type ThemeMode,
 } from "@/stores/settings-store";
-
-/** 主题五值: 图标在上文字在下 (日间/护眼/夜间/羊皮纸/跟随系统) */
-const THEME_OPTIONS = [
-  { value: "light", label: "日间", icon: Sun },
-  { value: "green", label: "护眼", icon: Leaf },
-  { value: "dark", label: "夜间", icon: Moon },
-  { value: "sepia", label: "羊皮纸", icon: Coffee },
-  { value: "system", label: "跟随系统", icon: Monitor },
-] satisfies { value: ThemeMode; label: string; icon: typeof Sun }[];
 
 /** 行距分段: 值取自 store 的 1.4-2.2 范围 */
 const LINE_HEIGHT_OPTIONS = [
@@ -382,6 +380,7 @@ export function SettingsPanel() {
   const settingsOpen = useReaderUIStore((state) => state.settingsOpen);
   const setSettingsOpen = useReaderUIStore((state) => state.setSettingsOpen);
 
+  const [confirmReset, setConfirmReset] = React.useState(false);
   const theme = useSettingsStore((state) => state.theme);
   const setTheme = useSettingsStore((state) => state.setTheme);
   const fontSize = useSettingsStore((state) => state.fontSize);
@@ -405,11 +404,33 @@ export function SettingsPanel() {
   const autoScrollSpeed = useSettingsStore((state) => state.autoScrollSpeed);
   const setAutoScrollSpeed = useSettingsStore((state) => state.setAutoScrollSpeed);
 
+  /**
+   * 只重置本面板上看得见的那些项. 早先这里直接 setState(defaultSettings),
+   * 把朗读网关地址/音源/多角色音色一起清了 —— 那些在「设置」页配的人根本不知道会没。
+   */
   const handleReset = React.useCallback(() => {
-    useSettingsStore.setState(defaultSettings);
+    const keys = [
+      "theme",
+      "fontSize",
+      "lineHeight",
+      "paragraphGap",
+      "fontFamily",
+      "customFontFamily",
+      "readMode",
+      "indentParagraph",
+      "aiAssistant",
+      "contentWidth",
+      "autoScrollSpeed",
+    ] as const;
+    useSettingsStore.setState(
+      Object.fromEntries(keys.map((key) => [key, defaultSettings[key]])),
+    );
+    setConfirmReset(false);
+    toast.success("已恢复阅读设置默认值");
   }, []);
 
   return (
+    <>
     <Drawer side="right" sheetOnMobile open={settingsOpen} onOpenChange={setSettingsOpen}>
       <DrawerContent>
         <DrawerHeader>
@@ -531,15 +552,38 @@ export function SettingsPanel() {
           />
         </Field>
 
-        <button
-          type="button"
-          onClick={handleReset}
-          className="mt-1 w-full cursor-pointer text-center text-xs text-muted-foreground transition-colors hover:text-foreground"
+        <Button
+          variant="ghost"
+          size="sm"
+          className="mt-1 w-full text-xs text-muted-foreground"
+          onClick={() => setConfirmReset(true)}
         >
           恢复默认
-        </button>
+        </Button>
         </DrawerBody>
       </DrawerContent>
     </Drawer>
+
+    {/* 重置本身不可撤销: 先说明会动哪些东西再动手 */}
+    <Dialog open={confirmReset} onOpenChange={setConfirmReset}>
+      <DialogContent width="sm">
+        <DialogHeader>
+          <DialogTitle>恢复阅读设置</DialogTitle>
+          <DialogDescription>
+            主题 / 字号 / 行距 / 段距 / 页宽 / 字体 / 阅读模式 / 缩进 / AI 开关 / 自动滚动速度
+            会回到默认值。朗读与网关配置不受影响。
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => setConfirmReset(false)}>
+            取消
+          </Button>
+          <Button variant="danger" onClick={handleReset}>
+            恢复默认
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }

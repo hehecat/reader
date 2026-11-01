@@ -1,4 +1,4 @@
-import { Coffee, LogOut, Moon, PanelLeft, Sun, UserRound } from "lucide-react";
+import { LogOut, PanelLeft, UserRound } from "lucide-react";
 import { useLocation } from "react-router-dom";
 
 import { routeMeta } from "./nav";
@@ -7,20 +7,15 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   IconButton,
-  cn,
 } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
+import { THEME_OPTIONS, themeOption } from "@/lib/theme";
 import { useSettingsStore, type ThemeMode } from "@/stores/settings-store";
-
-/** 顶栏主题胶囊只露三档; sepia/system 仍在设置页里选 */
-const THEME_OPTIONS: { key: ThemeMode; label: string; icon: typeof Sun }[] = [
-  { key: "light", label: "日间", icon: Sun },
-  { key: "green", label: "护眼", icon: Coffee },
-  { key: "dark", label: "夜间", icon: Moon },
-];
 
 export interface TopBarProps {
   /** 移动端(<md)汉堡按钮打开 slide-over 侧栏 */
@@ -29,7 +24,7 @@ export interface TopBarProps {
 
 /**
  * 全局顶栏(所有断点常驻):
- * 左 = 移动汉堡 + 路由 kicker/衬线标题; 右 = 主题胶囊(写 settings-store) + 账户菜单(退出登录).
+ * 左 = 移动汉堡 + 路由 kicker/衬线标题; 右 = 主题菜单(五档, 写 settings-store) + 账户菜单(退出登录).
  */
 export function TopBar({ onOpenNav }: TopBarProps) {
   const location = useLocation();
@@ -37,6 +32,7 @@ export function TopBar({ onOpenNav }: TopBarProps) {
   const theme = useSettingsStore((state) => state.theme);
   const setTheme = useSettingsStore((state) => state.setTheme);
   const meta = routeMeta(location.pathname);
+  const currentTheme = themeOption(theme);
 
   return (
     <header className="sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between border-b border-border/70 bg-background/90 px-4 backdrop-blur sm:px-8">
@@ -56,30 +52,29 @@ export function TopBar({ onOpenNav }: TopBarProps) {
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        <div
-          role="group"
-          aria-label="主题"
-          className="flex items-center gap-1 rounded-full border border-border bg-surface p-0.5"
-        >
-          {THEME_OPTIONS.map(({ key, label, icon: Icon }) => (
+        {/* 五档全露: 只给三档时选了羊皮纸/跟随系统的人看不到自己选了什么 */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
             <button
-              key={key}
               type="button"
-              onClick={() => setTheme(key)}
-              aria-pressed={theme === key}
-              title={label}
-              className={cn(
-                "flex cursor-pointer items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-                theme === key
-                  ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
+              aria-label={`主题: ${currentTheme.label}`}
+              className="flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1.5 text-xs font-medium outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             >
-              <Icon className="size-3.5" aria-hidden />
-              <span className="hidden sm:inline">{label}</span>
+              <currentTheme.icon className="size-3.5" aria-hidden />
+              <span className="hidden sm:inline">{currentTheme.label}</span>
             </button>
-          ))}
-        </div>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-40">
+            <DropdownMenuRadioGroup value={theme} onValueChange={(value) => setTheme(value as ThemeMode)}>
+              {THEME_OPTIONS.map((option) => (
+                <DropdownMenuRadioItem key={option.value} value={option.value}>
+                  <option.icon aria-hidden />
+                  {option.label}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <IconButton variant="ghost" aria-label="账户菜单">

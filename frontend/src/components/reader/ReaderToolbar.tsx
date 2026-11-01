@@ -13,11 +13,9 @@ import {
   List,
   Maximize2,
   Minimize2,
-  Moon,
   MoreHorizontal,
   Network,
   Settings2,
-  Sun,
 } from "lucide-react";
 import * as React from "react";
 
@@ -25,30 +23,17 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   IconButton,
   Slider,
   cn,
 } from "@/components/ui";
-import { useSettingsStore } from "@/stores/settings-store";
+import { THEME_OPTIONS, themeOption } from "@/lib/theme";
+import { useSettingsStore, type ThemeMode } from "@/stores/settings-store";
 import type { BookChapter } from "@/types/api";
-
-/** 系统深色偏好 (theme=system 时用于白天/夜间快速切换的判定) */
-function useSystemDark(): boolean {
-  const [dark, setDark] = React.useState(
-    () => window.matchMedia("(prefers-color-scheme: dark)").matches,
-  );
-  React.useEffect(() => {
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = (event: MediaQueryListEvent) => {
-      setDark(event.matches);
-    };
-    media.addEventListener("change", onChange);
-    return () => media.removeEventListener("change", onChange);
-  }, []);
-  return dark;
-}
 
 export interface ReaderTopBarProps {
   bookName: string;
@@ -276,10 +261,8 @@ export function ReaderChapterBar({
 }: ReaderChapterBarProps) {
   const theme = useSettingsStore((state) => state.theme);
   const setTheme = useSettingsStore((state) => state.setTheme);
-  const systemDark = useSystemDark();
-  const isDark = theme === "dark" || (theme === "system" && systemDark);
+  const currentTheme = themeOption(theme);
   // tooltip 与无障碍名称同文: IconButton 会用文本 tooltip 兜底 aria-label, 不必两处各写一遍
-  const themeLabel = isDark ? "切换到白天模式" : "切换到夜间模式";
 
   // 滑块拖动中的草稿索引 (松手才真正切章)
   const [dragIndex, setDragIndex] = React.useState<number | null>(null);
@@ -374,14 +357,27 @@ export function ReaderChapterBar({
         >
           <Network />
         </IconButton>
-        <IconButton
-          variant="ghost"
-          size="sm"
-          tooltip={themeLabel}
-          onClick={() => setTheme(isDark ? "light" : "dark")}
-        >
-          {isDark ? <Sun /> : <Moon />}
-          </IconButton>
+        {/* 五档菜单: 原来的二值切换会把用户选的羊皮纸/跟随系统永久改写成 light/dark */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <IconButton variant="ghost" size="sm" aria-label={`主题: ${currentTheme.label}`}>
+              <currentTheme.icon />
+            </IconButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-40">
+            <DropdownMenuRadioGroup
+              value={theme}
+              onValueChange={(value) => setTheme(value as ThemeMode)}
+            >
+              {THEME_OPTIONS.map((option) => (
+                <DropdownMenuRadioItem key={option.value} value={option.value}>
+                  <option.icon aria-hidden />
+                  {option.label}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
         </div>
       </div>
     </footer>

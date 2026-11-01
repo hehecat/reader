@@ -173,6 +173,8 @@ export default function SourcesPage() {
   const [sortByConf, setSortByConf] = React.useState(false);
   const [selectMode, setSelectMode] = React.useState(false);
   const [selected, setSelected] = React.useState<ReadonlySet<string>>(new Set());
+  /** 批量删除是唯一不可撤销的批量动作: 先问一句再动手 */
+  const [confirmBulkDelete, setConfirmBulkDelete] = React.useState(false);
   const [invalidInfo, setInvalidInfo] = React.useState<InvalidBookSource | null>(null);
   const invalidMap = React.useMemo(() => {
     const map = new Map<string, InvalidBookSource>();
@@ -282,8 +284,12 @@ export default function SourcesPage() {
     onError: (error) => toast.error(sourceErrorMessage(error, "批量操作失败")),
   });
   const bulkDelete = useMutation({
-    mutationFn: () => deleteSources.mutateAsync(selectedSources.map((s) => s.bookSourceUrl)),
-    onSuccess: () => setSelected(new Set()),
+    mutationFn: (urls: string[]) => deleteSources.mutateAsync(urls),
+    onSuccess: () => {
+      setSelected(new Set());
+      setConfirmBulkDelete(false);
+    },
+    onError: () => setConfirmBulkDelete(false),
   });
   /** 公共源池(仅管理员)：发布选中源 / 从池中下架 */
   const { isAdmin } = useAppMode();
@@ -625,8 +631,7 @@ export default function SourcesPage() {
                     size="sm"
                     variant="danger"
                     disabled={selected.size === 0}
-                    loading={bulkDelete.isPending}
-                    onClick={() => bulkDelete.mutate()}
+                    onClick={() => setConfirmBulkDelete(true)}
                   >
                     <Trash2 aria-hidden />
                     删除
@@ -720,6 +725,30 @@ export default function SourcesPage() {
           )}
         </div>
       )}
+
+      <Dialog open={confirmBulkDelete} onOpenChange={setConfirmBulkDelete}>
+        <DialogContent width="sm">
+          <DialogHeader>
+            <DialogTitle>删除书源</DialogTitle>
+            <DialogDescription>
+              确定删除选中的 {selectedSources.length} 个书源吗? 删除后无法恢复.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setConfirmBulkDelete(false)}>
+              取消
+            </Button>
+            <Button
+              variant="danger"
+              loading={bulkDelete.isPending}
+              onClick={() => bulkDelete.mutate(selectedSources.map((s) => s.bookSourceUrl))}
+            >
+              <Trash2 aria-hidden />
+              删除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <ImportSourcesDialog open={importOpen} onOpenChange={setImportOpen} />
 
