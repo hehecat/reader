@@ -25,7 +25,7 @@ export function Skeleton({ shape = "text", className, ...props }: SkeletonProps)
   return (
     <div
       aria-hidden
-      className={cn("animate-pulse bg-surface-muted", shapeClass[shape], className)}
+      className={cn("motion-safe:animate-pulse bg-surface-muted", shapeClass[shape], className)}
       {...props}
     />
   );

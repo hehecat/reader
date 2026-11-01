@@ -113,6 +113,10 @@ function draftFrom(user: AdminUser): UserDraft {
 export default function UsersPage() {
   const queryClient = useQueryClient();
   const { isAdmin } = useAppMode();
+  /** 危险动作的统一确认目标: 删单个用户 / 清理不活跃用户 */
+  const [pendingDanger, setPendingDanger] = React.useState<
+    { kind: "user"; user: AdminUser } | { kind: "inactive"; days: number } | null
+  >(null);
   const [editing, setEditing] = React.useState<{ mode: "create" | "edit"; draft: UserDraft } | null>(
     null,
   );
@@ -333,11 +337,7 @@ export default function UsersPage() {
                       variant="ghost"
                       aria-label={`删除 ${user.username}`}
                       tooltip="删除用户"
-                      onClick={() => {
-                        if (window.confirm(`删除用户 ${user.username}? 其书架/书源/进度将一并删除。`)) {
-                          removeUser.mutate(user);
-                        }
-                      }}
+                      onClick={() => setPendingDanger({ kind: "user", user })}
                     >
                       <Trash2 aria-hidden />
                     </IconButton>
@@ -363,18 +363,56 @@ export default function UsersPage() {
               variant="danger"
               loading={cleanInactive.isPending}
               disabled={inactiveDays === "" || Number(inactiveDays) <= 0}
-              onClick={() => {
-                const days = Number(inactiveDays);
-                if (window.confirm(`删除 ${days} 天未登录的用户? 不可恢复。`)) {
-                  cleanInactive.mutate(days);
-                }
-              }}
+              onClick={() => setPendingDanger({ kind: "inactive", days: Number(inactiveDays) })}
             >
               清理不活跃用户
             </Button>
           </div>
         </SettingCard>
       </div>
+
+      {/* 危险动作确认: 与书架/RSS 的删除同一形态, 不再用 window.confirm */}
+      <Dialog
+        open={pendingDanger !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDanger(null);
+        }}
+      >
+        <DialogContent width="sm">
+          <DialogHeader>
+            <DialogTitle>
+              {pendingDanger?.kind === "inactive" ? "清理不活跃用户" : "删除用户"}
+            </DialogTitle>
+            <DialogDescription>
+              {pendingDanger?.kind === "inactive"
+                ? `删除 ${pendingDanger.days} 天未登录的用户? 账号与其书架/书源/进度一并删除, 不可恢复。`
+                : pendingDanger?.kind === "user"
+                  ? `删除用户 ${pendingDanger.user.username}? 其书架/书源/进度将一并删除, 不可恢复。`
+                  : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPendingDanger(null)}>
+              取消
+            </Button>
+            <Button
+              variant="danger"
+              loading={removeUser.isPending || cleanInactive.isPending}
+              onClick={() => {
+                if (pendingDanger?.kind === "user") {
+                  removeUser.mutate(pendingDanger.user);
+                } else if (pendingDanger?.kind === "inactive") {
+                  cleanInactive.mutate(pendingDanger.days);
+                }
+                setPendingDanger(null);
+              }}
+            >
+              <Trash2 aria-hidden />
+              删除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* 新建 / 编辑 */}
       <Dialog open={editing !== null} onOpenChange={(open) => (open ? undefined : setEditing(null))}>

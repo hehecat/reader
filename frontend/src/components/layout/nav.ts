@@ -23,7 +23,8 @@ export interface NavItem {
 
 /**
  * 主导航项(桌面侧边栏 / 移动端 slide-over 共用):
- * 书架 /, 搜索 /search, 书海 /library, 书源 /sources, 订阅 /rss, 净化 /purify, 我的 /me
+ * 书架 /, 搜索 /search, 书海 /library, 书源 /sources, 订阅 /rss, 我的 /me
+ * 净化(正则替换规则)是高级功能, 放在分隔线以下的次级组, 不和日常入口并列
  */
 export const NAV_ITEMS: NavItem[] = [
   { to: "/", label: "书架", icon: BookOpen, end: true },
@@ -31,7 +32,6 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/library", label: "书海", icon: Compass },
   { to: "/sources", label: "书源", icon: BookText },
   { to: "/rss", label: "订阅", icon: Rss },
-  { to: "/purify", label: "净化", icon: Sparkles },
   { to: "/me", label: "我的", icon: UserRound },
 ];
 
@@ -42,6 +42,9 @@ export const NAV_ITEMS: NavItem[] = [
 export const MOBILE_NAV_ITEMS: NavItem[] = NAV_ITEMS.filter((item) =>
   ["/", "/search", "/library", "/sources", "/me"].includes(item.to),
 );
+
+/** 分隔线之后的次级导航项: 净化是给书源出问题的人用的, 不是每天要点的入口 */
+export const ADVANCED_NAV_ITEM: NavItem = { to: "/purify", label: "净化", icon: Sparkles };
 
 /** 分隔线之后的独立导航项 */
 export const SETTINGS_NAV_ITEM: NavItem = { to: "/settings", label: "设置", icon: Settings2 };

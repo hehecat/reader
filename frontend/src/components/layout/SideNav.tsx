@@ -2,7 +2,13 @@ import { BookOpen, PanelLeft } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
 import { useAppMode } from "@/hooks/useAppMode";
-import { ADMIN_NAV_ITEM, NAV_ITEMS, SETTINGS_NAV_ITEM, type NavItem } from "./nav";
+import {
+  ADMIN_NAV_ITEM,
+  ADVANCED_NAV_ITEM,
+  NAV_ITEMS,
+  SETTINGS_NAV_ITEM,
+  type NavItem,
+} from "./nav";
 import { Tooltip, cn } from "@/components/ui";
 
 export interface SideNavProps {
@@ -96,6 +102,7 @@ export function SideNavContent({ collapsed, onNavigate, onToggleCollapse }: Side
           <SideNavItem key={item.to} item={item} collapsed={collapsed} onNavigate={onNavigate} />
         ))}
         <div className="my-3 border-t border-border/60" />
+        <SideNavItem item={ADVANCED_NAV_ITEM} collapsed={collapsed} onNavigate={onNavigate} />
         <SideNavItem item={SETTINGS_NAV_ITEM} collapsed={collapsed} onNavigate={onNavigate} />
         {isAdmin ? (
           <SideNavItem item={ADMIN_NAV_ITEM} collapsed={collapsed} onNavigate={onNavigate} />

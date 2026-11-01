@@ -67,14 +67,15 @@ export function Slider({
         )}
         {...props}
       >
-        <SliderPrimitive.Track className="relative h-1.5 w-full grow overflow-hidden rounded-full bg-surface-muted">
+        <SliderPrimitive.Track className="relative h-2 w-full grow overflow-hidden rounded-full bg-surface-muted">
           <SliderPrimitive.Range className="absolute h-full bg-accent" />
         </SliderPrimitive.Track>
         {Array.from({ length: Math.max(1, current.length) }, (_, index) => (
           <SliderPrimitive.Thumb
             key={index}
             aria-label={thumbLabel}
-            className="block size-4 shrink-0 cursor-grab rounded-full border-2 border-accent bg-background shadow-sm outline-none transition-transform duration-150 ease-out hover:scale-110 focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing disabled:pointer-events-none"
+            // 视觉 24px, 热区靠伪元素竖向撑到 44px(横向只放 4px, 免得吃掉相邻的翻章按钮)
+            className="relative block size-6 shrink-0 cursor-grab rounded-full border-2 border-accent bg-background shadow-sm outline-none transition-transform duration-150 ease-out before:absolute before:-inset-x-1 before:-inset-y-2.5 before:content-[''] hover:scale-110 focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing disabled:pointer-events-none"
           />
         ))}
       </SliderPrimitive.Root>

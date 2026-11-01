@@ -378,6 +378,10 @@ const ParagraphItem = React.memo(function ParagraphItem({
 
 /** 跳转批注时的段落闪烁: accent 底色 2s 淡出 (WAAPI 一次性动画, 不改类名与内联样式) */
 function flashParagraph(element: HTMLElement): void {
+  // 减少动效偏好下直接给个静态描边, 不做 2s 淡出
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    return;
+  }
   element.animate(
     [
       { backgroundColor: "color-mix(in oklch, var(--accent) 30%, transparent)" },

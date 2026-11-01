@@ -165,7 +165,7 @@ function ToastCard({ item }: ToastCardProps) {
         type="button"
         aria-label="关闭通知"
         onClick={() => dismiss(item.id)}
-        className="-mt-0.5 -mr-1 inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none transition duration-150 ease-out hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        className="relative -mt-0.5 -mr-1 inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md before:absolute before:-inset-2 before:content-[''] text-muted-foreground outline-none transition duration-150 ease-out hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
       >
         <X className="size-3.5" />
       </button>

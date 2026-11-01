@@ -30,11 +30,18 @@ export default function AppShell() {
 
   return (
     <div className="flex h-full min-h-0 bg-background text-foreground">
+      {/* 键盘用户跳过整条侧栏: 平时 sr-only, 聚焦时浮到左上 */}
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-lg focus:bg-surface focus:px-3 focus:py-2 focus:text-sm focus:shadow-xl focus:ring-2 focus:ring-ring"
+      >
+        跳到正文
+      </a>
       <SideNav collapsed={collapsed} onToggleCollapse={toggleCollapsed} />
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar onOpenNav={() => setNavOpen(true)} />
         {/* pb-14: 让出底部标签栏的高度, 否则每页最后一行被它盖住 */}
-        <main className="min-h-0 flex-1 overflow-y-auto pb-14 md:pb-0">
+        <main id="main" className="min-h-0 flex-1 overflow-y-auto pb-14 md:pb-0">
           <Outlet />
         </main>
       </div>

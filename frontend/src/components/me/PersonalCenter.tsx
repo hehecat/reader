@@ -34,14 +34,19 @@ function unreadChapters(book: Book): number {
   return Math.max(0, effectiveTotalChapterNum(book) - 1 - book.durChapterIndex);
 }
 
-/** 阅读进度百分比(0-100): 总章节数未知时按 0 计 */
+/** 阅读进度百分比(0-100, 向下取整): 总章节数未知时按 0 计 */
 function progressPercent(book: Book): number {
   const total = effectiveTotalChapterNum(book);
   if (total <= 0) {
     return 0;
   }
   const percent = ((book.durChapterIndex + 1) / total) * 100;
-  return Math.min(100, Math.max(0, Math.round(percent)));
+  return Math.min(100, Math.max(0, Math.floor(percent)));
+}
+
+/** 是否已经开读: 用来把「读了一点但不足 1%」和「还没开始」区分开 */
+function hasStarted(book: Book): boolean {
+  return book.durChapterIndex > 0 || (book.durChapterTitle?.trim() ?? "") !== "";
 }
 
 /** 最近阅读条目: 封面 + 衬线书名 + 章节 + 进度条, 点击进入阅读器续读 */
@@ -49,6 +54,7 @@ function RecentBook({ book }: { book: Book }) {
   const navigate = useNavigate();
   const percent = progressPercent(book);
   const total = effectiveTotalChapterNum(book);
+  const started = hasStarted(book);
 
   return (
     <button
@@ -78,12 +84,18 @@ function RecentBook({ book }: { book: Book }) {
           aria-valuemin={0}
           aria-valuemax={100}
           aria-label={`《${book.name}》阅读进度`}
-          className="mt-2 h-1 overflow-hidden rounded-full bg-surface-muted"
+          className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-muted"
         >
-          <div className="h-full rounded-full bg-accent" style={{ width: `${percent}%` }} />
+          {/* 不足 1% 也要留一截, 否则开读过和没开读看起来一样 */}
+          <div
+            className="h-full rounded-full bg-accent"
+            style={{ width: `${percent > 0 ? Math.max(percent, 3) : started ? 3 : 0}%` }}
+          />
         </div>
       </div>
-      <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{percent}%</span>
+      <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+        {percent === 0 && started ? "<1%" : `${percent}%`}
+      </span>
     </button>
   );
 }
@@ -106,7 +118,13 @@ export function PersonalCenter() {
         value: books.reduce((sum, book) => sum + unreadChapters(book), 0),
         icon: Layers,
       },
-      { key: "reading", label: "在读书籍", value: books.filter(isReading).length, icon: BookOpen },
+      // 「在读」排除已读完的: 否则同一本书既算读完又算在读
+      {
+        key: "reading",
+        label: "在读",
+        value: books.filter((book) => isReading(book) && !isFinished(book)).length,
+        icon: BookOpen,
+      },
     ],
     [books],
   );
@@ -187,8 +205,8 @@ export function PersonalCenter() {
                 </SettingRow>
               </SettingCard>
               <SettingCard title="关于" desc="砚台 · 在线小说阅读">
-                <SettingRow label="前端" value="砚台 React 阅读器 (书架 / 搜索 / 书海 / 阅读器 / RSS)" />
-                <SettingRow label="后端" value="阅读3 server · 兼容 legado 书源" />
+                <SettingRow label="书源" value="兼容 legado 规则, 可导入 .json 书源" />
+                <SettingRow label="数据" value="书架与进度保存在你自己的服务器上" />
               </SettingCard>
             </div>
           </div>
