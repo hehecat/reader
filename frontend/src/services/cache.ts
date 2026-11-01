@@ -42,6 +42,8 @@ export const bookCacheInfoSchema = bookSchema.extend({
   cacheChapterCount: z.number().default(0),
   /** 已缓存正文总字节数 */
   cacheSize: z.number().default(0),
+  /** 该书是否在书架: 不在架也能读(搜索预览直达), 但缓存只对书架书生效 */
+  onShelf: z.boolean().default(true),
 });
 
 export type BookCacheInfo = z.infer<typeof bookCacheInfoSchema>;

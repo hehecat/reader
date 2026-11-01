@@ -11588,23 +11588,39 @@ async fn get_shelf_book_with_cache_info(
         }
         return Json(ReturnData::ok(Value::Array(out)));
     }
-    let book = match state.storage.find_book(&namespace, &url).await {
-        Ok(Some(b)) => b,
-        Ok(None) => return Json(ReturnData::err("书籍不存在")),
-        Err(e) => {
-            tracing::error!("getShelfBookWithCacheInfo 失败 [{url}]: {e}");
-            return Json(ReturnData::err("系统错误"));
-        }
-    };
     let (cache_chapter_count, cache_size) = state
         .storage
         .book_cache_info(&namespace, &url)
         .await
         .unwrap_or((0, 0));
+    let book = match state.storage.find_book(&namespace, &url).await {
+        Ok(Some(b)) => b,
+        // 未入架也能读（搜索预览直达阅读器带 bookSource），缓存统计照给——只按 url 数，
+        // 用 onShelf=false 让前端说明「缓存只对书架书生效」，而不是报「加载失败」
+        Ok(None) => {
+            return Json(ReturnData::ok(json!({
+                "bookUrl": url,
+                "tocUrl": url,
+                "origin": "",
+                "originName": "",
+                "name": "",
+                "author": "",
+                "type": 0,
+                "cacheChapterCount": cache_chapter_count,
+                "cacheSize": cache_size,
+                "onShelf": false,
+            })));
+        }
+        Err(e) => {
+            tracing::error!("getShelfBookWithCacheInfo 失败 [{url}]: {e}");
+            return Json(ReturnData::err("系统错误"));
+        }
+    };
     let mut data = serde_json::to_value(book).unwrap_or(serde_json::Value::Null);
     if let Some(obj) = data.as_object_mut() {
         obj.insert("cacheChapterCount".to_string(), json!(cache_chapter_count));
         obj.insert("cacheSize".to_string(), json!(cache_size));
+        obj.insert("onShelf".to_string(), json!(true));
     }
     Json(ReturnData::ok(data))
 }
@@ -14816,7 +14832,7 @@ mod tests {
         assert_eq!(ret.0.data["cacheChapterCount"], 2);
         assert_eq!(ret.0.data["cacheSize"], 10, "5+5 字符×2 章");
 
-        // 不存在 → 书籍不存在；缺 url → 返回全书架列表（legacy 语义，含 cacheChapterCount）
+        // 不在书架 → 仍返回统计（缓存只对书架书生效，用 onShelf=false 交给前端提示）
         let params: HashMap<String, String> = [("url".into(), "https://book.com/none".into())]
             .into_iter()
             .collect();
@@ -14827,8 +14843,10 @@ mod tests {
             None,
         )
         .await;
-        assert!(!ret.0.is_success);
-        assert_eq!(ret.0.error_msg, "书籍不存在");
+        assert!(ret.0.is_success, "{}", ret.0.error_msg);
+        assert_eq!(ret.0.data["onShelf"], false);
+        assert_eq!(ret.0.data["cacheChapterCount"], 0);
+        assert_eq!(ret.0.data["bookUrl"], "https://book.com/none");
         let ret = get_shelf_book_with_cache_info(
             AxumState(state.clone()),
             Query(HashMap::new()),

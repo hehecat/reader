@@ -337,10 +337,14 @@ export function TocDrawer({
     progress !== null && progress.title !== "" && progress.title !== bookUrl
       ? progress.title
       : bookName;
+  // 未入架的书也能读(搜索预览直达阅读器), 但缓存只对书架书生效 —— 别让按钮点了才报错
+  const onShelf = cacheInfoQuery.data?.onShelf ?? true;
   const idleLabel = cacheInfoQuery.isError
     ? "缓存统计加载失败"
     : cacheInfoQuery.data !== undefined
-      ? `已缓存 ${cacheInfoQuery.data.cacheChapterCount} 章`
+      ? onShelf
+        ? `已缓存 ${cacheInfoQuery.data.cacheChapterCount} 章`
+        : `未加入书架 · 已缓存 ${cacheInfoQuery.data.cacheChapterCount} 章`
       : "缓存统计加载中…";
 
   return (
@@ -374,11 +378,11 @@ export function TocDrawer({
                 >
                   {cancelling ? "取消中…" : "取消"}
                 </Button>
-              ) : (
+              ) : onShelf ? (
                 <Button size="sm" onClick={handleStart} aria-label="缓存本书">
                   缓存本书
                 </Button>
-              )}
+              ) : null}
             </div>
           )}
           <TocSearchField value={query} onChange={setQuery} />
