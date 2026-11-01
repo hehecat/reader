@@ -149,6 +149,13 @@
 
 **29. 书架网格与书源列表未虚拟化** — `ShelfPage.tsx:423` `visibleBooks.map`、`SourcesPage.tsx:651` `pagedSources.map`（每页可选 20/50/100/200）。项目里 `SearchPage`/`TocDrawer`/`ContentView` 都已有 Virtuoso 正确用法。建议先做书源列表（一行一 DOM，收益确定），书架是多列自适应网格，改造成本高。成本 M。
 
+> 实测后不改（200/页, 615 个源, headless Chromium，切页 + 120 帧滚动）：
+> - 现状（200 行全挂载）：切页 **419ms**、4889 DOM 节点、滚动 2271ms / 2 个长任务（86、73ms）。
+> - Virtuoso（`customScrollParent={main}`，`increaseViewportBy` 600）：切页 **28ms**、810 节点、滚动 4150ms / 10 个长任务（51–98ms）。
+> - Virtuoso（`increaseViewportBy` 2000）：切页 44ms、1327 节点、滚动 **7173ms / 60 个长任务**。
+>
+> 虚拟化把一次 419ms 的挂载换成了持续的行挂载抖动——`SourceListItem` 每行都带 Radix DropdownMenu 根、Switch 与若干图标，单行挂载太贵。列表页是长时间滚动浏览的场景，滚动流畅优先，故保持全量渲染。真要虚拟化，先削单行成本（⋯ 菜单改为按需挂载）或把每页上限收到 100，再谈。
+
 **30. 一级导航里放了高级功能** — `nav.ts:35`「净化」（正则替换规则，96 条规则直接列正则）与书源/用户管理并列。改法：净化收进设置或「我的」，或至少标注"高级"。成本 S。
 
 ---
