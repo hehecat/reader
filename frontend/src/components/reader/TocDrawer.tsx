@@ -1,4 +1,4 @@
-import { ArrowLeftRight, RotateCw, Search } from "lucide-react";
+import { ArrowLeftRight, MoreHorizontal, RotateCw, Search } from "lucide-react";
 import * as React from "react";
 import { useSearchParams } from "react-router-dom";
 import { Virtuoso } from "react-virtuoso";
@@ -13,6 +13,11 @@ import {
   DrawerFooter,
   DrawerHeader,
   DrawerTitle,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  IconButton,
   Input,
   Spinner,
   Switch,
@@ -351,16 +356,58 @@ export function TocDrawer({
     <Drawer side="left" open={open} onOpenChange={onOpenChange}>
       <DrawerContent className="w-80 max-w-[85vw]">
         <DrawerHeader className="p-5">
-          <DrawerTitle className="font-display text-lg leading-tight font-semibold">
-            {bookName}
-          </DrawerTitle>
-          <DrawerDescription className="mt-0.5 text-xs">
-            {bookAuthor} · 共 {chapters.length} 章
-            {/* 目录还没到时不要显示"当前第 0 章" */}
-            {chapters.length > 0
-              ? ` · 当前第 ${Math.min(currentIndex + 1, chapters.length)} 章`
-              : ""}
-          </DrawerDescription>
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <DrawerTitle className="font-display text-lg leading-tight font-semibold">
+                {bookName}
+              </DrawerTitle>
+              <DrawerDescription className="mt-0.5 text-xs">
+                {bookAuthor} · 共 {chapters.length} 章
+                {/* 目录还没到时不要显示"当前第 0 章" */}
+                {chapters.length > 0
+                  ? ` · 当前第 ${Math.min(currentIndex + 1, chapters.length)} 章`
+                  : ""}
+              </DrawerDescription>
+            </div>
+            {/* 三个「这本书可能坏了」的抢修动作收进菜单: 打开目录 99% 是为了翻章, 不该先绕过一排运维按钮 */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <IconButton size="sm" variant="ghost" aria-label="目录操作">
+                  <MoreHorizontal aria-hidden />
+                </IconButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                {onReloadChapter === undefined ? null : (
+                  <DropdownMenuItem
+                    disabled={reloadingChapter}
+                    onSelect={() => {
+                      onReloadChapter();
+                    }}
+                  >
+                    <RotateCw aria-hidden />
+                    {reloadingChapter ? "重新拉取中…" : "重新拉取本章"}
+                  </DropdownMenuItem>
+                )}
+                {onRefreshToc === undefined ? null : (
+                  <DropdownMenuItem
+                    disabled={refreshingToc}
+                    onSelect={() => {
+                      onRefreshToc();
+                    }}
+                  >
+                    <RotateCw aria-hidden />
+                    {refreshingToc ? "刷新中…" : "刷新目录"}
+                  </DropdownMenuItem>
+                )}
+                {onSwitchSource === undefined || isLocal ? null : (
+                  <DropdownMenuItem onSelect={onSwitchSource}>
+                    <ArrowLeftRight aria-hidden />
+                    换源
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
           {isLocal ? null : (
             <div className="mt-3 flex items-center gap-2">
               <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground tabular-nums">
@@ -513,55 +560,7 @@ export function TocDrawer({
             </div>
           )}
         </DrawerBody>
-        <DrawerFooter className="flex-col items-stretch gap-2">
-          {/* 章级操作靠左挤一行, 目录/正文缓存出问题都在这里救; 倒序是全局偏好, 单独一行 */}
-          <div className="flex flex-wrap items-center gap-1">
-            {onReloadChapter !== undefined ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={reloadingChapter}
-                aria-busy={reloadingChapter || undefined}
-                onClick={onReloadChapter}
-                aria-label="重新拉取本章"
-                className="px-2 text-xs whitespace-nowrap"
-              >
-                {/* 加载态原地换成转圈: 不用 Button 的 loading(它会另插一个 spinner, 图标变两个把这一行挤断) */}
-                {reloadingChapter ? (
-                  <Spinner size="sm" className="size-4" />
-                ) : (
-                  <RotateCw aria-hidden />
-                )}
-                重新拉取本章
-              </Button>
-            ) : null}
-            {onRefreshToc !== undefined ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={refreshingToc}
-                aria-busy={refreshingToc || undefined}
-                onClick={onRefreshToc}
-                aria-label="刷新目录"
-                className="px-2 text-xs whitespace-nowrap"
-              >
-                {refreshingToc ? <Spinner size="sm" className="size-4" /> : <RotateCw aria-hidden />}
-                刷新目录
-              </Button>
-            ) : null}
-            {onSwitchSource !== undefined && !isLocal ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={onSwitchSource}
-                aria-label="换源"
-                className="px-2 text-xs whitespace-nowrap"
-              >
-                <ArrowLeftRight aria-hidden />
-                换源
-              </Button>
-            ) : null}
-          </div>
+        <DrawerFooter>
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs text-muted-foreground">倒序目录</span>
             <Switch checked={reversed} onCheckedChange={onToggleReversed} aria-label="倒序目录" />

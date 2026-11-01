@@ -14,13 +14,23 @@ import {
   Maximize2,
   Minimize2,
   Moon,
+  MoreHorizontal,
   Network,
   Settings2,
   Sun,
 } from "lucide-react";
 import * as React from "react";
 
-import { IconButton, Slider, cn } from "@/components/ui";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  IconButton,
+  Slider,
+  cn,
+} from "@/components/ui";
 import { useSettingsStore } from "@/stores/settings-store";
 import type { BookChapter } from "@/types/api";
 
@@ -80,9 +90,10 @@ export interface ReaderTopBarProps {
 }
 
 /**
- * 阅读器顶栏 (常显): 返回 / 目录 / 书名 + 章节 / 书签开关 / 书架开关 / 批注 / 朗读 / 自动滚动 / 沉浸阅读 / 设置,
+ * 阅读器顶栏 (常显): 返回 / 目录 / 书名 + 章节 / 书签 / 书架 / 更多 / 设置,
  * 栏底一条 2px 进度条随本章阅读比例增长.
- * 自动滚动与沉浸阅读原在章末动作行, 收进这里后章末块只剩纯标记; 两个开关用 aria-pressed 表达激活态.
+ * 批注 / 朗读 / 自动滚动 / 沉浸 / AI 这些「偶尔切一次」的动作收进「更多」菜单:
+ * 顶栏只留导航 + 书级写入 + 设置, 小屏不必再靠 gap 归零硬挤 10 个图标.
  */
 export function ReaderTopBar({
   bookName,
@@ -120,9 +131,7 @@ export function ReaderTopBar({
         chromeHidden ? "h-0 -translate-y-full border-transparent opacity-0" : "h-14",
       )}
     >
-      {/* 图标多, 小屏收紧间距并降一档按钮尺寸, 保住书名/章节的展示宽度 */}
-      {/* 390px: 10 个按钮 × 36px + 间距 + 内边距 原本要 394px, 溢出 4px 把最后一个图标切掉;
-          gap 2px→0、px 8px→4px 后降到 368px, 留 22px 余量 */}
+      {/* 390px: 6 个按钮 + 书名, 常规间距下已不溢出; 小屏仍收紧一档间距, 把余量留给书名 */}
       <div className="mx-auto flex h-14 max-w-3xl items-center gap-0 px-1 sm:gap-2 sm:px-4">
         <IconButton variant="ghost" tooltip="返回" tooltipSide="bottom" onClick={onBack}>
           <ArrowLeft />
@@ -167,67 +176,49 @@ export function ReaderTopBar({
         >
           <LibraryBig />
         </IconButton>
-        <IconButton
-          variant="ghost"
-          size="sm"
-          tooltip="批注"
-          tooltipSide="bottom"
-          onClick={onOpenAnnotations}
-        >
-          <Highlighter />
-        </IconButton>
-        <IconButton
-          variant="ghost"
-          size="sm"
-          tooltip={
-            ttsSupported ? (ttsActive ? "停止朗读" : "朗读") : "当前浏览器不支持语音朗读"
-          }
-          tooltipSide="bottom"
-          disabled={!ttsSupported}
-          aria-pressed={ttsActive}
-          // 禁用态默认不吃指针事件, tooltip 就弹不出来; 这里放开, 悬浮仍能解释为什么点不了
-          className={cn(ttsActive && "text-accent", !ttsSupported && "disabled:pointer-events-auto")}
-          onClick={onToggleTts}
-        >
-          <AudioLines />
-        </IconButton>
-        {showAutoScroll ? (
-          <IconButton
-            variant="ghost"
-            size="sm"
-            tooltip={autoScroll ? "停止自动滚动" : "自动滚动"}
-            tooltipSide="bottom"
-            aria-pressed={autoScroll}
-            className={cn(autoScroll && "text-accent")}
-            onClick={onToggleAutoScroll}
-          >
-            <Gauge />
-          </IconButton>
-        ) : null}
-        <IconButton
-          variant="ghost"
-          size="sm"
-          tooltip={immersive ? "退出沉浸阅读" : "沉浸阅读"}
-          tooltipSide="bottom"
-          aria-pressed={immersive}
-          className={cn(immersive && "text-accent")}
-          onClick={onToggleImmersive}
-        >
-          {immersive ? <Minimize2 /> : <Maximize2 />}
-        </IconButton>
-        {onOpenAi === undefined ? null : (
-          <IconButton
-            variant="ghost"
-            size="sm"
-            tooltip="AI 阅读助手"
-            tooltipSide="bottom"
-            aria-pressed={aiOpen}
-            className={cn(aiOpen && "text-accent")}
-            onClick={onOpenAi}
-          >
-            <Bot />
-          </IconButton>
-        )}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <IconButton
+              variant="ghost"
+              size="sm"
+              aria-label="更多操作"
+              className={cn(
+                (ttsActive || autoScroll || immersive || aiOpen) && "text-accent",
+              )}
+            >
+              <MoreHorizontal />
+            </IconButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-44">
+            <DropdownMenuItem onSelect={onOpenAnnotations}>
+              <Highlighter />
+              批注
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={!ttsSupported} onSelect={onToggleTts}>
+              <AudioLines />
+              {ttsSupported ? (ttsActive ? "停止朗读" : "朗读") : "朗读(浏览器不支持)"}
+            </DropdownMenuItem>
+            {showAutoScroll ? (
+              <DropdownMenuItem onSelect={onToggleAutoScroll}>
+                <Gauge />
+                {autoScroll ? "停止自动滚动" : "自动滚动"}
+              </DropdownMenuItem>
+            ) : null}
+            <DropdownMenuItem onSelect={onToggleImmersive}>
+              {immersive ? <Minimize2 /> : <Maximize2 />}
+              {immersive ? "退出沉浸阅读" : "沉浸阅读"}
+            </DropdownMenuItem>
+            {onOpenAi === undefined ? null : (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={onOpenAi}>
+                  <Bot />
+                  AI 阅读助手
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
         <IconButton
           variant="ghost"
           size="sm"

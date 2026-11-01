@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Coffee, Leaf, Monitor, Moon, Settings2, Sun, X } from "lucide-react";
+import { Coffee, Leaf, Monitor, Moon, Settings2, Sun } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -12,6 +12,11 @@ import { EngineConfigDialog } from "@/components/settings/EngineConfigDialog";
 import {
   Badge,
   Button,
+  Drawer,
+  DrawerBody,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
   IconButton,
   Input,
   Select,
@@ -369,9 +374,9 @@ export function TtsEngineControls() {
 }
 
 /**
- * 阅读设置浮动面板 (砚台原型形态): 移动端底部 sheet, 桌面右下角浮动卡片.
+ * 阅读设置面板: 移动端底部 sheet, 桌面右侧抽屉 (ui/Drawer 的 sheetOnMobile 形态).
+ * 用 Radix Dialog 打底, 焦点捕获 / aria-modal / 焦点归还 / Esc 都由它处理, 不再手写遮罩.
  * 全部写入 settings-store (persist 自动持久化), 改动即时生效.
- * Esc 关闭由 ReaderPage 统一走 reader-ui-store.closeAll.
  */
 export function SettingsPanel() {
   const settingsOpen = useReaderUIStore((state) => state.settingsOpen);
@@ -400,40 +405,17 @@ export function SettingsPanel() {
   const autoScrollSpeed = useSettingsStore((state) => state.autoScrollSpeed);
   const setAutoScrollSpeed = useSettingsStore((state) => state.setAutoScrollSpeed);
 
-  const handleClose = React.useCallback(() => setSettingsOpen(false), [setSettingsOpen]);
   const handleReset = React.useCallback(() => {
     useSettingsStore.setState(defaultSettings);
   }, []);
 
-  if (!settingsOpen) {
-    return null;
-  }
-
   return (
-    <>
-      <div
-        className="ui-overlay fixed inset-0 z-40 bg-black/25"
-        data-state="open"
-        onClick={handleClose}
-        aria-hidden
-      />
-      <div
-        role="dialog"
-        aria-label="阅读设置"
-        data-state="open"
-        className="ui-dialog fixed inset-x-0 bottom-0 z-50 max-h-[85vh] overflow-y-auto overscroll-contain rounded-t-2xl border-t border-border bg-surface p-5 shadow-2xl sm:inset-x-auto sm:right-6 sm:bottom-6 sm:w-80 sm:rounded-2xl sm:border"
-      >
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="font-display text-base font-semibold">阅读设置</h3>
-          <button
-            onClick={handleClose}
-            aria-label="关闭"
-            className="cursor-pointer text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <X className="size-4" />
-          </button>
-        </div>
-
+    <Drawer side="right" sheetOnMobile open={settingsOpen} onOpenChange={setSettingsOpen}>
+      <DrawerContent>
+        <DrawerHeader>
+          <DrawerTitle className="font-display">阅读设置</DrawerTitle>
+        </DrawerHeader>
+        <DrawerBody className="p-5">
         <Field label="主题">
           <Segmented<ThemeMode>
             ariaLabel="主题"
@@ -526,7 +508,7 @@ export function SettingsPanel() {
         <div className="mb-4 flex items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-xs font-medium text-muted-foreground">AI 阅读助手</p>
-            <p className="text-xs text-muted-foreground/70">基于已缓存章节问答, 需部署端配置模型</p>
+            <p className="text-xs text-muted-foreground">基于已缓存章节问答, 需部署端配置模型</p>
           </div>
           <Switch
             size="sm"
@@ -556,7 +538,8 @@ export function SettingsPanel() {
         >
           恢复默认
         </button>
-      </div>
-    </>
+        </DrawerBody>
+      </DrawerContent>
+    </Drawer>
   );
 }

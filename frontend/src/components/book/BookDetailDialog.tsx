@@ -17,6 +17,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogHeader,
   DialogTitle,
   Skeleton,
   Spinner,
@@ -418,9 +419,8 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
             <Button
               variant="ghost"
               className="px-5"
-              aria-expanded={switchOpen}
               disabled={busy}
-              onClick={() => setSwitchOpen((open) => !open)}
+              onClick={() => setSwitchOpen(true)}
             >
               <ArrowLeftRight aria-hidden />
               换源
@@ -442,13 +442,20 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
             </div>
           ) : null}
 
-          {switchOpen ? (
-            <section
-              aria-label="切换书源"
-              className="mt-4 rounded-xl border border-border bg-background p-4"
-            >
-              <div className="flex items-center gap-2">
-                <h3 className="font-display text-base font-semibold">可用书源</h3>
+          {/* 换源和阅读页的 SwitchSourceDialog 用同一形态(弹窗), 不再在原地展开一块内联面板:
+              同一动作两套长相, 用户得先判断「这次是哪种」 */}
+          <Dialog open={switchOpen} onOpenChange={setSwitchOpen}>
+            <DialogContent width="lg">
+              <DialogHeader>
+                <DialogTitle>切换书源</DialogTitle>
+                <DialogDescription>
+                  {book.name}
+                  {currentOrigin !== LOCAL_ORIGIN
+                    ? ` · 当前 ${book.originName || currentOrigin}`
+                    : ""}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex items-center gap-2 px-4 md:px-5">
                 {changeSource.isPending ? <Spinner size="sm" label="换源中" /> : null}
                 <Button
                   size="sm"
@@ -464,12 +471,12 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
               </div>
 
               {!exactInShelf ? (
-                <p className="mt-2 text-xs text-muted-foreground">
+                <p className="mt-2 px-4 md:px-5 text-xs text-muted-foreground">
                   未入架: 换源只作用于本次预览, 不会加入书架
                 </p>
               ) : null}
               {(exactInShelf ? available.isLoading : sourcesQuery.isLoading) ? (
-                <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                <p className="mt-2 px-4 md:px-5 flex items-center gap-2 text-xs text-muted-foreground">
                   <Spinner size="sm" label="读取可用书源" />
                   正在读取可用书源
                 </p>
@@ -478,13 +485,13 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
                   {humanizeError(errorMessage(available.error, "读取可用书源失败"))}
                 </p>
               ) : candidates.length === 0 && deadOrigins.length === 0 ? (
-                <p className="mt-2 text-xs text-muted-foreground">
+                <p className="mt-2 px-4 md:px-5 text-xs text-muted-foreground">
                   {exactInShelf
                     ? "暂无可用书源, 点「重新搜索」用全部书源找一遍"
                     : "搜索结果只命中当前源, 暂无其他书源"}
                 </p>
               ) : (
-                <ul className="mt-2 flex flex-col gap-1">
+                <ul className="mt-2 flex max-h-96 flex-col gap-1 overflow-y-auto px-4 pb-3 md:px-5">
                   {candidates.map((item) => {
                     // 当前源同样可点: 后端会按该源重取书籍信息与目录, 相当于「刷新这本书」
                     const current = item.origin === currentOrigin && item.bookUrl === currentBookUrl;
@@ -507,7 +514,7 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
                             setSwitchOpen(false);
                             toast.success(`已换源: ${item.originName}`);
                           }}
-                          className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none transition duration-150 ease-out hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-accent/60 disabled:pointer-events-none disabled:opacity-60"
+                          className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none transition duration-150 ease-out hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60"
                         >
                           <span className="min-w-0 flex-1 truncate">{item.originName}</span>
                           {item.origin === LOCAL_ORIGIN ? (
@@ -550,7 +557,7 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
                   })}
                   {deadOrigins.map((origin) => (
                     <li key={origin}>
-                      <div className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground/70">
+                      <div className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground">
                         <span className="min-w-0 flex-1 truncate">
                           {sourcesQuery.data?.find((source) => source.bookSourceUrl === origin)
                             ?.bookSourceName ?? origin}
@@ -563,8 +570,8 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
                   ))}
                 </ul>
               )}
-            </section>
-          ) : null}
+            </DialogContent>
+          </Dialog>
         </div>
       </section>
 
@@ -608,7 +615,7 @@ function BookDetail({ book, onAdded }: { book: SearchBook; onAdded?: (saved: Boo
           <div className="py-4">
             <p className="text-sm text-muted-foreground">这本书没有目录</p>
             {candidates.length > 0 ? (
-              <p className="mt-1 text-xs text-muted-foreground/80">
+              <p className="mt-1 text-xs text-muted-foreground">
                 部分书源返回的是关键词搜索页(标了「无详情页」), 目录抓不到 ——
                 点「换源」挑一个别的源, 有目录的源通常立刻就有章节目录。
               </p>

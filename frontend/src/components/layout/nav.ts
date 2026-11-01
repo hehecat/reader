@@ -35,6 +35,14 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/me", label: "我的", icon: UserRound },
 ];
 
+/**
+ * 移动端底部标签栏: 只放五个高频入口, 其余(订阅/净化/设置/用户)仍在汉堡侧栏里.
+ * 从 NAV_ITEMS 派生, 文案与图标只有一处定义.
+ */
+export const MOBILE_NAV_ITEMS: NavItem[] = NAV_ITEMS.filter((item) =>
+  ["/", "/search", "/library", "/sources", "/me"].includes(item.to),
+);
+
 /** 分隔线之后的独立导航项 */
 export const SETTINGS_NAV_ITEM: NavItem = { to: "/settings", label: "设置", icon: Settings2 };
 

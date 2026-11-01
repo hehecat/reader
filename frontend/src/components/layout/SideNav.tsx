@@ -20,7 +20,7 @@ export interface SideNavContentProps {
 }
 
 const itemClass =
-  "flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/60";
+  "flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring";
 
 function SideNavItem({
   item,
@@ -106,7 +106,7 @@ export function SideNavContent({ collapsed, onNavigate, onToggleCollapse }: Side
           type="button"
           onClick={onToggleCollapse}
           aria-label={collapsed ? "展开侧边栏" : "收起侧边栏"}
-          className="m-3 flex cursor-pointer items-center justify-center rounded-lg border border-border py-2 text-muted-foreground outline-none transition-colors hover:bg-surface-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-accent/60"
+          className="m-3 flex cursor-pointer items-center justify-center rounded-lg border border-border py-2 text-muted-foreground outline-none transition-colors hover:bg-surface-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         >
           <PanelLeft className="size-4" aria-hidden />
         </button>

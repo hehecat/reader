@@ -1,6 +1,25 @@
-import { BookText, KeyRound, Pencil, Search, SquareTerminal, ToolCase, Trash2 } from "lucide-react";
+import {
+  BookText,
+  KeyRound,
+  MoreHorizontal,
+  Pencil,
+  Search,
+  SquareTerminal,
+  ToolCase,
+  Trash2,
+} from "lucide-react";
 
-import { Badge, IconButton, Switch, cn } from "@/components/ui";
+import {
+  Badge,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  IconButton,
+  Switch,
+  cn,
+} from "@/components/ui";
 import type { SourceStat } from "@/services/sources";
 import type { BookSource } from "@/types/api";
 
@@ -39,7 +58,7 @@ const TYPE_LABEL: Record<number, string> = { 0: "文本", 1: "音频" };
 
 /**
  * 书源列表行(父级 ul 提供 divide-y 分隔): 图标 + 名称/类型/失效徽标 + 地址·分组徽标,
- * 右侧调试/编辑/删除与启用开关.
+ * 右侧「更多」菜单(试搜/登录/工作台/调试/编辑/删除) + 启用开关.
  */
 export function SourceListItem({
   source,
@@ -114,7 +133,7 @@ export function SourceListItem({
             invalid && onInvalidClick !== undefined ? (
               <button
                 type="button"
-                className="shrink-0 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+                className="shrink-0 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 title={invalid ? "查看失效原因" : "长期统计失效: 尝试≥5 且成功率<20%"}
                 onClick={() => onInvalidClick(source)}
               >
@@ -163,40 +182,54 @@ export function SourceListItem({
         </p>
       </div>
 
-      <div className="flex shrink-0 items-center gap-0.5">
-        {onProbe !== undefined ? (
-          <IconButton size="sm" variant="ghost" tooltip="试搜(单源)" onClick={() => onProbe(source)}>
-            <Search aria-hidden />
-          </IconButton>
-        ) : null}
-        {onLogin !== undefined && (source.loginUrl ?? "").trim().length > 0 ? (
-          <IconButton size="sm" variant="ghost" tooltip="登录" onClick={() => onLogin(source)}>
-            <KeyRound aria-hidden />
-          </IconButton>
-        ) : null}
-        {onWorkbench !== undefined ? (
-          <IconButton size="sm" variant="ghost" tooltip="工作台" onClick={() => onWorkbench(source)}>
-            <ToolCase aria-hidden />
-          </IconButton>
-        ) : null}
-        <IconButton size="sm" variant="ghost" tooltip="调试" onClick={() => onDebug(source)}>
-          <SquareTerminal aria-hidden />
-        </IconButton>
-        <IconButton size="sm" variant="ghost" tooltip="编辑 JSON" onClick={() => onEdit(source)}>
-          <Pencil aria-hidden />
-        </IconButton>
-        <IconButton
-          size="sm"
-          variant="ghost"
-          tooltip="删除"
-          className="text-muted-foreground hover:bg-danger/10 hover:text-danger"
-          onClick={() => onDelete(source)}
-        >
-          <Trash2 aria-hidden />
-        </IconButton>
+      {/* 操作区只留「开关 + 更多」: 六个同形图标挤在一行时, 删除和启用开关只隔 2px,
+          触屏极易误删; 逐项动作收进菜单, 宽度还给名称/地址 */}
+      <div className="flex shrink-0 items-center gap-1">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <IconButton size="sm" variant="ghost" aria-label={`${name} 的更多操作`}>
+              <MoreHorizontal aria-hidden />
+            </IconButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-40">
+            {onProbe === undefined ? null : (
+              <DropdownMenuItem onSelect={() => onProbe(source)}>
+                <Search aria-hidden />
+                试搜(单源)
+              </DropdownMenuItem>
+            )}
+            {onLogin !== undefined && (source.loginUrl ?? "").trim().length > 0 ? (
+              <DropdownMenuItem onSelect={() => onLogin(source)}>
+                <KeyRound aria-hidden />
+                {logged ? "重新登录" : "登录"}
+              </DropdownMenuItem>
+            ) : null}
+            {onWorkbench === undefined ? null : (
+              <DropdownMenuItem onSelect={() => onWorkbench(source)}>
+                <ToolCase aria-hidden />
+                工作台
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem onSelect={() => onDebug(source)}>
+              <SquareTerminal aria-hidden />
+              调试
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => onEdit(source)}>
+              <Pencil aria-hidden />
+              编辑 JSON
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onSelect={() => onDelete(source)}
+              className="text-danger data-[highlighted]:bg-danger/10"
+            >
+              <Trash2 aria-hidden />
+              删除
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <Switch
           size="sm"
-          className="ml-1"
           checked={source.enabled}
           disabled={busy}
           aria-label={`${source.enabled ? "禁用" : "启用"} ${name}`}
