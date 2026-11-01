@@ -323,9 +323,15 @@ export function bookSourceDebugSSE(
 /** `/getSourceStats` 返回项: 书源置信度统计 (搜索排序与清理依据) */
 export const sourceStatSchema = z.object({
   sourceUrl: z.string(),
-  /** 0..1 置信度: 搜索成功率.5 + 速度.2 + 目录.1 + 正文.1 + 丰富度.1 */
-  confidence: z.number(),
+  /** 0..1 置信度: 搜索/目录/正文三通道 Beta 后验的加权几何池化（点估计）。
+   *  无证据时为 null（服务端返回 null，stripNullsDeep 会删掉该键 → 用 optional）。 */
+  confidence: z.number().nullable().optional(),
+  /** 0..1 置信度下界（Wilson 95%）："优"必须被证明，判优用它 */
+  confidenceLo: z.number().nullable().optional(),
+  /** 搜索尝试次数（只含搜索） */
   attempts: z.number(),
+  /** 有效样本：搜索+目录+正文尝试数之和，门限判断用这个 */
+  effectiveSamples: z.number().optional(),
   /** 0..1 搜索成功率 */
   successRate: z.number(),
   avgLatencyMs: z.number(),

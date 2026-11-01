@@ -20,51 +20,114 @@ pub struct SourceStat {
     pub updated_at: i64,
 }
 
+/// 通道权重：搜索 45% / 目录 35% / 正文 20%。缺通道时按比例重归一（不抄上级、不补常数）。
+const W_SEARCH: f64 = 0.45;
+const W_TOC: f64 = 0.35;
+const W_CONTENT: f64 = 0.20;
+/// 几何池化地板：任一环全废也不归零，留"还有一口气"的痕迹
+const POOL_FLOOR: f64 = 0.02;
+/// Wilson 95% 双侧分位
+const Z95: f64 = 1.959_963_984_540_054;
+/// 速度：平均延迟超过 10s 才开始温和扣分，最多扣到 0.7（旧版整体压到 0.3 倍）
+const LAT_SOFT_MS: f64 = 10_000.0;
+const LAT_PENALTY_FLOOR: f64 = 0.7;
+/// 连败滞回：前 2 次不罚，第 3 次起每次减半，最多 1/8（旧版连败 3 次一刀压到 0.05）
+const STREAK_FREE: i64 = 2;
+/// 判死门槛：有效样本（剔除超时）≥5、24h 内失败过、成功率 <20%
+const DEAD_MIN_SAMPLES: i64 = 5;
+const DEAD_WINDOW_MS: i64 = 24 * 3_600_000;
+const DEAD_MAX_RATE: f64 = 0.2;
+
 impl SourceStat {
-    /// 置信度 0..1: 质量分(成功率 .55 + 目录 .15 + 正文 .15 + 丰富度 .15) × 速度因子.
-    /// 速度因子 = 0.3 + 0.7×(1 - 平均延迟/30s): 慢源(平均 >15s)乘法压到冷启动 0.5 之下,
-    /// 排队尾不挡首批结果; 冷启动 0.5; 连败>=3 或 尝试>=5 且成功率<0.2 → 压到 0.05 (排队尾, 不删除)
+    /// 单通道证据 → (Beta(½,½) 后验均值, Wilson 下界)；`n == 0` 返回 None（**没有证据就是没有**）
     ///
-    /// **成功率分母剔除超时**（`attempts - timeouts`）：超时是「慢」不是「坏」——上一轮已把
-    /// 超时从 `consec_failures` 摘出，但只要它仍占分母，一个只是经常慢到超时的好源照样会被
-    /// 「尝试>=5 且成功率<0.2」压到 0.05，再被 6h 死源窗口滤掉。单源端到端 deadline 上线后
-    /// 超时必然变多，分母必须同步剔除。`timeouts` 为 0 的老数据行为完全不变（= 原分母）。
-    pub fn confidence(&self) -> f64 {
-        if self.attempts == 0 {
-            return 0.5;
+    /// 后验均值让 1/1 拿不到满分（0.75）、0/3 也不是 0；下界用于排序，小样本不冲顶。
+    fn channel_evidence(ok: i64, n: i64) -> Option<(f64, f64)> {
+        if n <= 0 {
+            return None;
         }
-        // 有效尝试 = 真正给出成败结论的尝试（剔除纯超时）；全超时/负值 → 无证据，取中性 0.5
-        let decisive = (self.attempts - self.timeouts).max(0) as f64;
-        let rel = if decisive > 0.0 {
-            self.successes as f64 / decisive
-        } else {
-            0.5
-        };
-        let toc_rel = if self.toc_attempts > 0 {
-            self.toc_successes as f64 / self.toc_attempts as f64
-        } else {
-            rel
-        };
-        let cont_rel = if self.content_attempts > 0 {
-            self.content_successes as f64 / self.content_attempts as f64
-        } else {
-            toc_rel
-        };
-        let avg_lat = self.lat_sum_ms as f64 / self.attempts as f64;
-        let speed = (1.0 - (avg_lat / 30000.0).min(1.0)).max(0.0);
-        let rich = if self.intro_count > 0 {
-            self.intro_hits as f64 / self.intro_count as f64
-        } else {
-            0.5
-        };
-        let quality = 0.55 * rel + 0.15 * toc_rel + 0.15 * cont_rel + 0.15 * rich;
-        let mut c = quality * (0.3 + 0.7 * speed);
-        if self.consec_failures >= 3 || (self.attempts >= 5 && rel < 0.2) {
-            c = c.min(0.05);
-        }
-        c.clamp(0.0, 1.0)
+        let n_f = n as f64;
+        let ok_f = (ok as f64).clamp(0.0, n_f);
+        let mean = (ok_f + 0.5) / (n_f + 1.0);
+        let p = ok_f / n_f;
+        let z2 = Z95 * Z95;
+        let denom = 1.0 + z2 / n_f;
+        let center = (p + z2 / (2.0 * n_f)) / denom;
+        let half = Z95 * (p * (1.0 - p) / n_f + z2 / (4.0 * n_f * n_f)).sqrt() / denom;
+        Some((mean, (center - half).max(0.0)))
     }
 
+    /// 三通道证据：(权重, 后验均值, Wilson 下界)；无证据的通道整条消失
+    fn channels(&self) -> Vec<(f64, f64, f64)> {
+        [
+            (W_SEARCH, self.successes, self.attempts),
+            (W_TOC, self.toc_successes, self.toc_attempts),
+            (W_CONTENT, self.content_successes, self.content_attempts),
+        ]
+        .into_iter()
+        .filter_map(|(w, ok, n)| Self::channel_evidence(ok, n).map(|(m, lo)| (w, m, lo)))
+        .collect()
+    }
+
+    /// 速度与连败的惩罚因子（点估计与下界共用，保证两者可比）
+    fn penalties(&self) -> f64 {
+        let avg_lat = self.lat_sum_ms as f64 / self.attempts.max(1) as f64;
+        let mut f = 1.0;
+        if avg_lat > LAT_SOFT_MS {
+            f *= (1.0 - (avg_lat - LAT_SOFT_MS) / 60_000.0 * 0.3).max(LAT_PENALTY_FLOOR);
+        }
+        if self.consec_failures > STREAK_FREE {
+            f *= 0.5_f64.powi((self.consec_failures - STREAK_FREE).min(3) as i32);
+        }
+        f
+    }
+
+    /// 加权几何池化：搜索 → 目录 → 正文是**串联**链路，任一环失效即不可交付
+    fn pool(&self, use_lo: bool) -> Option<f64> {
+        let chs = self.channels();
+        if chs.is_empty() {
+            return None;
+        }
+        let wsum: f64 = chs.iter().map(|c| c.0).sum();
+        let acc: f64 = chs
+            .iter()
+            .map(|c| {
+                let v = if use_lo { c.2 } else { c.1 };
+                c.0 * v.max(POOL_FLOOR).ln()
+            })
+            .sum();
+        Some(((acc / wsum).exp() * self.penalties()).clamp(0.0, 1.0))
+    }
+
+    /// 置信度点估计 0..1：该源下一次被调用时能交付可用内容的概率。
+    /// `None` = 搜索/目录/正文三条通道都没有证据（旧版这里返回 0.5，把 947 行有目录证据的源
+    /// 一起钉成"中性"）。
+    pub fn confidence(&self) -> Option<f64> {
+        self.pool(false)
+    }
+
+    /// 置信度下界（Wilson 95%）：**排序用它**，1/1 的源不会因为一次成功就冲到队首。
+    pub fn confidence_lo(&self) -> Option<f64> {
+        self.pool(true)
+    }
+
+    /// 有效样本：三通道尝试数之和。门限判断用它——旧版用 `attempts`（只记搜索），
+    /// 导致只被取过目录的源永远进不了「≥5 次才算有样本」。
+    pub fn effective_samples(&self) -> i64 {
+        self.attempts + self.toc_attempts + self.content_attempts
+    }
+
+    /// 判死（与打分分离）：样本够、24h 内真失败过、剔除超时后成功率 <20%。
+    /// 旧版用 `confidence() <= 0.05` 当门限，把"分数档"和"开关"绑在一起。
+    pub fn is_dead(&self, now_ms: i64) -> bool {
+        let decisive = (self.attempts - self.timeouts).max(0);
+        decisive >= DEAD_MIN_SAMPLES
+            && self.last_failure_at > 0
+            && now_ms - self.last_failure_at <= DEAD_WINDOW_MS
+            && (self.successes as f64 / decisive as f64) < DEAD_MAX_RATE
+    }
+
+    /// 搜索成功率（展示用，分母含超时——与 `confidence()` 的口径不同，别混用）
     pub fn success_rate(&self) -> f64 {
         if self.attempts == 0 {
             return 0.0;
@@ -84,7 +147,7 @@ impl SourceStat {
 mod tests {
     use super::*;
 
-    /// 造统计行：lat_ms = 每次尝试的平均延迟（简化构造，只影响速度因子）
+    /// 造统计行：lat_ms = 每次尝试的平均延迟
     fn stat(
         attempts: i64,
         successes: i64,
@@ -99,8 +162,8 @@ mod tests {
             successes,
             timeouts,
             lat_sum_ms: lat_ms * attempts,
-            intro_hits: successes,
-            intro_count: attempts.max(1),
+            intro_hits: 0,
+            intro_count: 0,
             toc_attempts: 0,
             toc_successes: 0,
             content_attempts: 0,
@@ -111,97 +174,133 @@ mod tests {
         }
     }
 
-    /// 改造前的公式（成功率分母含超时）——仅用于向后兼容对照
-    fn legacy_confidence(s: &SourceStat) -> f64 {
-        if s.attempts == 0 {
-            return 0.5;
-        }
-        let rel = s.successes as f64 / s.attempts as f64;
-        let toc_rel = if s.toc_attempts > 0 {
-            s.toc_successes as f64 / s.toc_attempts as f64
-        } else {
-            rel
-        };
-        let cont_rel = if s.content_attempts > 0 {
-            s.content_successes as f64 / s.content_attempts as f64
-        } else {
-            toc_rel
-        };
-        let avg_lat = s.lat_sum_ms as f64 / s.attempts as f64;
-        let speed = (1.0 - (avg_lat / 30000.0).min(1.0)).max(0.0);
-        let rich = if s.intro_count > 0 {
-            s.intro_hits as f64 / s.intro_count as f64
-        } else {
-            0.5
-        };
-        let quality = 0.55 * rel + 0.15 * toc_rel + 0.15 * cont_rel + 0.15 * rich;
-        let mut c = quality * (0.3 + 0.7 * speed);
-        if s.consec_failures >= 3 || (s.attempts >= 5 && rel < 0.2) {
-            c = c.min(0.05);
-        }
-        c.clamp(0.0, 1.0)
+    /// 带目录/正文证据的行
+    fn stat3(att: i64, suc: i64, toc: (i64, i64), content: (i64, i64), lat_ms: i64) -> SourceStat {
+        let mut st = stat(att, suc, 0, 0, lat_ms);
+        st.toc_attempts = toc.0;
+        st.toc_successes = toc.1;
+        st.content_attempts = content.0;
+        st.content_successes = content.1;
+        st
     }
 
-    /// ① 纯超时的好源：成功率低只因超时，不得被判死（改造前 rel=8/60=0.13 → 压到 0.05）
+    /// ① 没有证据就是 None —— 不再伪装成中性 0.5
     #[test]
-    fn timeout_heavy_good_source_not_judged_dead() {
-        // 60 次尝试里 50 次超时、8 次成功、2 次真失败，连败 0：deadline 上线后最典型的形态
-        let st = stat(60, 8, 50, 0, 25_000);
+    fn no_evidence_is_none() {
+        assert_eq!(stat(0, 0, 0, 0, 0).confidence(), None);
+        assert_eq!(stat(0, 0, 0, 0, 0).confidence_lo(), None);
+    }
+
+    /// ② 只有目录证据的源（生产里 947 行）也能出分，且差的目录给低分
+    #[test]
+    fn toc_only_uses_toc_evidence() {
+        // 目录 0/52 全失败（生产 m.zhizihuan.com 的形态，搜索另算）
+        let bad = stat3(0, 0, (52, 0), (0, 0), 3_000);
+        let c = bad.confidence().expect("有目录证据就该出分");
+        assert!(c < 0.1, "目录 0/52 必须低分，实际 {c}");
+        // 目录 6/6 —— 小样本不该拿满分
+        let tiny = stat3(0, 0, (6, 6), (0, 0), 3_000);
+        let c = tiny.confidence().unwrap();
         assert!(
-            legacy_confidence(&st) <= 0.05,
-            "前置：改造前这种源确实会被判死（{}）",
-            legacy_confidence(&st)
+            (0.3..0.95).contains(&c),
+            "6/6 的后验均值不该是 1.0，实际 {c}"
         );
-        let c = st.confidence();
-        assert!(c > 0.1, "纯超时的好源不得被判死，实际 {c}");
-        // 也该恢复成「可参与排序」的档位，而不是贴着 0.05
-        assert!(c > st.confidence().min(0.05) + 0.05);
+        assert!(
+            tiny.confidence_lo().unwrap() < 0.7,
+            "6/6 的 Wilson 下界应明显低于点估计"
+        );
     }
 
-    /// ①b 全部尝试都超时（successes=0/timeouts=attempts）：无成败证据，不判死
+    /// ③ 搜索笑嘻嘻、目录哭哈哈 → 低分；三通道都好 → 高分（旧版这里是倒挂）
     #[test]
-    fn all_timeouts_is_undecided_not_dead() {
-        let st = stat(12, 0, 12, 0, 30_000);
-        assert!(st.confidence() > 0.05, "全超时无证据不应判死");
+    fn contradicted_source_scores_below_healthy_source() {
+        let contradicted = stat3(92, 91, (52, 0), (0, 0), 3_000);
+        let healthy = stat3(92, 91, (44, 40), (22, 20), 3_000);
+        let (c1, c2) = (
+            contradicted.confidence().unwrap(),
+            healthy.confidence().unwrap(),
+        );
+        assert!(c1 < 0.3, "矛盾源应低分，实际 {c1}");
+        assert!(c2 > 0.6, "三通道都好应高分，实际 {c2}");
+        assert!(c1 + 0.3 < c2, "矛盾源必须显著低于好源：{c1} vs {c2}");
     }
 
-    /// ② 真连败的坏源：仍被判死（阈值不动）
+    /// ④ 小样本不冲顶：1/1 的下界远低于 100/100
     #[test]
-    fn real_bad_source_still_judged_dead() {
-        // 2a. 连败 >= 3
-        let st = stat(20, 0, 0, 5, 1_000);
-        assert!(st.confidence() <= 0.05, "连败 5 次必须仍判死");
-        // 2b. 无连败但成功率极低（真失败，不是超时）
-        let st = stat(20, 1, 0, 0, 1_000);
-        assert!(st.confidence() <= 0.05, "成功率 1/20 且无超时必须仍判死");
-        // 2c. 有超时但剔除后仍是真失败占多数（18 超时 + 2 次真失败 + 0 成功）
-        let st = stat(20, 0, 18, 0, 20_000);
-        assert!(st.confidence() <= 0.05, "剔除超时后成功率 0/2 必须仍判死");
+    fn tiny_sample_does_not_top_the_ranking() {
+        let tiny = stat(1, 1, 0, 0, 500).confidence_lo().unwrap();
+        let solid = stat(100, 100, 0, 0, 500).confidence_lo().unwrap();
+        assert!(tiny < 0.4, "1/1 的排序键必须被压住，实际 {tiny}");
+        assert!(solid > 0.9, "100/100 的下界应接近 1，实际 {solid}");
     }
 
-    /// ③ 向后兼容：timeouts=0 的老行与新公式逐位一致
+    /// ⑤ 连败是滞回不是断崖：成功率 0.83 的源连败 3 次只掉一半，不归零
     #[test]
-    fn rows_without_timeouts_unchanged() {
-        for &(att, suc, consec, lat) in &[
-            (10, 5, 0, 800),
-            (5, 0, 0, 800),
-            (40, 39, 0, 300),
-            (7, 1, 2, 20_000),
-            (1, 1, 0, 60_000),
-            (3, 0, 3, 5_000),
-        ] {
-            let st = stat(att, suc, 0, consec, lat);
-            let (new, old) = (st.confidence(), legacy_confidence(&st));
-            assert!(
-                (new - old).abs() < 1e-12,
-                "timeouts=0 时应与旧公式一致：attempts={att} successes={suc} consec={consec} new={new} old={old}"
-            );
-        }
+    fn streak_is_hysteresis_not_a_cliff() {
+        let base = stat(93, 77, 0, 0, 1_000);
+        let once = stat(93, 77, 0, 3, 1_000);
+        let more = stat(93, 77, 0, 5, 1_000);
+        let mid = stat(93, 77, 0, 4, 1_000);
+        let (b, o, mid_c, m) = (
+            base.confidence().unwrap(),
+            once.confidence().unwrap(),
+            mid.confidence().unwrap(),
+            more.confidence().unwrap(),
+        );
+        assert!(b > 0.7, "成功 77/93 的源基线应高分，实际 {b}");
+        assert!((o / b - 0.5).abs() < 1e-9, "连败 3 次应恰好减半：{o} / {b}");
+        assert!(
+            (mid_c / b - 0.25).abs() < 1e-9,
+            "连败 4 次应剩 1/4：{mid_c} / {b}"
+        );
+        assert!((m / b - 0.125).abs() < 1e-9, "连败 5 次封顶 1/8：{m} / {b}");
+        assert!(o > 0.05, "连败 3 次不得被一刀压到死源档，实际 {o}");
     }
 
-    /// attempts=0 仍是冷启动 0.5
+    /// ⑥ 慢是"慢"不是"坏"：30s 只温和扣分（≥0.7 倍），不再整体压到 0.3 倍
     #[test]
-    fn cold_start_unchanged() {
-        assert_eq!(stat(0, 0, 0, 0, 0).confidence(), 0.5);
+    fn slow_source_gets_mild_penalty_only() {
+        let fast = stat(20, 18, 0, 0, 1_000).confidence().unwrap();
+        let slow = stat(20, 18, 0, 0, 30_000).confidence().unwrap();
+        assert!(
+            slow / fast >= 0.69,
+            "慢源惩罚不该超过 30%：{} vs {fast}",
+            slow
+        );
+        assert!(slow < fast, "慢源仍应略低");
+    }
+
+    /// ⑦ 纯超时的好源不判死；真连败的坏源判死；样本不足不判死
+    #[test]
+    fn dead_judgement_needs_samples_and_real_failures() {
+        let now = 1_000_000_000_000i64;
+        // 60 次里 50 次超时、8 次成功 → 剔除超时后 8/10 成功，不是死源
+        let mut timeout_heavy = stat(60, 8, 50, 0, 25_000);
+        timeout_heavy.last_failure_at = now - 60_000;
+        assert!(!timeout_heavy.is_dead(now), "纯超时的好源不得判死");
+        assert!(timeout_heavy.confidence().unwrap() > 0.05, "也不该贴死源档");
+
+        // 20 次全失败、刚失败过 → 死源
+        let mut bad = stat(20, 0, 0, 5, 1_000);
+        bad.last_failure_at = now - 60_000;
+        assert!(bad.is_dead(now), "成功率 0/20 且刚失败必须判死");
+
+        // 只有 3 次失败 → 样本不足，不判死
+        let mut few = stat(3, 0, 0, 3, 1_000);
+        few.last_failure_at = now - 60_000;
+        assert!(!few.is_dead(now), "有效样本 <5 不该判死");
+
+        // 失败是 30 小时前的事 → 窗口外，放行
+        let mut stale = stat(20, 0, 0, 5, 1_000);
+        stale.last_failure_at = now - 30 * 3_600_000;
+        assert!(!stale.is_dead(now), "超过 24h 没再失败应放行");
+    }
+
+    /// ⑧ 有效样本 = 三通道之和（只被取过目录的源也能进"有样本"的门限）
+    #[test]
+    fn effective_samples_counts_all_channels() {
+        let st = stat3(0, 0, (12, 10), (4, 4), 1_000);
+        assert_eq!(st.effective_samples(), 16);
+        assert_eq!(stat(7, 5, 0, 0, 900).effective_samples(), 7);
     }
 }

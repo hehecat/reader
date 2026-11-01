@@ -181,20 +181,22 @@ export default function SourcesPage() {
     }
     return map;
   }, [invalid.invalidSources]);
-  /** 差源: 置信度<0.4 且尝试≥3 (含垫底源), 供筛选+批量禁用 */
+  /** 差源: 置信度点估计<0.4 且有效样本≥3 (含垫底源), 供筛选+批量禁用 */
   const poorSet = React.useMemo(() => {
     const set = new Set<string>();
     for (const [url, stat] of statMap) {
-      if (stat.confidence < 0.4 && stat.attempts >= 3) {
+      if (stat.confidence != null && stat.confidence < 0.4 && (stat.effectiveSamples ?? stat.attempts) >= 3) {
         set.add(url);
       }
     }
     return set;
   }, [statMap]);
+  /** 优质源: 置信度**下界**≥0.7 且有效样本≥5 —— 优必须被证明, 小样本不给 */
   const premiumSet = React.useMemo(() => {
     const set = new Set<string>();
     for (const [url, stat] of statMap) {
-      if (stat.confidence >= 0.7 && stat.attempts >= 5) {
+      const lo = stat.confidenceLo ?? stat.confidence;
+      if (lo != null && lo >= 0.7 && (stat.effectiveSamples ?? stat.attempts) >= 5) {
         set.add(url);
       }
     }
@@ -213,8 +215,8 @@ export default function SourcesPage() {
     }
     if (sortByConf) {
       list = [...list].sort((a, b) => {
-        const ca = statMap.get(a.bookSourceUrl)?.confidence ?? -1;
-        const cb = statMap.get(b.bookSourceUrl)?.confidence ?? -1;
+        const ca = statMap.get(a.bookSourceUrl)?.confidenceLo ?? -1;
+        const cb = statMap.get(b.bookSourceUrl)?.confidenceLo ?? -1;
         return cb - ca;
       });
     }

@@ -1932,6 +1932,10 @@ async fn submit_captcha(
 
 // ---------------- 缓存管理 ----------------
 
+/// 排序占位：三条通道都没有证据的源，排在"有证据但平庸"（Wilson 下界约 0.2–0.5）附近
+/// 而不是队首或队尾——没有证据既不该被奖励，也不该被惩罚。
+const SORT_UNKNOWN: f64 = 0.3;
+
 /// getCacheInfo 的进程内缓存：4 次全表 COUNT/SUM，生产 500 MB 的 book_chapters
 /// 实测 583 ms → <1 ms。统计面板容忍 30s 陈旧；clearCache 会主动失效。
 const CACHE_INFO_TTL: std::time::Duration = std::time::Duration::from_secs(30);
@@ -2931,7 +2935,8 @@ async fn search_book_multi(
     if sources.len() > max_sources {
         sources.truncate(max_sources);
     }
-    // 置信度排序快照 (稳定排序): 死/慢源往后放, 优质源靠前; 冷启动 0.5 不惩罚新源
+    // 置信度排序快照 (稳定排序): 用 Wilson 下界排序——1/1 的新源不会因为一次成功冲到队首
+    // 无证据的源取 SORT_UNKNOWN 占位, 与「有证据但平庸」区分开
     if let Ok(stats) = state.storage.get_source_stats(&namespace).await {
         // 置信度降序 + 平均延时升序: 同置信度下快源先跑, 慢源沉到队尾
         let mut map: std::collections::HashMap<String, (f64, i64)> =
@@ -2939,7 +2944,10 @@ async fn search_book_multi(
         for st in stats {
             map.insert(
                 st.source_url.clone(),
-                (st.confidence(), st.avg_latency_ms()),
+                (
+                    st.confidence_lo().unwrap_or(SORT_UNKNOWN),
+                    st.avg_latency_ms(),
+                ),
             );
         }
         sources.sort_by(|a, b| {
@@ -4874,8 +4882,10 @@ async fn get_source_stats_handler(
         .map(|st| {
             serde_json::json!({
                 "sourceUrl": st.source_url,
-                "confidence": (st.confidence() * 100.0).round() / 100.0,
+                "confidence": st.confidence().map(|c| (c * 100.0).round() / 100.0),
+                "confidenceLo": st.confidence_lo().map(|c| (c * 100.0).round() / 100.0),
                 "attempts": st.attempts,
+                "effectiveSamples": st.effective_samples(),
                 "successRate": (st.success_rate() * 100.0).round() / 100.0,
                 "avgLatencyMs": st.avg_latency_ms(),
                 "consecFailures": st.consec_failures,
@@ -9427,7 +9437,10 @@ async fn search_book_multi_sse(
         for st in &stats_rows {
             map.insert(
                 st.source_url.clone(),
-                (st.confidence(), st.avg_latency_ms()),
+                (
+                    st.confidence_lo().unwrap_or(SORT_UNKNOWN),
+                    st.avg_latency_ms(),
+                ),
             );
         }
         if !map.is_empty() {
@@ -9899,16 +9912,17 @@ fn sse_next_from(
 
 // ---------- 死源过滤（非 SSE / SSE 两条路径共用同一口径） ----------
 
-/// 死源判定（唯一口径）：置信度被打到垫底 + 样本足够 + 6h 内还失败过。
+/// 死源判定（唯一口径）：样本足够 + 24h 内还失败过 + 剔除超时后成功率 <20%。
 ///
 /// 抽函数前这段判定在非 SSE（`search_book_sources`）与 SSE（`search_book_sources_sse`）里各抄
-/// 了一份，改一处漏一处就会让两条搜索路径的「跳过哪些源」不一致。**阈值语义一字未改**：
-/// `confidence() <= 0.05 && attempts >= 5 && now_ms - last_failure_at <= 6h`。
+/// 了一份，改一处漏一处就会让两条搜索路径的「跳过哪些源」不一致。
+/// **判死与打分分离**：旧口径借 `confidence() <= 0.05` 当开关，连败 3 次就把成功率 0.83
+/// 的好源压进死源档；现在只看「有效样本 ≥5 + 24h 内失败过 + 成功率 <20%」。
 ///
 /// 注意超时**不进** `consec_failures`（见 `storage::SearchOutcome`），所以慢源不会
 /// 因为三连超时被压到 0.05 然后在这里被当死源跳过。
 fn is_dead_source(st: &crate::model::SourceStat, now_ms: i64) -> bool {
-    st.confidence() <= 0.05 && st.attempts >= 5 && now_ms - st.last_failure_at <= 6 * 3_600_000
+    st.is_dead(now_ms)
 }
 
 /// 统计行 → 「6h 内跳过」的死源 url 集合（非 SSE 与 SSE 共用，行为必须一致）
@@ -9927,7 +9941,7 @@ fn dead_source_urls(
 
 /// 单源历史表现快照（只取搜索维度：成不成、多快）。
 ///
-/// 不复用 `SourceStat::confidence()`：它掺了目录/正文/丰富度权重，而「首波先派哪几台」
+/// 不复用 `SourceStat::confidence()`：它掺了目录/正文权重，而「首波先派哪几台」
 /// 只关心搜索成功率与耗时；三档排序也比一个加权标量更容易解释、更容易写死单测。
 #[derive(Debug, Clone, Copy)]
 struct SchedStat {
@@ -26500,7 +26514,7 @@ mod tests {
 
     // ---------------- 死源过滤（两条路径共用一份判定） ----------------
 
-    /// 死源判定阈值：`confidence()<=0.05 && attempts>=5 && now-last_failure_at<=6h`
+    /// 死源判定：有效样本 ≥5 + 24h 内失败过 + 剔除超时后成功率 <20%（见 `SourceStat::is_dead`）
     /// 三条同时成立才算死源；这里是**纯重构**，语义必须与改造前逐条一致。
     #[test]
     fn test_is_dead_source_thresholds() {
@@ -26525,23 +26539,33 @@ mod tests {
         // 冷启动（attempts=0）不是死源
         assert!(!is_dead_source(&st, now));
 
-        // 连败 5 次、刚失败 → 死源
+        // 5 次全失败、刚失败 → 死源
         st.attempts = 5;
         st.successes = 0;
         st.consec_failures = 5;
         st.last_failure_at = now - 1000;
         assert!(is_dead_source(&st, now));
 
-        // 6h 界内仍算死源；超过 6h 就放行一次探针
-        st.last_failure_at = now - 6 * 3_600_000;
-        assert!(is_dead_source(&st, now), "恰好 6h 仍在窗口内");
-        st.last_failure_at = now - 6 * 3_600_000 - 1;
-        assert!(!is_dead_source(&st, now), "超过 6h 放行探针");
+        // 24h 界内仍算死源；超过 24h 就放行一次探针
+        st.last_failure_at = now - 24 * 3_600_000;
+        assert!(is_dead_source(&st, now), "恰好 24h 仍在窗口内");
+        st.last_failure_at = now - 24 * 3_600_000 - 1;
+        assert!(!is_dead_source(&st, now), "超过 24h 放行探针");
 
-        // 样本不足（attempts<5）不算死源
+        // 样本不足（有效样本 <5）不算死源
         st.attempts = 4;
         st.last_failure_at = now - 1000;
         assert!(!is_dead_source(&st, now));
+
+        // 成功率 ≥20% 不算死源（旧口径靠连败 3 次就会误杀：93 次里成功 77 次也被判死）
+        st.attempts = 93;
+        st.successes = 77;
+        st.consec_failures = 3;
+        st.last_failure_at = now - 1000;
+        assert!(
+            !is_dead_source(&st, now),
+            "连败 3 次不得把成功率 0.83 的源判死"
+        );
 
         // 死源集合过滤：只挑满足判定的 url
         let mut alive = st.clone();

@@ -128,15 +128,26 @@ export function SourceListItem({
               </Badge>
             )
           ) : null}
-          {stat !== undefined && stat.attempts >= 3 ? (
-            <Badge
-              size="sm"
-              variant={stat.confidence >= 0.7 ? "accent" : stat.confidence >= 0.4 ? "muted" : "danger"}
-              className="shrink-0"
-              title={`置信度 ${(stat.confidence * 100).toFixed(0)}% · 搜索 ${stat.attempts} 次 · 成功率 ${(stat.successRate * 100).toFixed(0)}% · 平均 ${stat.avgLatencyMs}ms`}
-            >
-              {`${stat.confidence >= 0.7 ? "优" : stat.confidence >= 0.4 ? "中" : "差"} ${(stat.confidence * 100).toFixed(0)}`}
-            </Badge>
+          {stat !== undefined && (stat.effectiveSamples ?? stat.attempts) >= 3 ? (
+            stat.confidence == null ? (
+              <Badge
+                size="sm"
+                variant="outline"
+                className="shrink-0"
+                title={`置信度未知（搜索/目录/正文都没有足够证据）· 搜索 ${stat.attempts} 次`}
+              >
+                未测
+              </Badge>
+            ) : (
+              <Badge
+                size="sm"
+                variant={stat.confidence >= 0.7 ? "accent" : stat.confidence >= 0.4 ? "muted" : "danger"}
+                className="shrink-0"
+                title={`置信度 ${(stat.confidence * 100).toFixed(0)}%（下界 ${((stat.confidenceLo ?? stat.confidence) * 100).toFixed(0)}%）· 搜索 ${stat.attempts} 次 · 成功率 ${(stat.successRate * 100).toFixed(0)}% · 平均 ${stat.avgLatencyMs}ms`}
+              >
+                {`${stat.confidence >= 0.7 ? "优" : stat.confidence >= 0.4 ? "中" : "差"} ${(stat.confidence * 100).toFixed(0)}`}
+              </Badge>
+            )
           ) : null}
         </div>
         {/* 地址与分组徽标并入同一 meta 行: 行高恒定两行, 有无分组不再跳动 */}
