@@ -117,13 +117,44 @@ export function Segmented<T extends string | number>({
   columns?: string;
   className?: string;
 }) {
+  // radiogroup 的契约: 只有选中项可 Tab 到, 组内用方向键移动并即时选中
+  // (22 个独立停靠点会让键盘用户在每个设置项上都按一遍 Tab)
+  const buttonsRef = React.useRef<(HTMLButtonElement | null)[]>([]);
+  const selectedIndex = options.findIndex((option) => option.value === value);
+
+  const focusAt = (index: number): void => {
+    const next = options[index];
+    if (next === undefined) {
+      return;
+    }
+    onChange(next.value);
+    buttonsRef.current[index]?.focus();
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent, index: number): void => {
+    const last = options.length - 1;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      event.preventDefault();
+      focusAt(index === last ? 0 : index + 1);
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      event.preventDefault();
+      focusAt(index === 0 ? last : index - 1);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      focusAt(0);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      focusAt(last);
+    }
+  };
+
   return (
     <div
       role="radiogroup"
       aria-label={ariaLabel}
       className={cn("grid w-full gap-2", columns, className)}
     >
-      {options.map((option) => {
+      {options.map((option, index) => {
         const selected = option.value === value;
         const Icon = option.icon;
         return (
@@ -132,6 +163,12 @@ export function Segmented<T extends string | number>({
             type="button"
             role="radio"
             aria-checked={selected}
+            // 没有命中项时让第一项可 Tab, 否则整组键盘进不来
+            tabIndex={selected || (selectedIndex === -1 && index === 0) ? 0 : -1}
+            ref={(element) => {
+              buttonsRef.current[index] = element;
+            }}
+            onKeyDown={(event) => handleKeyDown(event, index)}
             onClick={() => onChange(option.value)}
             style={option.style}
             className={cn(

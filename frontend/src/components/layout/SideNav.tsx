@@ -128,7 +128,7 @@ export function SideNav({ collapsed, onToggleCollapse }: SideNavProps) {
     <aside
       aria-label="主导航"
       className={cn(
-        "ui-safe-x hidden shrink-0 border-r border-border/70 bg-surface/40 transition-all md:flex md:flex-col",
+        "ui-safe-x hidden shrink-0 border-r border-border/70 bg-surface/40 transition-[width] md:flex md:flex-col",
         collapsed ? "w-16" : "w-56",
       )}
     >

@@ -15,6 +15,7 @@ import {
 import type { ChapterEndBlockProps } from "@/components/reader/ChapterEndBlock";
 import type { Book } from "@/types/api";
 import { ContentView, type FocusRequest } from "@/components/reader/ContentView";
+import { DegradedNotices } from "@/components/reader/DegradedNotices";
 import { ReaderLoadingStatus, ReaderStateCard } from "@/components/reader/ReaderStatus";
 import { ReaderChapterBar, ReaderTopBar } from "@/components/reader/ReaderToolbar";
 import { SelectionToolbar } from "@/components/reader/SelectionToolbar";
@@ -729,54 +730,51 @@ export default function ReaderPage() {
           chromeHidden={chromeHidden}
         />
 
-        {/* 目录来自本地缓存且这次取新失败: 只给一条「可能不是最新」的轻提示, 正文照常可读,
-            绝不用整块错误卡把已缓存的目录/正文盖掉 (断网二次进书的核心场景) */}
-        {chaptersError !== "" && chapters.length > 0 ? (
-          <div className="flex items-center justify-center gap-2 border-b border-border bg-surface px-3 py-1 text-xs text-muted-foreground">
-            <span className="truncate">目录可能不是最新(用的是本地缓存), 可刷新目录重试</span>
-            <button
-              type="button"
-              className="shrink-0 cursor-pointer font-medium text-accent disabled:opacity-50"
-              disabled={tocRefreshing}
-              onClick={handleRefreshToc}
-            >
-              {tocRefreshing ? "刷新中…" : "刷新"}
-            </button>
-          </div>
-        ) : null}
-
-        {/* 书籍信息拿不到但正文/目录可读 (整页门控已解除): 只给一条轻提示 + 重试,
-            不用整块错误卡盖掉能读的正文 —— 缺的只是书名/总章数这类元信息,
-            正文、翻章、目录都不依赖它 */}
-        {boot.metaDegraded && bookError !== "" ? (
-          <div className="flex items-center justify-center gap-2 border-b border-border bg-surface px-3 py-1 text-xs text-muted-foreground">
-            <span className="truncate">书籍信息获取失败({bookError}), 书名可能不是最新</span>
-            <button
-              type="button"
-              className="shrink-0 cursor-pointer font-medium text-accent disabled:opacity-50"
-              disabled={bookQuery.isFetching}
-              onClick={() => void bookQuery.refetch()}
-            >
-              {bookQuery.isFetching ? "重试中…" : "重试"}
-            </button>
-          </div>
-        ) : null}
-
-        {/* 正文降级: 这次取新失败, 但本地缓存兜住了正文 —— 能读就得让读, 但不能静默,
-            给一条「显示的是本地缓存 + 原因 + 重试」的轻提示 (整块错误卡会盖掉能读的正文) */}
-        {content.degraded ? (
-          <div className="flex items-center justify-center gap-2 border-b border-border bg-surface px-3 py-1 text-xs text-muted-foreground">
-            <span className="truncate">取新失败({content.errorMessage}), 当前显示本地缓存</span>
-            <button
-              type="button"
-              className="shrink-0 cursor-pointer font-medium text-accent disabled:opacity-50"
-              disabled={content.isReloading}
-              onClick={content.refetch}
-            >
-              {content.isReloading ? "重试中…" : "重试"}
-            </button>
-          </div>
-        ) : null}
+        {/* 三种降级(目录/书籍信息/正文)合并成一条: 同时命中时不再叠 3 行重复文案,
+            但绝不整块错误卡盖掉能读的正文 —— 断网二次进书就是这个场景 */}
+        <DegradedNotices
+          items={[
+            ...(chaptersError !== "" && chapters.length > 0
+              ? [
+                  {
+                    id: "toc",
+                    label: "目录",
+                    message: "目录可能不是最新(用的是本地缓存), 可刷新目录重试",
+                    actionLabel: "刷新",
+                    busyLabel: "刷新中…",
+                    busy: tocRefreshing,
+                    onAction: handleRefreshToc,
+                  },
+                ]
+              : []),
+            ...(boot.metaDegraded && bookError !== ""
+              ? [
+                  {
+                    id: "meta",
+                    label: "书籍信息",
+                    message: `书籍信息获取失败(${bookError}), 书名可能不是最新`,
+                    actionLabel: "重试",
+                    busyLabel: "重试中…",
+                    busy: bookQuery.isFetching,
+                    onAction: () => void bookQuery.refetch(),
+                  },
+                ]
+              : []),
+            ...(content.degraded
+              ? [
+                  {
+                    id: "content",
+                    label: "正文",
+                    message: `取新失败(${content.errorMessage}), 当前显示本地缓存`,
+                    actionLabel: "重试",
+                    busyLabel: "重试中…",
+                    busy: content.isReloading,
+                    onAction: content.refetch,
+                  },
+                ]
+              : []),
+          ]}
+        />
 
         {/* 正文容器: 加入书签时扫描其中带 data-pos 的段落取可视区首段作摘要; 划选工具条也只认这个容器内的选区 */}
         <div ref={contentRef} className="min-h-0 flex-1">

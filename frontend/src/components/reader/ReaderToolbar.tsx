@@ -224,9 +224,10 @@ export function ReaderTopBar({
         aria-valuenow={percent}
         className="h-0.5"
       >
+        {/* scaleX 而非 width: 每帧改 width 会触发布局, 滚动时这一条占满整个阅读期 */}
         <div
-          className="h-full bg-accent transition-[width] duration-150 ease-out"
-          style={{ width: `${percent}%` }}
+          className="h-full w-full origin-left bg-accent transition-transform duration-150 ease-out motion-reduce:transition-none"
+          style={{ transform: `scaleX(${percent / 100})` }}
         />
       </div>
     </header>
