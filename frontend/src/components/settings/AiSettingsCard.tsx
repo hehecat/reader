@@ -213,7 +213,7 @@ export function AiSettingsCard() {
           step={100}
           value={maxTokens}
           onChange={(event) => setMaxTokens(Number(event.target.value))}
-          className="w-24 rounded-md border border-border bg-background px-3 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+          className="w-24 rounded-md border border-border bg-background px-3 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
       </SettingRow>
       <SettingRow label="连通性" value={testResult ?? "填好端点后先点测试"}>

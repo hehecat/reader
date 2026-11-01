@@ -293,7 +293,7 @@ export function AiChatPanel({
                     </Button>
                   ))}
                 </div>
-                <p className="mt-4 text-xs text-muted-foreground/80">
+                <p className="mt-4 text-xs text-muted-foreground">
                   只检索本机已缓存的章节；读得越多，能回答的越多。
                 </p>
               </div>

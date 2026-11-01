@@ -419,7 +419,7 @@ export default function PurifyPage() {
             </div>
             <textarea
               aria-label="导入 JSON 内容"
-              className="min-h-40 w-full rounded-xl border border-border bg-surface-muted/40 p-3 font-mono text-xs outline-none focus:border-primary"
+              className="min-h-40 w-full rounded-xl border border-border bg-surface-muted/40 p-3 font-mono text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
               placeholder='[{"name":"杭城","find":"杭城","replace":"杭州","isRegex":false,…}]'
               value={importText}
               onChange={(event) => setImportText(event.target.value)}

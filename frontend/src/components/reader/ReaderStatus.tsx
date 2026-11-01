@@ -42,7 +42,7 @@ export function ReaderLoadingStatus({
       {slow ? (
         <p
           role="status"
-          className="max-w-72 text-center text-xs leading-5 text-balance text-muted-foreground/80"
+          className="max-w-72 text-center text-xs leading-5 text-balance text-muted-foreground"
         >
           源站响应慢, 可能正在被 Cloudflare 挑战, 最长等 30 秒
         </p>
@@ -85,7 +85,7 @@ export function ReaderStateCard({
     >
       <EmptyState className="py-0" icon={icon} title={title} description={message} action={actions} />
       {hint === undefined || hint === "" ? null : (
-        <p className="mt-3 text-center text-xs leading-5 text-balance text-muted-foreground/80">
+        <p className="mt-3 text-center text-xs leading-5 text-balance text-muted-foreground">
           {hint}
         </p>
       )}

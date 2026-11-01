@@ -38,7 +38,7 @@ export function RssSourceListItem({
       <button
         type="button"
         aria-current={selected || undefined}
-        className="min-w-0 flex-1 cursor-pointer rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+        className="min-w-0 flex-1 cursor-pointer rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onClick={() => onSelect(source)}
       >
         <span className="flex items-center gap-1.5">

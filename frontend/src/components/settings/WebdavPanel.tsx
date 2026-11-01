@@ -255,9 +255,9 @@ export function WebdavPanel() {
           <button
             type="button"
             aria-label="WebDAV 使用说明"
-            className="shrink-0 cursor-help outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+            className="shrink-0 cursor-help outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <CircleAlert aria-hidden className="size-3.5 text-muted-foreground/80" />
+            <CircleAlert aria-hidden className="size-3.5 text-muted-foreground" />
           </button>
         </Tooltip>
       </div>
@@ -294,7 +294,7 @@ export function WebdavPanel() {
                 ) : (
                   <button
                     type="button"
-                    className="shrink-0 cursor-pointer rounded outline-none transition duration-150 ease-out hover:text-accent hover:underline focus-visible:ring-2 focus-visible:ring-accent/60"
+                    className="shrink-0 cursor-pointer rounded outline-none transition duration-150 ease-out hover:text-accent hover:underline focus-visible:ring-2 focus-visible:ring-ring"
                     onClick={() => goToPath(segment.path)}
                   >
                     {segment.label}

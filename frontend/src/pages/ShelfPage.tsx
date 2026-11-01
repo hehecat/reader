@@ -89,7 +89,7 @@ function LayoutToggle({ active, label, onClick, children }: LayoutToggleProps) {
       aria-label={label}
       aria-pressed={active}
       className={cn(
-        "flex size-9 cursor-pointer items-center justify-center rounded-md border outline-none transition-colors duration-150 ease-out focus-visible:ring-2 focus-visible:ring-accent/60",
+        "flex size-9 cursor-pointer items-center justify-center rounded-md border outline-none transition-colors duration-150 ease-out focus-visible:ring-2 focus-visible:ring-ring",
         active
           ? "border-accent bg-accent/10 text-accent"
           : "border-border text-muted-foreground hover:text-foreground",
@@ -277,8 +277,8 @@ export default function ShelfPage() {
     <div className="mx-auto flex min-h-full w-full max-w-6xl flex-col px-4 pb-8 pt-5 sm:px-6 md:px-10 md:pt-8">
       <PageIntro
         eyebrow="GOOD STORIES, QUIET MOMENTS"
-        title="让每一次打开, 都从上次停下的地方开始."
-        desc="收纳你的故事, 也收纳此刻的心情"
+        title="书架"
+        desc="收纳你的故事, 也收纳此刻的心情 —— 每一次打开, 都从上次停下的地方开始."
         action={
           <>
             <Input

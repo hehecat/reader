@@ -224,7 +224,7 @@ export function GraphTabCard({ bookUrl, bookName }: GraphTabCardProps) {
           重新生成
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground/80">
+      <p className="text-xs text-muted-foreground">
         家族树 / 势力 / 全景三视图、搜索与导出都在整页里。
       </p>
       {dialog}

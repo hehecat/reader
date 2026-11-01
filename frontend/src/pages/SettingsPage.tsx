@@ -7,7 +7,7 @@ import { ReadingPreferencesCard } from "@/components/settings/ReadingPreferences
 import { TtsPreferencesCard } from "@/components/settings/TtsPreferencesCard";
 import { TtsRoleVoicesCard } from "@/components/settings/TtsRoleVoicesCard";
 import { WebdavPanel } from "@/components/settings/WebdavPanel";
-import { Button, PageIntro, SettingCard, SettingRow } from "@/components/ui";
+import { Button, Input, PageIntro, SettingCard, SettingRow } from "@/components/ui";
 import { usePwaInstall } from "@/hooks/usePwaInstall";
 import { getSystemInfo } from "@/services/auth";
 import { useSettingsStore } from "@/stores/settings-store";
@@ -82,14 +82,19 @@ export default function SettingsPage() {
       <div className="grid items-start gap-5 lg:grid-cols-2">
         <div className="flex flex-col gap-5">
           <SettingCard title="搜索" desc="多源搜索运行时参数, 保存即生效">
-            <SettingRow label="单源搜索超时" value="秒 (3-60): 慢源站响应慢时调高, 想快速跳过慢源调低">
-              <input
+            <SettingRow
+              label="单源搜索超时"
+              htmlFor="search-timeout"
+              value="秒 (3-60): 慢源站响应慢时调高, 想快速跳过慢源调低"
+            >
+              <Input
+                id="search-timeout"
                 type="number"
                 min={3}
                 max={60}
                 value={searchTimeout}
                 onChange={(event) => setSearchTimeout(Number(event.target.value))}
-                className="w-24 rounded-md border border-border bg-background px-3 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+                className="w-24"
               />
             </SettingRow>
           </SettingCard>

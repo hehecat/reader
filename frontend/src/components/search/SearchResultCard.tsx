@@ -128,7 +128,7 @@ export function SearchResultCard({
           )}
         </p>
         {chapterTitleText(book.latestChapterTitle) ? (
-          <p className="mt-1 truncate text-xs text-muted-foreground/80">
+          <p className="mt-1 truncate text-xs text-muted-foreground">
             最新 {chapterTitleText(book.latestChapterTitle)}
           </p>
         ) : null}
@@ -137,7 +137,7 @@ export function SearchResultCard({
             <Highlight text={intro} keyword={keyword} />
           </p>
         ) : fallback.length > 0 ? (
-          <p className={cn("mt-1.5 line-clamp-2 text-xs leading-relaxed text-muted-foreground/80", grid && "sm:mt-2")}>
+          <p className={cn("mt-1.5 line-clamp-2 text-xs leading-relaxed text-muted-foreground", grid && "sm:mt-2")}>
             {fallback}
           </p>
         ) : null}
@@ -174,7 +174,7 @@ export function SearchResultCard({
         onClick={() => onSelect(book)}
         aria-label={`查看《${book.name}》的详情`}
         className={cn(
-          "absolute inset-0 z-10 cursor-pointer rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-accent/60 active:scale-98",
+          "absolute inset-0 z-10 cursor-pointer rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-98",
           grid && "sm:rounded-none",
         )}
       />

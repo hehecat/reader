@@ -54,7 +54,7 @@ function RecentBook({ book }: { book: Book }) {
     <button
       type="button"
       onClick={() => navigate(readerPath(book.bookUrl, book.durChapterIndex))}
-      className="flex w-full cursor-pointer items-center gap-4 rounded-lg px-2 py-3 text-left outline-none transition-colors hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-accent/60"
+      className="flex w-full cursor-pointer items-center gap-4 rounded-lg px-2 py-3 text-left outline-none transition-colors hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-ring"
     >
       <CoverImage
         src={bookCover(book)}

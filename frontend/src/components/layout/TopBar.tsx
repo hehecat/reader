@@ -51,7 +51,8 @@ export function TopBar({ onOpenNav }: TopBarProps) {
         </IconButton>
         <div className="min-w-0">
           <p className="truncate text-xs text-muted-foreground">{meta.kicker}</p>
-          <h1 className="truncate font-display text-lg font-semibold">{meta.title}</h1>
+          {/* 顶栏只做面包屑: 页面唯一 h1 在 PageIntro, 这里再放一个大标题会与之抢层级 */}
+          <p className="truncate text-sm font-medium">{meta.title}</p>
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
@@ -68,7 +69,7 @@ export function TopBar({ onOpenNav }: TopBarProps) {
               aria-pressed={theme === key}
               title={label}
               className={cn(
-                "flex cursor-pointer items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/60",
+                "flex cursor-pointer items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
                 theme === key
                   ? "bg-accent text-accent-foreground"
                   : "text-muted-foreground hover:text-foreground",

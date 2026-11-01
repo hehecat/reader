@@ -686,7 +686,7 @@ export default function SourcesPage() {
                     <select
                       value={pageSize}
                       onChange={(event) => setPageSize(Number(event.target.value))}
-                      className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+                      className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       aria-label="每页条数"
                     >
                       {[20, 50, 100, 200].map((n) => (

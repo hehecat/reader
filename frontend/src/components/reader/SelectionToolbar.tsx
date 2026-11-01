@@ -445,7 +445,7 @@ export function SelectionToolbar({ containerRef, bookUrl, chapterIndex }: Select
                   commitNew(popover.target, "highlight", color, "");
                   dismiss();
                 }}
-                className="size-7 shrink-0 cursor-pointer rounded-full border border-black/10 transition-transform hover:scale-110"
+                className="size-7 shrink-0 cursor-pointer rounded-full border border-black/10 outline-none transition-transform hover:scale-110 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
                 style={{ backgroundColor: ANNOTATION_COLOR_HEX[color] }}
               />
             ))}
@@ -596,7 +596,7 @@ export function SelectionToolbar({ containerRef, bookUrl, chapterIndex }: Select
                         {entry.body}
                       </p>
                     ) : null}
-                    <span className="text-xs text-muted-foreground/70">来源: {entry.source}</span>
+                    <span className="text-xs text-muted-foreground">来源: {entry.source}</span>
                   </li>
                 ))}
               </ul>

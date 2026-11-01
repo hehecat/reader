@@ -44,7 +44,7 @@ function LayoutToggle({ active, label, onClick, children }: LayoutToggleProps) {
       aria-label={label}
       aria-pressed={active}
       className={cn(
-        "flex size-9 cursor-pointer items-center justify-center rounded-md border outline-none transition-colors duration-150 ease-out focus-visible:ring-2 focus-visible:ring-accent/60",
+        "flex size-9 cursor-pointer items-center justify-center rounded-md border outline-none transition-colors duration-150 ease-out focus-visible:ring-2 focus-visible:ring-ring",
         active
           ? "border-accent bg-accent/10 text-accent"
           : "border-border text-muted-foreground hover:text-foreground",
@@ -310,8 +310,8 @@ export default function SearchPage() {
       <div className="mx-auto w-full max-w-3xl px-4 pb-10 pt-5 sm:px-6 md:px-10 md:pt-8 lg:max-w-5xl xl:max-w-6xl">
         <PageIntro
           eyebrow="SEARCH"
-          title="找下一本要读的书."
-          desc="多书源并发搜索, 结果实时聚合."
+          title="搜索"
+          desc="多书源并发搜索, 结果实时聚合 —— 找下一本要读的书."
           action={
             <div className="flex items-center gap-1.5">
               <LayoutToggle

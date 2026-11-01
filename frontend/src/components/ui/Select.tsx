@@ -39,7 +39,7 @@ export function SelectTrigger({
   return (
     <SelectPrimitive.Trigger
       className={cn(
-        "flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg border bg-background text-foreground outline-none transition duration-150 ease-out data-[placeholder]:text-muted-foreground data-[state=open]:border-accent data-[state=open]:ring-2 data-[state=open]:ring-accent/40 focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40 disabled:pointer-events-none disabled:opacity-50 [&_svg]:shrink-0",
+        "flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg border bg-background text-foreground outline-none transition duration-150 ease-out data-[placeholder]:text-muted-foreground data-[state=open]:border-accent data-[state=open]:ring-2 data-[state=open]:ring-ring/70 focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-ring/70 disabled:pointer-events-none disabled:opacity-50 [&_svg]:shrink-0",
         invalid ? "border-danger" : "border-border",
         size === "sm" ? "h-8 px-2.5 text-xs" : "h-10 px-3 text-sm",
         className,

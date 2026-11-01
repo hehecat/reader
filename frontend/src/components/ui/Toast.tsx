@@ -20,7 +20,7 @@ export interface ToastItem {
 
 export interface ToastState {
   toasts: ToastItem[];
-  /** 追加一条 toast 并返回 id; duration 默认 3000ms, 传 0 表示不自动消失 */
+  /** 追加一条 toast 并返回 id; duration 默认 3000ms(error 6000ms), 传 0 表示不自动消失 */
   push: (message: string, type?: ToastType, duration?: number) => number;
   /** 关闭指定 toast(先播放退场动效再移除) */
   dismiss: (id: number) => void;
@@ -29,6 +29,8 @@ export interface ToastState {
 }
 
 const DEFAULT_DURATION = 3000;
+/** 错误提示: 6 秒起步(失败信息要读得完), 且单独走 role="alert" 立即播报 */
+const ERROR_DURATION = 6000;
 const LEAVE_DURATION = 180;
 const MAX_TOASTS = 3;
 
@@ -37,7 +39,11 @@ let nextToastId = 0;
 /** toast 队列 store(自建, 不依赖 Radix): 同屏最多 3 条, 超出丢弃最早的. */
 export const useToastStore = create<ToastState>()((set, get) => ({
   toasts: [],
-  push: (message, type = "info", duration = DEFAULT_DURATION) => {
+  push: (
+    message,
+    type = "info",
+    duration = type === "error" ? ERROR_DURATION : DEFAULT_DURATION,
+  ) => {
     nextToastId += 1;
     const item: ToastItem = {
       id: nextToastId,
@@ -68,7 +74,7 @@ export const toast = {
   success: (message: string, duration?: number) =>
     useToastStore.getState().push(message, "success", duration),
   error: (message: string, duration?: number) =>
-    useToastStore.getState().push(message, "error", duration),
+    useToastStore.getState().push(message, "error", duration ?? ERROR_DURATION),
   info: (message: string, duration?: number) =>
     useToastStore.getState().push(message, "info", duration),
   push: (message: string, type: ToastType = "info", duration?: number) =>
@@ -146,6 +152,7 @@ function ToastCard({ item }: ToastCardProps) {
   return (
     <div
       data-leaving={item.leaving || undefined}
+      role={item.type === "error" ? "alert" : undefined}
       onMouseEnter={pause}
       onMouseLeave={resume}
       onFocus={pause}
@@ -158,7 +165,7 @@ function ToastCard({ item }: ToastCardProps) {
         type="button"
         aria-label="关闭通知"
         onClick={() => dismiss(item.id)}
-        className="-mt-0.5 -mr-1 inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none transition duration-150 ease-out hover:text-foreground focus-visible:ring-2 focus-visible:ring-accent/60"
+        className="-mt-0.5 -mr-1 inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none transition duration-150 ease-out hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
       >
         <X className="size-3.5" />
       </button>

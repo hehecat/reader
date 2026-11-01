@@ -104,7 +104,7 @@ export function SearchBar({
               onClick={() => setHistoryOpen((prev) => !prev)}
               aria-expanded={historyOpen}
               aria-controls={historyId}
-              className="-ml-1 inline-flex cursor-pointer items-center gap-1 rounded-md px-1 py-0.5 text-xs font-medium text-muted-foreground transition duration-150 ease-out hover:text-foreground focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none"
+              className="-ml-1 inline-flex cursor-pointer items-center gap-1 rounded-md px-1 py-0.5 text-xs font-medium text-muted-foreground transition duration-150 ease-out hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
             >
               历史
               <ChevronDown
@@ -131,7 +131,7 @@ export function SearchBar({
                     onChange(item);
                     onSelectHistory?.(item);
                   }}
-                  className="cursor-pointer rounded-full border border-border bg-surface px-3 py-1.5 text-xs text-foreground transition duration-150 ease-out hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none active:scale-97"
+                  className="cursor-pointer rounded-full border border-border bg-surface px-3 py-1.5 text-xs text-foreground transition duration-150 ease-out hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none active:scale-97"
                 >
                   {item}
                 </button>

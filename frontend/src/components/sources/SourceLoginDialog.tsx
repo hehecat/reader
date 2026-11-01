@@ -189,7 +189,7 @@ export function SourceLoginDialog({
               在浏览器登录该书源网站后, 复制请求头里的 Cookie 串粘贴到下方
             </p>
             <textarea
-              className="border-input bg-background min-h-24 w-full rounded-md border px-3 py-2 font-mono text-xs"
+              className="border-border bg-background min-h-24 w-full rounded-md border px-3 py-2 font-mono text-xs"
               placeholder="name=value; name2=value2"
               value={cookieText}
               onChange={(e) => setCookieText(e.target.value)}
@@ -224,7 +224,7 @@ export function SourceLoginDialog({
                 <img
                   src={captcha.captchaUrl}
                   alt="验证码"
-                  className="border-input h-12 rounded border bg-white"
+                  className="border-border h-12 rounded border bg-background"
                 />
                 <Input
                   placeholder="输入图中验证码"
@@ -235,7 +235,7 @@ export function SourceLoginDialog({
             ) : null}
 
             {notice ? (
-              <p className="text-destructive text-sm whitespace-pre-line">{notice}</p>
+              <p className="text-danger text-sm whitespace-pre-line">{notice}</p>
             ) : null}
 
             <div className="flex items-center justify-end gap-2">

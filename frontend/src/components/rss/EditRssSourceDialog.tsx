@@ -269,7 +269,7 @@ export function EditRssSourceDialog({
                   />
                 </Field>
               </div>
-              <Field label="地址 (sourceUrl) *" htmlFor="rss-source-url" error={urlFeedback}>
+              <Field label="订阅地址 *" htmlFor="rss-source-url" error={urlFeedback}>
                 <Input
                   id="rss-source-url"
                   value={draft.sourceUrl}
@@ -319,9 +319,16 @@ export function EditRssSourceDialog({
                 />
               </Field>
 
-              <fieldset className="flex flex-col gap-3">
-                <legend className="text-sm font-medium">解析规则</legend>
-                <Field label="列表规则 (ruleArticles)" htmlFor="rss-rule-articles">
+              {/* 规则是给抓取器看的字段, 不是日常要填的东西: 默认收起, 留空走 RSS/Atom 标准解析 */}
+              <details className="rounded-lg border border-border/70 px-3 py-2">
+                <summary className="cursor-pointer text-sm font-medium">
+                  解析规则(高级, 可选)
+                </summary>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  留空则按 RSS/Atom 标准字段解析; 自定义页面才需要逐项填规则.
+                </p>
+                <fieldset className="mt-3 flex flex-col gap-3">
+                <Field label="列表规则" htmlFor="rss-rule-articles">
                   <Input
                     id="rss-rule-articles"
                     value={draft.ruleArticles}
@@ -330,7 +337,7 @@ export function EditRssSourceDialog({
                   />
                 </Field>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <Field label="标题 (ruleTitle)" htmlFor="rss-rule-title">
+                  <Field label="标题" htmlFor="rss-rule-title">
                     <Input
                       id="rss-rule-title"
                       value={draft.ruleTitle}
@@ -338,7 +345,7 @@ export function EditRssSourceDialog({
                       onChange={(event) => patchDraft({ ruleTitle: event.target.value })}
                     />
                   </Field>
-                  <Field label="链接 (ruleLink)" htmlFor="rss-rule-link">
+                  <Field label="链接" htmlFor="rss-rule-link">
                     <Input
                       id="rss-rule-link"
                       value={draft.ruleLink}
@@ -346,7 +353,7 @@ export function EditRssSourceDialog({
                       onChange={(event) => patchDraft({ ruleLink: event.target.value })}
                     />
                   </Field>
-                  <Field label="发布时间 (rulePubDate)" htmlFor="rss-rule-pubdate">
+                  <Field label="发布时间" htmlFor="rss-rule-pubdate">
                     <Input
                       id="rss-rule-pubdate"
                       value={draft.rulePubDate}
@@ -354,7 +361,7 @@ export function EditRssSourceDialog({
                       onChange={(event) => patchDraft({ rulePubDate: event.target.value })}
                     />
                   </Field>
-                  <Field label="描述 (ruleDescription)" htmlFor="rss-rule-description">
+                  <Field label="描述" htmlFor="rss-rule-description">
                     <Input
                       id="rss-rule-description"
                       value={draft.ruleDescription}
@@ -362,7 +369,7 @@ export function EditRssSourceDialog({
                       onChange={(event) => patchDraft({ ruleDescription: event.target.value })}
                     />
                   </Field>
-                  <Field label="图片 (ruleImage)" htmlFor="rss-rule-image">
+                  <Field label="图片" htmlFor="rss-rule-image">
                     <Input
                       id="rss-rule-image"
                       value={draft.ruleImage}
@@ -370,7 +377,7 @@ export function EditRssSourceDialog({
                       onChange={(event) => patchDraft({ ruleImage: event.target.value })}
                     />
                   </Field>
-                  <Field label="下一页 (ruleNextPage)" htmlFor="rss-rule-nextpage">
+                  <Field label="下一页" htmlFor="rss-rule-nextpage">
                     <Input
                       id="rss-rule-nextpage"
                       value={draft.ruleNextPage}
@@ -379,7 +386,7 @@ export function EditRssSourceDialog({
                     />
                   </Field>
                 </div>
-                <Field label="正文 (ruleContent)" htmlFor="rss-rule-content">
+                <Field label="正文" htmlFor="rss-rule-content">
                   <Input
                     id="rss-rule-content"
                     value={draft.ruleContent}
@@ -387,7 +394,7 @@ export function EditRssSourceDialog({
                     onChange={(event) => patchDraft({ ruleContent: event.target.value })}
                   />
                 </Field>
-                <Field label="分类 (sortUrl)" htmlFor="rss-sort-url">
+                <Field label="分类" htmlFor="rss-sort-url">
                   <Textarea
                     id="rss-sort-url"
                     autoSize
@@ -396,7 +403,8 @@ export function EditRssSourceDialog({
                     onChange={(event) => patchDraft({ sortUrl: event.target.value })}
                   />
                 </Field>
-              </fieldset>
+                </fieldset>
+              </details>
 
               <div className="flex items-center justify-between rounded-lg border px-3 py-2.5">
                 <div className="min-w-0">

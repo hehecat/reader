@@ -19,7 +19,7 @@ export interface ButtonProps extends React.ComponentProps<"button"> {
 }
 
 const baseClass =
-  "inline-flex shrink-0 cursor-pointer select-none items-center justify-center gap-2 rounded-lg font-medium whitespace-nowrap outline-none transition duration-150 ease-out focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background active:scale-97 disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0";
+  "inline-flex shrink-0 cursor-pointer select-none items-center justify-center gap-2 rounded-lg font-medium whitespace-nowrap outline-none transition duration-150 ease-out focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background active:scale-97 disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0";
 
 const variantClass: Record<ButtonVariant, string> = {
   primary: "bg-accent text-accent-foreground shadow-sm hover:bg-accent/90",

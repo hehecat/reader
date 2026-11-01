@@ -22,7 +22,7 @@ export function Textarea({
       rows={autoSize ? undefined : (rows ?? 3)}
       aria-invalid={invalid || undefined}
       className={cn(
-        "flex w-full resize-y rounded-lg border bg-background px-3 py-2 text-sm leading-6 text-foreground outline-none transition duration-150 ease-out placeholder:text-muted-foreground focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50",
+        "flex w-full resize-y rounded-lg border bg-background px-3 py-2 text-sm leading-6 text-foreground outline-none transition duration-150 ease-out placeholder:text-muted-foreground focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-ring/70 disabled:cursor-not-allowed disabled:opacity-50",
         invalid ? "border-danger" : "border-border",
         autoSize && "max-h-64 min-h-20 field-sizing-content overflow-y-auto",
         className,

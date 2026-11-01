@@ -200,8 +200,8 @@ export default function ExplorePage() {
     <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col px-4 pb-10 pt-5 sm:px-6 md:px-10 md:pt-8">
       <PageIntro
         eyebrow="EXPLORE THE LIBRARY"
-        title="去书海里, 遇见下一本想读的书."
-        desc="从书源的发现分类里浏览与筛选."
+        title="书海"
+        desc="从书源的发现分类里浏览与筛选 —— 遇见下一本想读的书."
         action={
           <>
             <ExploreSourceSelect

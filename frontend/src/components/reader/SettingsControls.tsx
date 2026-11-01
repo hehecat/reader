@@ -10,12 +10,17 @@ import type { FontFamilyMode } from "@/stores/settings-store";
  * 阅读器浮动面板与设置页阅读偏好卡共用, 两处口径一致.
  */
 
-/** 设置项分组: 小字 label + 控件区 */
+/** 设置项分组: 小字 label + 控件区; label 用 id 绑到控件组上, 读屏能念出「字号, 分组」 */
 export function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  const labelId = React.useId();
   return (
     <div className="mb-4">
-      <p className="mb-2 text-xs font-medium text-muted-foreground">{label}</p>
-      {children}
+      <span id={labelId} className="mb-2 block text-xs font-medium text-muted-foreground">
+        {label}
+      </span>
+      <div role="group" aria-labelledby={labelId}>
+        {children}
+      </div>
     </div>
   );
 }
@@ -30,7 +35,7 @@ function StepperButton({
       type="button"
       {...props}
       className={cn(
-        "flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-border text-foreground transition-colors hover:border-accent/50 disabled:cursor-default disabled:opacity-40",
+        "flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-border text-foreground transition-colors outline-none hover:border-accent/50 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-40",
         props.className,
       )}
     >
@@ -130,7 +135,7 @@ export function Segmented<T extends string | number>({
             onClick={() => onChange(option.value)}
             style={option.style}
             className={cn(
-              "flex cursor-pointer items-center justify-center rounded-lg border py-2 text-xs transition-colors",
+              "flex cursor-pointer items-center justify-center rounded-lg border py-2 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
               Icon !== undefined && "flex-col gap-1 py-2.5",
               selected
                 ? "border-accent bg-accent/10 text-accent"

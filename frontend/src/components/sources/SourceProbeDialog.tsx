@@ -126,7 +126,7 @@ export function SourceProbeDialog({
           ) : null}
 
           {error !== null ? (
-            <p className="text-destructive text-sm whitespace-pre-line">{error}</p>
+            <p className="text-danger text-sm whitespace-pre-line">{error}</p>
           ) : null}
 
           {books !== null && books.length === 0 ? (

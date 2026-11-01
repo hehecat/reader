@@ -1156,7 +1156,7 @@ function PagedMode({
         </div>
       ) : null}
 
-      <div className="ui-safe-b pointer-events-none absolute inset-x-0 bottom-0 pb-2 text-center text-xs text-muted-foreground/70 tabular-nums">
+      <div className="ui-safe-b pointer-events-none absolute inset-x-0 bottom-0 pb-2 text-center text-xs text-muted-foreground tabular-nums">
         {page + 1} / {totalPages}
       </div>
     </div>

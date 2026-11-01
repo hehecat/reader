@@ -128,7 +128,7 @@ export function BookHitList({ books }: { books: SearchBook[] }) {
                 {book.intro}
               </p>
             ) : null}
-            <p className="mt-0.5 truncate text-xs text-muted-foreground/70" title={book.bookUrl}>
+            <p className="mt-0.5 truncate text-xs text-muted-foreground" title={book.bookUrl}>
               {book.bookUrl}
             </p>
           </div>

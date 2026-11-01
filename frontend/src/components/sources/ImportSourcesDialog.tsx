@@ -199,7 +199,7 @@ export function ImportSourcesDialog({ open, onOpenChange }: ImportSourcesDialogP
                           {source.bookSourceUrl}
                         </span>
                         {remotePreview.existing.includes(source.bookSourceUrl) ? (
-                          <span className="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground">
+                          <span className="shrink-0 rounded bg-surface-muted px-1 text-[10px] text-muted-foreground">
                             已存在
                           </span>
                         ) : null}

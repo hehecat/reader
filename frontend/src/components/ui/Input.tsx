@@ -62,7 +62,7 @@ export function Input({
   return (
     <div
       className={cn(
-        "flex w-full items-center rounded-lg border bg-background text-foreground transition duration-150 ease-out focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/40",
+        "flex w-full items-center rounded-lg border bg-background text-foreground transition duration-150 ease-out focus-within:border-accent focus-within:ring-2 focus-within:ring-ring/70",
         invalid ? "border-danger" : "border-border",
         disabled && "cursor-not-allowed opacity-50",
         sizeClass[size],
@@ -87,7 +87,7 @@ export function Input({
           type="button"
           aria-label="清除输入"
           onClick={handleClear}
-          className="-mr-1 inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none transition duration-150 ease-out hover:text-foreground focus-visible:ring-2 focus-visible:ring-accent/60"
+          className="-mr-1 inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none transition duration-150 ease-out hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         >
           <X className="size-3.5" />
         </button>

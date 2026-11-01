@@ -167,7 +167,7 @@ export function RssArticleList({ source, readLinks, onOpenArticle, onBack }: Rss
                 <li key={article.link.length > 0 ? article.link : `${article.title}-${index}`}>
                   <button
                     type="button"
-                    className="flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-150 ease-out hover:bg-surface-muted/60 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60"
+                    className="flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-150 ease-out hover:bg-surface-muted/60 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     onClick={() => onOpenArticle(article)}
                   >
                     {/* 未读圆点: 打开过的文章降为边框色, 标题同步降饱和 */}

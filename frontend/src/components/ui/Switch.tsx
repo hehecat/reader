@@ -23,7 +23,7 @@ export function Switch({ size = "md", className, ...props }: SwitchProps) {
   return (
     <SwitchPrimitive.Root
       className={cn(
-        "inline-flex shrink-0 cursor-pointer items-center rounded-full border-2 border-border bg-surface-muted outline-none transition duration-150 ease-out focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background active:scale-97 data-[state=checked]:border-transparent data-[state=checked]:bg-accent disabled:pointer-events-none disabled:opacity-50",
+        "inline-flex shrink-0 cursor-pointer items-center rounded-full border-2 border-border bg-surface-muted outline-none transition duration-150 ease-out focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background active:scale-97 data-[state=checked]:border-transparent data-[state=checked]:bg-accent disabled:pointer-events-none disabled:opacity-50",
         trackClass[size],
         className,
       )}

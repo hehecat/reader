@@ -95,33 +95,51 @@ export default function LoginPage() {
               void handleSubmit(event);
             }}
           >
-            <Input
-              prefixIcon={<User className="size-4" aria-hidden />}
-              placeholder="用户名"
-              autoComplete="username"
-              autoFocus
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              disabled={pending}
-            />
-            <Input
-              type="password"
-              prefixIcon={<Lock className="size-4" aria-hidden />}
-              placeholder={isLogin ? "密码" : "密码(至少 8 位)"}
-              autoComplete={isLogin ? "current-password" : "new-password"}
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              disabled={pending}
-            />
-            {isLogin ? null : (
+            <div>
+              <label htmlFor="login-username" className="mb-1.5 block text-xs text-muted-foreground">
+                用户名
+              </label>
               <Input
-                prefixIcon={<Gift className="size-4" aria-hidden />}
-                placeholder="邀请码(没有则不填)"
-                autoComplete="off"
-                value={code}
-                onChange={(event) => setCode(event.target.value)}
+                id="login-username"
+                prefixIcon={<User className="size-4" aria-hidden />}
+                placeholder="用户名"
+                autoComplete="username"
+                autoFocus
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
                 disabled={pending}
               />
+            </div>
+            <div>
+              <label htmlFor="login-password" className="mb-1.5 block text-xs text-muted-foreground">
+                {isLogin ? "密码" : "密码(至少 8 位)"}
+              </label>
+              <Input
+                id="login-password"
+                type="password"
+                prefixIcon={<Lock className="size-4" aria-hidden />}
+                placeholder={isLogin ? "密码" : "密码(至少 8 位)"}
+                autoComplete={isLogin ? "current-password" : "new-password"}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                disabled={pending}
+              />
+            </div>
+            {isLogin ? null : (
+              <div>
+                <label htmlFor="login-invite" className="mb-1.5 block text-xs text-muted-foreground">
+                  邀请码(没有则不填)
+                </label>
+                <Input
+                  id="login-invite"
+                  prefixIcon={<Gift className="size-4" aria-hidden />}
+                  placeholder="邀请码(没有则不填)"
+                  autoComplete="off"
+                  value={code}
+                  onChange={(event) => setCode(event.target.value)}
+                  disabled={pending}
+                />
+              </div>
             )}
             <Button type="submit" size="lg" className="w-full" loading={pending}>
               {isLogin ? "登录" : "注册"}

@@ -74,7 +74,7 @@ export function Slider({
           <SliderPrimitive.Thumb
             key={index}
             aria-label={thumbLabel}
-            className="block size-4 shrink-0 cursor-grab rounded-full border-2 border-accent bg-background shadow-sm outline-none transition-transform duration-150 ease-out hover:scale-110 focus-visible:ring-2 focus-visible:ring-accent/60 active:cursor-grabbing disabled:pointer-events-none"
+            className="block size-4 shrink-0 cursor-grab rounded-full border-2 border-accent bg-background shadow-sm outline-none transition-transform duration-150 ease-out hover:scale-110 focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing disabled:pointer-events-none"
           />
         ))}
       </SliderPrimitive.Root>

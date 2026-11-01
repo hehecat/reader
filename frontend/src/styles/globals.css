@@ -16,6 +16,8 @@
   --accent-foreground: oklch(0.98 0.01 90);
   --muted-foreground: oklch(0.52 0.02 55);
   --danger: oklch(0.577 0.245 27.325);
+  /* 焦点环: 不透明实色, 四套主题各保证 ≥3:1 (半透明 accent 在深色主题下只有 2.4:1) */
+  --ring: oklch(0.42 0.15 22);
 }
 
 .dark {
@@ -29,6 +31,7 @@
   --accent-foreground: oklch(0.98 0.01 90);
   --muted-foreground: oklch(0.68 0.015 70);
   --danger: oklch(0.704 0.191 22.216);
+  --ring: oklch(0.76 0.13 25);
 }
 
 /* 羊皮纸 */
@@ -41,8 +44,10 @@
   --secondary: #e0d0b0;
   --accent: #8a5a2b;
   --accent-foreground: #fdf8ee;
-  --muted-foreground: #8a7558;
+  /* 3.81:1 → 5.54:1: 羊皮纸底上的次要文字原值不达 AA */
+  --muted-foreground: #6f5c40;
   --danger: #b3402f;
+  --ring: #7a5230;
 }
 
 /* 护眼绿: 淡绿纸面(取自原型 .sepia 护眼块), 仅用于阅读场景之外也全局可用 */
@@ -57,6 +62,7 @@
   --accent-foreground: oklch(0.98 0.01 145);
   --muted-foreground: oklch(0.48 0.03 145);
   --danger: oklch(0.55 0.2 27);
+  --ring: oklch(0.44 0.11 145);
 }
 
 /* ---------- reader tokens ---------- */
@@ -79,6 +85,7 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-danger: var(--danger);
   --color-secondary: var(--secondary);
+  --color-ring: var(--ring);
   --font-display: "Noto Serif SC", Georgia, "Times New Roman", "Songti SC", SimSun, "Noto Serif CJK SC", serif;
 }
 

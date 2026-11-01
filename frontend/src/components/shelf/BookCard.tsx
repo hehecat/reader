@@ -176,7 +176,7 @@ export function BookCard({
       tabIndex={editMode ? -1 : 0}
       aria-label={editMode ? undefined : `阅读《${book.name}》`}
       aria-hidden={editMode || undefined}
-      className="absolute inset-0 z-10 cursor-pointer rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-accent/60 active:scale-98"
+      className="absolute inset-0 z-10 cursor-pointer rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-98"
     />
   );
 
@@ -211,7 +211,7 @@ export function BookCard({
             {meta.length > 0 ? meta : chapter || " "}
           </p>
           {progressText.length > 0 ? (
-            <p className="mt-1 truncate text-xs leading-4 text-muted-foreground/80">{progressText}</p>
+            <p className="mt-1 truncate text-xs leading-4 text-muted-foreground">{progressText}</p>
           ) : null}
           {intro.length > 0 ? (
             <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
@@ -270,7 +270,7 @@ export function BookCard({
       {progressText.length > 0 ? (
         <p
           title={progressText}
-          className="mt-0.5 min-w-0 truncate px-0.5 text-center text-xs text-muted-foreground/80"
+          className="mt-0.5 min-w-0 truncate px-0.5 text-center text-xs text-muted-foreground"
         >
           {progressText}
         </p>
