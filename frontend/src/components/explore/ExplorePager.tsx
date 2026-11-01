@@ -25,31 +25,23 @@ export function ExplorePager({
   return (
     <div
       className={cn(
-        "flex shrink-0 items-center justify-center gap-3 border-y border-border py-3 sm:gap-5",
+        "flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-surface px-3 py-2 text-xs text-muted-foreground",
         className,
       )}
     >
-      <Button
-        size="sm"
-        variant="secondary"
-        onClick={onPrev}
-        disabled={loading || page <= 1}
-      >
-        <ChevronLeft aria-hidden />
-        上一页
-      </Button>
-      <span className="text-xs text-muted-foreground tabular-nums">
+      <span className="tabular-nums">
         第 {page} 页 · {count} 本
       </span>
-      <Button
-        size="sm"
-        variant="secondary"
-        onClick={onNext}
-        disabled={loading || count === 0}
-      >
-        下一页
-        <ChevronRight aria-hidden />
-      </Button>
+      <div className="flex items-center gap-2">
+        <Button size="sm" variant="secondary" onClick={onPrev} disabled={loading || page <= 1}>
+          <ChevronLeft aria-hidden />
+          上一页
+        </Button>
+        <Button size="sm" variant="secondary" onClick={onNext} disabled={loading || count === 0}>
+          下一页
+          <ChevronRight aria-hidden />
+        </Button>
+      </div>
     </div>
   );
 }

@@ -127,6 +127,8 @@
 
 **18. 书海页首屏被筛选器吃满，分页范式与其它页不一致** — `ExplorePage.tsx:203-224`（intro action 里塞 `w-52` 的 Select + 2 个 IconButton）+ 分类 chips；底部「上一页/第 N 页·M 本/下一页」与搜索页的流式加载、书架的无限滚动三套范式并存。成本 M。
 
+> 已改（页首与分页）：书源选择器在移动端吃满一行（`min-w-0 flex-1 sm:w-72 sm:flex-none`），「重新检测书海源 / 刷新书源列表」两个低频动作收进 ⋯ 菜单；`ExplorePager` 版式改成与书源页分页条同款（左侧计数、右侧按钮、`rounded-xl border bg-surface`）。三套「翻页/流式/无限滚动」的机制差异是数据形态决定的（发现页无法预知总页数），只统一了版式。成本 M → S。
+
 **19. 「我的」页进度显示 0%、统计卡语义重复** — 实测「第2章 · 2/533 章」旁标 0%（四舍五入），进度条 1px 浅色几乎不可见；「藏书 5 / 在读书籍 5 / 读完 0」三个数字同义；「关于」卡里写技术栈（React / 阅读3 server）面向用户暴露实现细节；右侧「数据与备份」只是跳设置页的入口。成本 S。
 
 **20. Segmented 手写 `role="radiogroup"` 却没做 roving tabindex** — `SettingsControls.tsx:116-139`：6 组共 22 个独立 Tab 停靠点，方向键不响应（ARIA radiogroup 的契约是"只有选中项 tabbable，方向键组内移动"）。项目里 radix 的 Switch/Slider/Tabs 都是正确实现，只有这个自制的是例外。成本 M。

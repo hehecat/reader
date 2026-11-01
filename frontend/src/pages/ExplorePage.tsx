@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { CircleAlert, Compass, Library, RotateCw, ScanSearch } from "lucide-react";
+import { CircleAlert, Compass, Library, MoreHorizontal, RotateCw, ScanSearch } from "lucide-react";
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -8,7 +8,17 @@ import { ExploreBookGrid } from "@/components/explore/ExploreBookGrid";
 import { ExploreMenuTabs } from "@/components/explore/ExploreMenuTabs";
 import { ExplorePager } from "@/components/explore/ExplorePager";
 import { ExploreSourceSelect, type ExploreSource } from "@/components/explore/ExploreSourceSelect";
-import { Button, EmptyState, IconButton, PageIntro, cn } from "@/components/ui";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  EmptyState,
+  IconButton,
+  PageIntro,
+  cn,
+} from "@/components/ui";
 import { errorMessage } from "@/hooks/useBookshelf";
 import { humanizeError } from "@/lib/errors";
 import { exploreBook, isExplorable, parseExploreMenus } from "@/services/explore";
@@ -210,30 +220,38 @@ export default function ExplorePage() {
               onChange={(nextUrl) =>
                 setSelection({ sourceUrl: nextUrl, menuIndex: 0, page: 1 })
               }
-              className="w-52 min-w-0 sm:w-72"
+              className="min-w-0 flex-1 sm:w-72 sm:flex-none"
             />
-            <IconButton
-              variant="ghost"
-              aria-label="重新检测书海源"
-              tooltip={
-                probing !== null
-                  ? `检测中 ${probing.done}/${probing.total} · 点击中止`
-                  : "重新检测书海源(隐藏无内容源)"
-              }
-              disabled={sourcesQuery.isLoading || allExploreSources.length === 0}
-              onClick={recheckAll}
-            >
-              <ScanSearch aria-hidden className={cn(probing !== null && "ui-spin")} />
-            </IconButton>
-            <IconButton
-              variant="ghost"
-              aria-label="刷新书源列表"
-              tooltip="刷新书源"
-              disabled={sourcesQuery.isFetching}
-              onClick={() => void sourcesQuery.refetch()}
-            >
-              <RotateCw aria-hidden className={cn(sourcesQuery.isFetching && "ui-spin")} />
-            </IconButton>
+            {/* 检测/刷新是两个低频动作, 收进 ⋯ 菜单: 首屏只留书源选择器, 给结果让出高度 */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <IconButton
+                  variant="ghost"
+                  aria-label="书海操作"
+                  className={cn(probing !== null && "text-accent")}
+                >
+                  <MoreHorizontal aria-hidden />
+                </IconButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuItem
+                  disabled={sourcesQuery.isLoading || allExploreSources.length === 0}
+                  onSelect={recheckAll}
+                >
+                  <ScanSearch aria-hidden className={cn(probing !== null && "ui-spin")} />
+                  {probing !== null
+                    ? `检测中 ${probing.done}/${probing.total} · 中止`
+                    : "重新检测书海源"}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={sourcesQuery.isFetching}
+                  onSelect={() => void sourcesQuery.refetch()}
+                >
+                  <RotateCw aria-hidden className={cn(sourcesQuery.isFetching && "ui-spin")} />
+                  刷新书源列表
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </>
         }
       />
