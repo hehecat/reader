@@ -1,5 +1,5 @@
 import { BookOpen, PanelLeft } from "lucide-react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useMatch } from "react-router-dom";
 
 import { useAppMode } from "@/hooks/useAppMode";
 import {
@@ -27,6 +27,8 @@ export interface SideNavContentProps {
 
 const itemClass =
   "flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring";
+/** 折叠态: 40×40 方块, 只放图标; 四周留白让 64px 图标栏不至于贴边 */
+const collapsedItemClass = "mx-auto size-10 justify-center px-0 py-0";
 
 function SideNavItem({
   item,
@@ -37,22 +39,23 @@ function SideNavItem({
   collapsed: boolean;
   onNavigate?: () => void;
 }) {
+  // 高亮自己算: 折叠态外面套了 Tooltip, Radix Slot 合并 className 时会把函数拼成字符串,
+  // 传函数进去会让整个 class 属性变成源码文本(NavLink 的所有样式全丢)
+  const isActive = useMatch({ path: item.to, end: item.end ?? false }) !== null;
   const link = (
     <NavLink
       to={item.to}
       end={item.end}
       onClick={onNavigate}
-      className={({ isActive }) =>
-        cn(
-          itemClass,
-          collapsed && "justify-center px-0",
-          isActive
-            ? "bg-accent/10 font-medium text-accent"
-            : "text-muted-foreground hover:bg-surface-muted hover:text-foreground",
-        )
-      }
+      className={cn(
+        itemClass,
+        collapsed && collapsedItemClass,
+        isActive
+          ? "bg-accent/10 font-medium text-accent"
+          : "text-muted-foreground hover:bg-surface-muted hover:text-foreground",
+      )}
     >
-      <item.icon className="size-4 shrink-0" aria-hidden />
+      <item.icon className={cn("shrink-0", collapsed ? "size-[18px]" : "size-4")} aria-hidden />
       {collapsed ? null : <span className="truncate">{item.label}</span>}
     </NavLink>
   );
@@ -89,7 +92,12 @@ export function SideNavContent({ collapsed, onNavigate, onToggleCollapse }: Side
           </div>
         )}
       </div>
-      <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-3">
+      <nav
+        className={cn(
+          "flex min-h-0 flex-1 flex-col overflow-y-auto",
+          collapsed ? "gap-1.5 px-2 py-3" : "gap-1 p-3",
+        )}
+      >
         <p
           className={cn(
             "mb-2 px-3 text-[10px] font-semibold tracking-[0.18em] text-muted-foreground",
@@ -113,9 +121,12 @@ export function SideNavContent({ collapsed, onNavigate, onToggleCollapse }: Side
           type="button"
           onClick={onToggleCollapse}
           aria-label={collapsed ? "展开侧边栏" : "收起侧边栏"}
-          className="m-3 flex cursor-pointer items-center justify-center rounded-lg border border-border py-2 text-muted-foreground outline-none transition-colors hover:bg-surface-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          className={cn(
+            "mx-3 mb-3 flex cursor-pointer items-center justify-center rounded-lg border border-border text-muted-foreground outline-none transition-colors hover:bg-surface-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+            collapsed ? "h-10" : "py-2",
+          )}
         >
-          <PanelLeft className="size-4" aria-hidden />
+          <PanelLeft className={cn(collapsed ? "size-[18px]" : "size-4")} aria-hidden />
         </button>
       ) : null}
     </div>
