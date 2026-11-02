@@ -253,6 +253,17 @@ export function openGraphStream(bookUrl: string, handlers: GraphStreamHandlers):
   };
 }
 
+/**
+ * 「这本书还没有生成任务」是 graphSSE 对「查无任务」的正常应答, 不是错误 ——
+ * 弹窗打开时的自动附着靠它区分「没在跑」和「真出错」.
+ */
+const NO_JOB_HINT = "还没有生成任务";
+
+/** 这条错误是不是「没有任务可附着」 */
+function isNoJobError(error: Error): boolean {
+  return error.message.includes(NO_JOB_HINT);
+}
+
 export interface GraphGeneration {
   /** 当前进度(null = 还没开始) */
   progress: GraphProgress | null;
@@ -272,8 +283,17 @@ export interface GraphGeneration {
  * 生成流程的页内状态: 启动 → 进度 → 终态.
  * 断开流不会取消服务端任务(切走再回来重开一次即重新附着), 所以只在关闭对话框时 reset.
  */
-export function useGraphGeneration(bookUrl: string): GraphGeneration {
-  const [progress, setProgress] = React.useState<GraphProgress | null>(null);
+export function useGraphGeneration(bookUrl: string, enabled = false): GraphGeneration {
+  // 进度连同「它属于哪本书」一起存: 换书时旧进度自然失效, 不必在 effect 里 setState 清场
+  const [snapshot, setSnapshot] = React.useState<{ url: string; progress: GraphProgress | null }>({
+    url: "",
+    progress: null,
+  });
+  const progress = snapshot.url === bookUrl ? snapshot.progress : null;
+  const setProgress = React.useCallback(
+    (next: GraphProgress | null) => setSnapshot({ url: bookUrl, progress: next }),
+    [bookUrl],
+  );
   const [starting, setStarting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const detachRef = React.useRef<(() => void) | null>(null);
@@ -285,6 +305,31 @@ export function useGraphGeneration(bookUrl: string): GraphGeneration {
 
   // 卸载/换书: 断开本地流(服务端任务继续跑)
   React.useEffect(() => detach, [detach]);
+
+  // 打开弹窗时先探一次: 服务端可能已经在跑(或刚跑完)这本书的任务.
+  // 没有任务时 graphSSE 回「还没有生成任务」, 这里静默忽略, 页面继续停在预估态.
+  React.useEffect(() => {
+    if (!enabled || bookUrl === "") {
+      return;
+    }
+    let attached = false;
+    detachRef.current = openGraphStream(bookUrl, {
+      onProgress: (next) => {
+        attached = true;
+        setProgress(next);
+      },
+      onError: (err) => {
+        if (!attached && isNoJobError(err)) {
+          return;
+        }
+        setError(err.message);
+      },
+    });
+    return () => {
+      detachRef.current?.();
+      detachRef.current = null;
+    };
+  }, [enabled, bookUrl, setProgress]);
 
   const start = React.useCallback(
     async (options: { bookName?: string; maxBatches?: number; force?: boolean } = {}) => {
@@ -319,7 +364,7 @@ export function useGraphGeneration(bookUrl: string): GraphGeneration {
         setStarting(false);
       }
     },
-    [bookUrl, detach],
+    [bookUrl, detach, setProgress],
   );
 
   const cancel = React.useCallback(async () => {
@@ -334,7 +379,7 @@ export function useGraphGeneration(bookUrl: string): GraphGeneration {
     detach();
     setProgress(null);
     setError(null);
-  }, [detach]);
+  }, [detach, setProgress]);
 
   return { progress, starting, error, start, cancel, reset };
 }

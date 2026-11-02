@@ -66,7 +66,8 @@ export function GraphGenerateDialog({
   onView,
 }: GraphGenerateDialogProps) {
   const navigate = useNavigate();
-  const generation = useGraphGeneration(bookUrl);
+  // 传入 open: 弹窗一打开就先附着一次进度流, 后台任务跑到一半关掉再回来能接着看
+  const generation = useGraphGeneration(bookUrl, open);
   const progress = generation.progress;
   const running = progress !== null && !isGraphTerminal(progress.status);
 
@@ -194,6 +195,11 @@ export function GraphGenerateDialog({
               <Button variant="secondary" onClick={() => handleOpenChange(false)}>
                 关闭
               </Button>
+              {/* 已完成的任务再次打开时会直接落到这一屏; 想再跑一遍就回到预估/确认态,
+                  那里才有「增量 / 强制重跑全部」的选择, 不在这里直接烧 token */}
+              <Button variant="secondary" onClick={generation.reset}>
+                重新生成
+              </Button>
               <Button variant="primary" onClick={handleView}>
                 查看图谱
               </Button>
@@ -282,6 +288,7 @@ function EstimateBlock({ loading, error, estimate, onRetry }: EstimateBlockProps
 /** 进度块: 状态文案 + doneBatches/totalBatches + 已抽出的人物与关系数 */
 function ProgressBlock({ progress, percent }: { progress: GraphProgress; percent: number }) {
   const failed = progress.status === "failed";
+  const running = !isGraphTerminal(progress.status);
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2 text-xs">
@@ -308,7 +315,9 @@ function ProgressBlock({ progress, percent }: { progress: GraphProgress; percent
         />
       </div>
       <p className="text-[11px] leading-relaxed text-muted-foreground">
-        已抽出 {progress.characters} 个人物 · {progress.relations} 条关系
+        {running
+          ? `已累计抽出 ${progress.characters} 个人物 · ${progress.relations} 条关系（结束时合并同名）`
+          : `共 ${progress.characters} 个人物 · ${progress.relations} 条关系`}
       </p>
       {progress.error !== null ? (
         <p className="break-words rounded-lg border border-danger/40 bg-danger/10 px-2.5 py-2 text-[11px] leading-relaxed text-danger">

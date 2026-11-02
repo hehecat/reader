@@ -598,6 +598,10 @@ async fn run_job(
     let mut done = 0usize;
     let mut fed = 0usize;
     let mut usage = (0u64, 0u64);
+    // 运行中的人物/关系数：逐批累计**去重前**的原始条数，让进度条旁边的数字一直动。
+    // 终态那一刻会被 normalize 后的真实值覆盖（跨批同名会合并，所以累计数是个上限）。
+    let mut characters_seen = 0usize;
+    let mut relations_seen = 0usize;
     for plan in &plans {
         // 每批之间检查取消：已完成的批已沉淀成 unit + 台账，不丢
         if is_cancelled(&progress) {
@@ -632,6 +636,8 @@ async fn run_job(
             .await?;
         done += 1;
         fed += plan.chapters.len();
+        characters_seen += array_len(&value, "characters");
+        relations_seen += array_len(&value, "relations");
         usage.0 += value
             .pointer("/usage/prompt_tokens")
             .and_then(Value::as_u64)
@@ -652,6 +658,8 @@ async fn run_job(
             p.chapters_scanned = fed;
             p.prompt_tokens = prompt_tokens;
             p.completion_tokens = completion_tokens;
+            p.characters = characters_seen;
+            p.relations = relations_seen;
         }
         storage
             .graph_job_set_progress(
