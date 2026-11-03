@@ -63,7 +63,7 @@ import type { Book } from "@/types/api";
 const GRID_ID = "shelf-book-grid";
 const SKELETON_COUNT = 12;
 /** 网格布局(照抄原型 MyShelf, 按第三批反馈放大): 手机 3 列 → sm 4 列 → lg 5 列, 间距同步加大 */
-const GRID_CLASS = "grid grid-cols-3 gap-x-6 gap-y-8 sm:grid-cols-4 lg:grid-cols-5";
+const GRID_CLASS = "grid grid-cols-3 gap-x-3 gap-y-8 sm:grid-cols-4 sm:gap-x-6 lg:grid-cols-5";
 /** 列表布局(移植自原型 LibraryGrid): 行卡纵向堆叠 */
 const LIST_CLASS = "flex flex-col gap-3";
 /** 空态/错误态: 虚线卡片(原型 MyShelf / LibraryGrid 空态样式) */

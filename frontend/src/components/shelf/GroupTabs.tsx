@@ -54,7 +54,7 @@ export function GroupTabs({
               key={group.groupId}
               value={String(group.groupId)}
               aria-controls={controlsId}
-              className="rounded-full border border-border px-3 py-2 text-sm text-muted-foreground hover:text-foreground data-[state=active]:border-accent data-[state=active]:bg-accent data-[state=active]:text-accent-foreground data-[state=active]:shadow-none"
+              className="min-h-10 rounded-full border border-border px-3 py-2 text-sm text-muted-foreground hover:text-foreground data-[state=active]:border-accent data-[state=active]:bg-accent data-[state=active]:text-accent-foreground data-[state=active]:shadow-none"
             >
               {group.groupName}
               <span aria-hidden className="text-xs tabular-nums opacity-70">

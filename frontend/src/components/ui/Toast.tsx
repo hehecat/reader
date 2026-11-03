@@ -191,7 +191,8 @@ export function ToastViewport({ position = "bottom", className, ...props }: Toas
       aria-live="polite"
       className={cn(
         "pointer-events-none fixed inset-x-0 z-100 flex flex-col items-center",
-        position === "bottom" ? "ui-safe-b bottom-0" : "ui-safe-t top-0",
+        // 移动端底部有 56px 标签栏: 抬高避免 toast 被压在导航上
+        position === "bottom" ? "ui-safe-b bottom-14 md:bottom-0" : "ui-safe-t top-0",
         className,
       )}
       {...props}

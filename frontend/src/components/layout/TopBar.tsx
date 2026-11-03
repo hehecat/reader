@@ -51,33 +51,40 @@ export function TopBar({ onOpenNav }: TopBarProps) {
           <p className="truncate text-sm font-medium">{meta.title}</p>
         </div>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
-        {/* 五档全露: 只给三档时选了羊皮纸/跟随系统的人看不到自己选了什么 */}
+      <div className="flex shrink-0 items-center gap-3">
+        {/* 五档全露: 只给三档时选了羊皮纸/跟随系统的人看不到自己选了什么; 移动端隐藏(触控目标太小) */}
+        <div className="hidden sm:block">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label={`主题: ${currentTheme.label}`}
+                className="flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1.5 text-xs font-medium outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <currentTheme.icon className="size-3.5" aria-hidden />
+                <span className="hidden sm:inline">{currentTheme.label}</span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-40">
+              <DropdownMenuRadioGroup value={theme} onValueChange={(value) => setTheme(value as ThemeMode)}>
+                {THEME_OPTIONS.map((option) => (
+                  <DropdownMenuRadioItem key={option.value} value={option.value}>
+                    <option.icon aria-hidden />
+                    {option.label}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              aria-label={`主题: ${currentTheme.label}`}
-              className="flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1.5 text-xs font-medium outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            {/* 触控热区: 视觉仍 36px(md), after 伪元素把命中区外扩到 44px, 桌面视觉不变 */}
+            <IconButton
+              variant="ghost"
+              aria-label="账户菜单"
+              className="relative after:absolute after:-inset-1 after:content-['']"
             >
-              <currentTheme.icon className="size-3.5" aria-hidden />
-              <span className="hidden sm:inline">{currentTheme.label}</span>
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-40">
-            <DropdownMenuRadioGroup value={theme} onValueChange={(value) => setTheme(value as ThemeMode)}>
-              {THEME_OPTIONS.map((option) => (
-                <DropdownMenuRadioItem key={option.value} value={option.value}>
-                  <option.icon aria-hidden />
-                  {option.label}
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <IconButton variant="ghost" aria-label="账户菜单">
               <UserRound aria-hidden />
             </IconButton>
           </DropdownMenuTrigger>

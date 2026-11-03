@@ -33,11 +33,23 @@ export function ExplorePager({
         第 {page} 页 · {count} 本
       </span>
       <div className="flex items-center gap-2">
-        <Button size="sm" variant="secondary" onClick={onPrev} disabled={loading || page <= 1}>
+        <Button
+          size="sm"
+          variant="secondary"
+          className="h-9 px-3"
+          onClick={onPrev}
+          disabled={loading || page <= 1}
+        >
           <ChevronLeft aria-hidden />
           上一页
         </Button>
-        <Button size="sm" variant="secondary" onClick={onNext} disabled={loading || count === 0}>
+        <Button
+          size="sm"
+          variant="secondary"
+          className="h-9 px-3"
+          onClick={onNext}
+          disabled={loading || count === 0}
+        >
           下一页
           <ChevronRight aria-hidden />
         </Button>

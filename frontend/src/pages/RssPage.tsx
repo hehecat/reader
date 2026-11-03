@@ -104,30 +104,37 @@ export default function RssPage() {
         title="RSS 订阅"
         desc="把更新与书单集中到这里, 保持安静而持续的输入."
         action={
-          <Button
-            size="sm"
-            onClick={() => {
-              setEditSource(null);
-              setEditOpen(true);
-            }}
-          >
-            <Plus aria-hidden />
-            添加订阅
-          </Button>
+          <>
+            {/* 刷新放进页首动作区: 移动端只留图标, 不再单独占一行 */}
+            <Button
+              size="sm"
+              variant="secondary"
+              aria-label="刷新订阅"
+              disabled={isLoading || isFetching}
+              onClick={refetch}
+            >
+              <RotateCw aria-hidden className={cn(isFetching && "ui-spin")} />
+              <span className="hidden sm:inline">刷新订阅</span>
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                setEditSource(null);
+                setEditOpen(true);
+              }}
+            >
+              <Plus aria-hidden />
+              添加订阅
+            </Button>
+          </>
         }
       />
 
-      <div className="mb-5 flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="secondary" disabled={isLoading || isFetching} onClick={refetch}>
-          <RotateCw aria-hidden className={cn(isFetching && "ui-spin")} />
-          刷新订阅
-        </Button>
-        {!isLoading && error === null && sources.length > 0 ? (
-          <span className="ml-auto text-xs text-muted-foreground tabular-nums">
-            {sources.length} 个订阅 · {enabledCount} 个启用
-          </span>
-        ) : null}
-      </div>
+      {!isLoading && error === null && sources.length > 0 ? (
+        <p className="mb-5 hidden text-xs text-muted-foreground tabular-nums sm:block">
+          {sources.length} 个订阅 · {enabledCount} 个启用
+        </p>
+      ) : null}
 
       <div className="flex min-h-0 flex-col gap-5 md:flex-row md:items-start">
         <section

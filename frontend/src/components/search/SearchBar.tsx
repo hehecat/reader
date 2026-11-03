@@ -83,13 +83,13 @@ export function SearchBar({
             variant="secondary"
             onClick={onStop}
             disabled={!searching}
-            className="h-12 rounded-xl px-5"
+            className="h-12 shrink-0 rounded-xl px-4"
           >
             <Square className="fill-current" />
             停止
           </Button>
         ) : (
-          <Button type="submit" disabled={value.trim().length === 0} className="h-12 rounded-xl px-5">
+          <Button type="submit" disabled={value.trim().length === 0} className="h-12 shrink-0 rounded-xl px-4">
             <SearchIcon />
             搜索
           </Button>
@@ -131,7 +131,7 @@ export function SearchBar({
                     onChange(item);
                     onSelectHistory?.(item);
                   }}
-                  className="cursor-pointer rounded-full border border-border bg-surface px-3 py-1.5 text-xs text-foreground transition duration-150 ease-out hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none active:scale-97"
+                  className="max-w-full cursor-pointer truncate rounded-full border border-border bg-surface px-3 py-1.5 text-xs text-foreground transition duration-150 ease-out hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none active:scale-97"
                 >
                   {item}
                 </button>

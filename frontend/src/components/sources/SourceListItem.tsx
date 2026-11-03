@@ -105,7 +105,12 @@ export function SourceListItem({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span
-            className={cn("truncate text-sm font-medium", !source.enabled && "text-muted-foreground")}
+            className={cn(
+              // min-w-0 flex-1: 名称是这行里唯一的弹性项, 缺了它 truncate 的 overflow:hidden 会把
+              // 自动最小尺寸压到 0, 满徽章时书名被挤成几十像素
+              "min-w-0 flex-1 truncate text-sm font-medium",
+              !source.enabled && "text-muted-foreground",
+            )}
             title={name}
           >
             {name}

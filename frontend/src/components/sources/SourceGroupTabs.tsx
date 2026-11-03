@@ -1,3 +1,5 @@
+import { ChevronRight } from "lucide-react";
+
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui";
 
 import type { SourceGroupItem } from "./useSources";
@@ -24,16 +26,25 @@ export function SourceGroupTabs({
 
   return (
     <Tabs value={value} onValueChange={onChange} className={className}>
-      <TabsList aria-label="书源分组" className="scroll-x-implicit h-12">
-        {groups.map((group) => (
-          <TabsTrigger key={group.value} value={group.value} aria-controls={controlsId}>
-            {group.name}
-            <span aria-hidden className="text-xs tabular-nums">
-              {group.count}
-            </span>
-          </TabsTrigger>
-        ))}
-      </TabsList>
+      <div className="relative">
+        <TabsList aria-label="书源分组" className="scroll-x-implicit h-12 pr-7 sm:pr-1">
+          {groups.map((group) => (
+            <TabsTrigger key={group.value} value={group.value} aria-controls={controlsId}>
+              {group.name}
+              <span aria-hidden className="text-xs tabular-nums">
+                {group.count}
+              </span>
+            </TabsTrigger>
+          ))}
+        </TabsList>
+        {/* 窄屏可滚动提示: 只提示可横向滑动, 不吃点击(pointer-events-none) */}
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 right-0 flex w-7 items-center justify-end rounded-r-xl bg-surface-muted pr-1 text-muted-foreground sm:hidden"
+        >
+          <ChevronRight className="size-4" />
+        </span>
+      </div>
     </Tabs>
   );
 }

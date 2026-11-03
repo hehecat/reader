@@ -19,19 +19,21 @@ export function PageIntro({ eyebrow, title, desc, action, className }: PageIntro
   return (
     <section
       className={cn(
-        "mb-6 flex flex-col justify-between gap-4 border-b border-border/70 pb-5 lg:flex-row lg:items-end",
+        "mb-4 flex flex-col justify-between gap-4 border-b border-border/70 pb-3 sm:mb-6 sm:pb-5 lg:flex-row lg:items-end",
         className,
       )}
     >
       <div className="min-w-0">
-        <p className="mb-2 text-xs font-medium tracking-[0.2em] text-accent uppercase">
+        <p className="mb-2 hidden text-xs font-medium tracking-[0.2em] text-accent uppercase sm:block">
           {eyebrow}
         </p>
         <h1 className="font-display text-2xl font-semibold tracking-wide text-balance sm:text-[28px]">
           {title}
         </h1>
         {desc ? (
-          <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted-foreground">{desc}</p>
+          <p className="mt-3 hidden max-w-2xl text-sm leading-relaxed text-muted-foreground sm:block">
+            {desc}
+          </p>
         ) : null}
       </div>
       {action ? <div className="flex shrink-0 items-center gap-2">{action}</div> : null}

@@ -445,7 +445,7 @@ export default function SourcesPage() {
             {sources.length} 个书源 · {enabledCount} 个启用
           </span>
         ) : null}
-        <div className="flex shrink-0 flex-wrap items-center gap-1">
+        <div className="flex min-w-0 flex-wrap items-center gap-1">
           {(["all", "invalid", "premium", "poor"] as const).map((key) => (
             <button
               key={key}
@@ -453,7 +453,7 @@ export default function SourcesPage() {
               aria-pressed={statusFilter === key}
               onClick={() => setStatusFilter(key)}
               className={cn(
-                "rounded-full border px-2.5 py-1 text-xs transition-colors duration-150 ease-out",
+                "min-h-9 rounded-full border px-3 text-xs transition-colors duration-150 ease-out",
                 statusFilter === key
                   ? "border-accent bg-accent/10 text-accent"
                   : "border-border text-muted-foreground hover:text-foreground",
@@ -473,7 +473,7 @@ export default function SourcesPage() {
             aria-pressed={sortByConf}
             onClick={() => setSortByConf((value) => !value)}
             className={cn(
-              "ml-1 rounded-full border px-2.5 py-1 text-xs transition-colors duration-150 ease-out",
+              "rounded-full border px-3 min-h-9 text-xs transition-colors duration-150 ease-out",
               sortByConf
                 ? "border-accent bg-accent/10 text-accent"
                 : "border-border text-muted-foreground hover:text-foreground",
@@ -489,7 +489,7 @@ export default function SourcesPage() {
               setSelected(new Set());
             }}
             className={cn(
-              "ml-1 rounded-full border px-2.5 py-1 text-xs transition-colors duration-150 ease-out",
+              "rounded-full border px-3 min-h-9 text-xs transition-colors duration-150 ease-out",
               selectMode
                 ? "border-accent bg-accent/10 text-accent"
                 : "border-border text-muted-foreground hover:text-foreground",

@@ -71,7 +71,7 @@ export function RssSourceListItem({
         </span>
       </button>
 
-      <span className="flex shrink-0 items-center gap-0.5">
+      <span className="flex shrink-0 items-center gap-2">
         <IconButton size="sm" variant="ghost" tooltip="编辑" onClick={() => onEdit(source)}>
           <Pencil aria-hidden />
         </IconButton>
@@ -86,7 +86,6 @@ export function RssSourceListItem({
         </IconButton>
         <Switch
           size="sm"
-          className="ml-1"
           checked={source.enabled}
           disabled={busy}
           aria-label={`${source.enabled ? "停用" : "启用"} ${name}`}

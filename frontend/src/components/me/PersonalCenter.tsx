@@ -60,7 +60,7 @@ function RecentBook({ book }: { book: Book }) {
     <button
       type="button"
       onClick={() => navigate(readerPath(book.bookUrl, book.durChapterIndex))}
-      className="flex w-full cursor-pointer items-center gap-4 rounded-lg px-2 py-3 text-left outline-none transition-colors hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-ring"
+      className="flex w-full cursor-pointer items-center gap-4 rounded-lg px-3 py-3 text-left outline-none transition-colors hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-ring"
     >
       <CoverImage
         src={bookCover(book)}
@@ -93,7 +93,7 @@ function RecentBook({ book }: { book: Book }) {
           />
         </div>
       </div>
-      <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+      <span className="w-10 shrink-0 text-right text-xs text-muted-foreground tabular-nums">
         {percent === 0 && started ? "<1%" : `${percent}%`}
       </span>
     </button>
@@ -143,7 +143,7 @@ export function PersonalCenter() {
         desc="收纳你的阅读足迹: 藏书统计、最近阅读进度与数据备份。"
       />
       {isLoading ? (
-        <div aria-hidden className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div aria-hidden className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           {Array.from({ length: 4 }, (_, index) => (
             <Skeleton key={index} shape="rect" className="h-20" />
           ))}
@@ -161,11 +161,11 @@ export function PersonalCenter() {
         />
       ) : (
         <div className="space-y-5">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             {stats.map(({ key, label, value, icon: Icon }) => (
               <div
                 key={key}
-                className="flex items-center gap-3 rounded-lg border border-border bg-surface p-4"
+                className="flex items-center gap-3 rounded-lg border border-border bg-surface p-3 sm:p-4"
               >
                 <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
                   <Icon className="size-4" aria-hidden />
@@ -177,7 +177,8 @@ export function PersonalCenter() {
               </div>
             ))}
           </div>
-          <div className="grid items-start gap-5 lg:grid-cols-2">
+          {/* grid-cols-1: 显式声明列宽, 否则隐式 auto 轨道会被子项 nowrap 内容撑到超出内容区 */}
+          <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-2">
             <section className="rounded-xl border border-border bg-surface p-5">
               <h3 className="flex items-center gap-2 font-display text-lg font-semibold">
                 <Clock3 className="size-4 text-accent" aria-hidden />
