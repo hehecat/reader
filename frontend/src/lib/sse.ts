@@ -27,6 +27,10 @@ export interface SSEHandlers {
  * 自动附加 localStorage 里的 accessToken.
  * url 可以是完整路径(`/reader3/searchBookMultiSSE`)、接口名(`searchBookMultiSSE`)
  * 或绝对地址(`https://host/reader3/xxx`); 非绝对地址统一挂到 API_BASE_URL 下, 已带前缀则不重复添加.
+ *
+ * 注意: 这里的 token 只能走 query —— 原生 EventSource 无法设置请求头(不支持 headers 选项).
+ * 代价是 token 会出现在 access log / 浏览器历史里; 若将来换 fetch 流式实现(如 services/ai.ts
+ * 那样手动解析 SSE), 应改走请求头 accessToken, 与 api-client 拦截器保持一致.
  */
 export function buildSSEUrl(url: string, params: SSEParams = {}): string {
   const query: string[] = [];

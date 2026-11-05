@@ -66,15 +66,14 @@ export async function postMultipart<T>(
     if (value !== undefined) query.set(key, String(value));
   }
   const token = getAccessToken();
-  if (token !== null && !query.has("accessToken")) {
-    query.set("accessToken", token);
-  }
 
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}${url}?${query.toString()}`, {
       method: "POST",
       body: form,
+      // token 走请求头：URL 上的 token 会漏进 access log / Referer
+      headers: token === null ? undefined : { accessToken: token },
       // 与 axios withCredentials 对齐, 兼容 session cookie 鉴权
       credentials: "include",
       signal: config?.signal,

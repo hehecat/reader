@@ -115,14 +115,17 @@ async function requestRaw(
     if (value !== undefined) query.set(key, String(value));
   }
   const token = getAccessToken();
-  if (token !== null && !query.has("accessToken")) {
-    query.set("accessToken", token);
+  // token 走请求头：URL 上的 token 会漏进 access log / Referer（init 自带 headers 要保留）
+  const headers = new Headers(init.headers);
+  if (token !== null && !headers.has("accessToken")) {
+    headers.set("accessToken", token);
   }
 
   try {
     return await fetch(`${API_BASE_URL}${url}?${query.toString()}`, {
       credentials: "include",
       ...init,
+      headers,
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {

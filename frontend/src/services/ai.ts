@@ -68,8 +68,8 @@ export function streamAiChat(req: AiChatRequest, handlers: AiChatHandlers): () =
 
   void (async () => {
     const token = getAccessToken();
-    const query = token === null ? "" : `?accessToken=${encodeURIComponent(token)}`;
-    const resp = await fetch(`${API_BASE_URL}/aiChat${query}`, {
+    // token 只走请求头：拼在 URL 上会漏进 access log / Referer
+    const resp = await fetch(`${API_BASE_URL}/aiChat`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

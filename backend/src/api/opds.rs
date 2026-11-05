@@ -1439,7 +1439,7 @@ pub async fn acquire(storage: &Storage, ns: &str, book_id: &str) -> Result<(Stri
 
     // 本地书（local://：章节表；storage/ 文件书：解析文件）
     if book.book_url.starts_with("local://") {
-        let chapters = storage.list_chapters(&book.book_url).await?;
+        let chapters = storage.list_chapters_ns(ns, &book.book_url).await?;
         for (idx, _) in chapters.iter().take(20) {
             if let Some(content) = storage
                 .get_chapter_content(ns, &book.book_url, *idx)
@@ -1550,7 +1550,7 @@ pub async fn download(
         }
         // 无原文件（旧数据导入的 local:// 书）：章节拼接
         if book.book_url.starts_with("local://") {
-            let chapters = storage.list_chapters(&book.book_url).await?;
+            let chapters = storage.list_chapters_ns(ns, &book.book_url).await?;
             let mut txt = format!("{}\n{}\n\n", book.name, book.author);
             for (idx, title) in chapters {
                 if let Some(content) = storage.get_chapter_content(ns, &book.book_url, idx).await? {

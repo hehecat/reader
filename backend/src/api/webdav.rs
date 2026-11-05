@@ -102,6 +102,10 @@ pub(crate) async fn authenticate(
         // 未开启 WebDAV 权限：账号有效但被拒——不累计密码失败，避免误锁
         return None;
     }
+    if user.disabled {
+        // S6：停用账号即使开了 WebDAV 也不能登录
+        return None;
+    }
     // 统一密码校验：argon2id（PHC）优先，legacy 双 MD5 兼容；MD5 通过时自动升级为 argon2id
     if !crate::util::password::verify_password(storage, &user, password).await {
         crate::util::login_limit::record_failure(username, client_ip);
@@ -448,6 +452,56 @@ mod tests {
         assert!(resolve_path(&home, "/reader3/webdav/a/..%2F..%2Fescape.txt").is_none());
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// S6：停用账号即使密码正确也必须被拒（与 OPDS Basic 同口径）
+    #[tokio::test]
+    async fn test_authenticate_rejects_disabled_user() {
+        let dir =
+            std::env::temp_dir().join(format!("reader-webdav-disabled-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut config = crate::AppConfig::from_env();
+        config.work_dir = dir.to_string_lossy().into_owned();
+        config.secure = true;
+        let storage = crate::storage::init(&config).await.unwrap();
+        storage
+            .insert_user(&crate::model::User {
+                username: "davdis".into(),
+                password: crate::util::password::hash_password("pw123456"),
+                enable_webdav: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        // insert_user 不带 disabled 列（停用是管理动作）→ 走权限更新
+        storage
+            .update_user_permissions(
+                "davdis",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(true),
+            )
+            .await
+            .unwrap();
+        use base64::Engine;
+        let mut h = axum::http::HeaderMap::new();
+        let cred = base64::engine::general_purpose::STANDARD.encode("davdis:pw123456");
+        h.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Basic {cred}").parse().unwrap(),
+        );
+        assert!(
+            authenticate(&storage, &h, "203.0.113.78").await.is_none(),
+            "停用账号不应通过 WebDAV 认证"
+        );
+
+        storage.pool.close().await;
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// P1-1：WebDAV Basic 密码校验接入登录限流——

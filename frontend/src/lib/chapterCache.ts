@@ -21,9 +21,14 @@ import type { BookChapter } from "@/types/api";
  * 降级: 隐私模式/配额满/浏览器禁用时 `openDb` 解析为 undefined, 所有读写静默变成空操作;
  * 任何异常都在本模块内吞掉, 绝不抛到 UI (调用方一律按「无缓存」处理).
  * 接口/净化/进度这些语义完全不碰 —— 这里只是「同样一份数据的本地副本」.
+ *
+ * 按用户分库: 库名带用户名 (`reader.chapterCache.<username>`), 换账号读不到上一个账号的缓存;
+ * 登录/登出后由 user-scope 调 `closeChapterCache()` 断开旧连接, 下次读写自动开新库.
  */
 
 const DB_NAME = "reader.chapterCache";
+/** 访客(未登录)的库名后缀: 空用户名不能直接拼进库名 */
+const ANON = "_";
 /** schema 版本: store/索引结构变化时 +1; 老库在 onupgradeneeded 里按需补齐 */
 const DB_VERSION = 1;
 const CHAPTER_STORE = "chapters";
@@ -68,12 +73,41 @@ interface ContentRecord extends CachedContent {
  */
 const OPEN_FAILURE_COOLDOWN_MS = 5 * 60_000;
 
-/** 已连上的库 (成功后长期复用; 版本变化/被关闭时清空, 下次操作重开) */
+/** 已连上的库 (成功后长期复用; 版本变化/被关闭/换用户时清空, 下次操作重开) */
 let openDbHandle: IDBDatabase | undefined;
+/** openDbHandle 对应的库名: 登录态一变库名就变, 名字对不上的连接必须弃用 */
+let openDbName: string | undefined;
 /** 进行中的 open: 并发调用合并成一次 */
 let openRequest: Promise<IDBDatabase | undefined> | undefined;
+let openRequestName: string | undefined;
 /** 上次 open 失败的时间戳; 0 = 本会话还没有失败记录 */
 let openFailedAt = 0;
+
+/**
+ * 当前用户名 (`reader.accessToken` 的 `username:token` 冒号前段).
+ * 这里直接读 localStorage 而不复用 lib/storage: 本文件要被 `node --test` 直接 import 做单测,
+ * 那边解析不了 `@/` 别名.
+ */
+function currentUsername(): string | null {
+  try {
+    if (typeof localStorage === "undefined") {
+      return null;
+    }
+    const token = localStorage.getItem("reader.accessToken");
+    if (token === null) {
+      return null;
+    }
+    const separator = token.indexOf(":");
+    return separator > 0 ? token.slice(0, separator) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 每个用户一个库: 同一台机器换账号不能读到上一个账号的目录与正文缓存 */
+function dbName(): string {
+  return `${DB_NAME}.${currentUsername() ?? ANON}`;
+}
 
 /** 冷却窗口内不再尝试 open */
 function inFailureCooldown(now: number): boolean {
@@ -85,10 +119,15 @@ function inFailureCooldown(now: number): boolean {
  * 失败态进 TTL 缓存 (OPEN_FAILURE_COOLDOWN_MS), 成功态长期复用.
  */
 function openDb(): Promise<IDBDatabase | undefined> {
-  if (openDbHandle !== undefined) {
+  const name = dbName();
+  if (openDbHandle !== undefined && openDbName === name) {
     return Promise.resolve(openDbHandle);
   }
-  if (openRequest !== undefined) {
+  if (openDbHandle !== undefined) {
+    // 库名变了(登录/登出): 旧连接留着只会让新用户读写上一个用户的库
+    closeChapterCache();
+  }
+  if (openRequest !== undefined && openRequestName === name) {
     return openRequest;
   }
   if (inFailureCooldown(Date.now())) {
@@ -106,7 +145,7 @@ function openDb(): Promise<IDBDatabase | undefined> {
         fail();
         return;
       }
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
+      const request = indexedDB.open(name, DB_VERSION);
       request.onupgradeneeded = () => {
         const db = request.result;
         if (!db.objectStoreNames.contains(CHAPTER_STORE)) {
@@ -120,12 +159,21 @@ function openDb(): Promise<IDBDatabase | undefined> {
       };
       request.onsuccess = () => {
         const handle = request.result;
+        if (dbName() !== name) {
+          // open 期间登录态又变了: 这个库已经不属于当前用户, 关掉交给下一次调用重开,
+          // 绝不能把旧用户的库挂到 openDbHandle 上
+          handle.close();
+          resolve(undefined);
+          return;
+        }
         // 另一个标签页要做 schema 升级: 让出连接, 下次操作重新 open (不算失败, 不进冷却)
         handle.onversionchange = () => {
           handle.close();
           openDbHandle = undefined;
+          openDbName = undefined;
         };
         openDbHandle = handle;
+        openDbName = name;
         openFailedAt = 0;
         resolve(handle);
       };
@@ -138,22 +186,40 @@ function openDb(): Promise<IDBDatabase | undefined> {
     }
   });
   openRequest = promise;
+  openRequestName = name;
   // 失败后清掉「进行中」标记, 冷却到期时才能重新尝试; 成功则靠 openDbHandle 直接复用
   void promise.then(() => {
     if (openDbHandle === undefined && openRequest === promise) {
       openRequest = undefined;
+      openRequestName = undefined;
     }
   });
   return promise;
 }
 
-/** 仅供测试/诊断: 清空模块级的连接与失败态缓存 (生产代码不要调用) */
-export function resetChapterCacheState(): void {
+/**
+ * 关闭当前库连接并清空会话级去重表.
+ * 换用户后必须调用: 下次读写会按新库名重新 open, 而不再复用上一个用户的连接.
+ */
+export function closeChapterCache(): void {
+  try {
+    openDbHandle?.close();
+  } catch {
+    // 已经关过了: 无所谓
+  }
   openDbHandle = undefined;
+  openDbName = undefined;
   openRequest = undefined;
-  openFailedAt = 0;
+  openRequestName = undefined;
+  // 去重表记的是「已落盘」: 换了库之后同一份数据要能重新写进新用户的库
   writtenChapterHash.clear();
   writtenContent.clear();
+}
+
+/** 仅供测试/诊断: 清空模块级的连接与失败态缓存 (生产代码不要调用) */
+export function resetChapterCacheState(): void {
+  closeChapterCache();
+  openFailedAt = 0;
 }
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T | undefined> {

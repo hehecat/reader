@@ -26,33 +26,39 @@ pub struct CacheProgress {
     pub error: Option<String>,
 }
 
-/// 内存任务表（url → 进度句柄）
+/// 内存任务表（`{ns}\u{{1}}{taskId}` → 进度句柄）
+/// S5：键必须带命名空间——只按 url 做键时，B 用户能旁观/取消 A 用户的缓存任务
 static CACHE_TASKS: LazyLock<Mutex<HashMap<String, Arc<Mutex<CacheProgress>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// 查询任务进度（不存在返回 None）
-pub fn progress_of(url: &str) -> Option<Arc<Mutex<CacheProgress>>> {
-    progress_of_key(url)
+/// 任务表键：命名空间 + taskId（`\u{{1}}` 分隔；taskId 是 url 或 `url#from-to`）
+fn task_key(ns: &str, task_id: &str) -> String {
+    format!("{ns}\u{1}{task_id}")
 }
 
-/// 查询任务进度（taskId 精确键）
-pub fn progress_of_key(task_id: &str) -> Option<Arc<Mutex<CacheProgress>>> {
+/// 查询任务进度（不存在返回 None）——按 (ns, url) 查
+pub fn progress_of(ns: &str, url: &str) -> Option<Arc<Mutex<CacheProgress>>> {
+    progress_of_key(ns, url)
+}
+
+/// 查询任务进度（taskId 精确键，限本命名空间）
+pub fn progress_of_key(ns: &str, task_id: &str) -> Option<Arc<Mutex<CacheProgress>>> {
     CACHE_TASKS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .get(task_id)
+        .get(&task_key(ns, task_id))
         .cloned()
 }
 
 /// 取消任务（从任务表移除并置取消标记）；返回是否命中
-pub fn cancel(url: &str) -> bool {
-    cancel_key(url)
+pub fn cancel(ns: &str, url: &str) -> bool {
+    cancel_key(ns, url)
 }
 
-/// 取消任务（taskId 精确键）
-pub fn cancel_key(task_id: &str) -> bool {
+/// 取消任务（taskId 精确键，限本命名空间）
+pub fn cancel_key(ns: &str, task_id: &str) -> bool {
     let mut map = CACHE_TASKS.lock().unwrap_or_else(|e| e.into_inner());
-    match map.remove(task_id) {
+    match map.remove(&task_key(ns, task_id)) {
         Some(p) => {
             if let Ok(mut p) = p.lock() {
                 p.cancelled = true;
@@ -93,9 +99,10 @@ pub fn start_range(
         Some((from, to)) => format!("{url}#{from}-{to}"),
         None => url.to_string(),
     };
+    let key = task_key(ns, &task_id);
     {
         let map = CACHE_TASKS.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(existing) = map.get(&task_id) {
+        if let Some(existing) = map.get(&key) {
             let p = existing.lock().unwrap_or_else(|e| e.into_inner());
             if !p.finished {
                 return (task_id, existing.clone());
@@ -108,7 +115,7 @@ pub fn start_range(
     }));
     {
         let mut map = CACHE_TASKS.lock().unwrap_or_else(|e| e.into_inner());
-        map.insert(task_id.clone(), progress.clone());
+        map.insert(key, progress.clone());
     }
     let ns = ns.to_string();
     let url = url.to_string();
@@ -146,7 +153,7 @@ async fn run_job(
 
     // 本地书：章节已在 book_chapters（导入时全量入库）——直接计数
     if url.starts_with("local://") {
-        let rows = storage.list_chapters(url).await?;
+        let rows = storage.list_chapters_ns(ns, url).await?;
         let rows = slice_range(rows, range)?;
         return Ok((book.name, rows.len(), rows.len()));
     }
@@ -281,10 +288,10 @@ async fn run_job(
 }
 
 /// 等待任务结束（测试辅助：轮询直到 finished 或超时）
-pub async fn wait_finished(url: &str, timeout: Duration) -> bool {
+pub async fn wait_finished(ns: &str, url: &str, timeout: Duration) -> bool {
     let started = std::time::Instant::now();
     loop {
-        if let Some(p) = progress_of(url) {
+        if let Some(p) = progress_of(ns, url) {
             let p = p.lock().unwrap_or_else(|e| e.into_inner());
             if p.finished {
                 return true;

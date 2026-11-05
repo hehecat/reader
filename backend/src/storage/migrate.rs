@@ -49,6 +49,17 @@ pub async fn migrate_if_needed(storage: &Storage) -> Result<()> {
     if admin_personal_moved > 0 {
         tracing::info!("管理员 default 残留个人数据归位本人命名空间：{admin_personal_moved} 行");
     }
+    // S4：书签主键补 user_namespace（老库主键只有 (book_url, title)，两个用户
+    // 同书同标题互相覆盖）。幂等：主键已是 3 列则跳过。
+    if migrate_bookmarks_pk_ns(&storage.pool).await? {
+        tracing::info!("书签表主键已补 user_namespace（(book_url, title, user_namespace)）");
+    }
+    // S1 历史数据修复：早期章节写入漏 user_namespace，本地书章节全落在 'default'，
+    // 非 default 命名空间读不到自己的本地书。归属唯一的书按 ns 归位（幂等）。
+    let chapters_moved = backfill_chapters_ns(&storage.pool).await?;
+    if chapters_moved > 0 {
+        tracing::info!("本地书章节命名空间归位：{chapters_moved} 行");
+    }
     if !users_path.exists() {
         tracing::info!(
             "未发现 legacy JSON 数据（{} 不存在），跳过迁移",
@@ -308,6 +319,113 @@ async fn migrate_admin_default_personal_data_back(pool: &SqlitePool) -> Result<u
     }
     tx.commit().await?;
     Ok(total)
+}
+
+/// S4：把 bookmarks 主键从 (book_url, title) 升到 (book_url, title, user_namespace)。
+/// SQLite 不支持改主键 → 建新表 + 拷贝 + 换名。返回是否做了迁移。
+/// 旧库里 user_namespace 可能是 NULL/空串（迁移前遗留），统一兜底成 'default'。
+async fn migrate_bookmarks_pk_ns(pool: &SqlitePool) -> Result<bool> {
+    let info: Vec<(i64, String, i64)> =
+        sqlx::query_as("SELECT cid, name, pk FROM pragma_table_info('bookmarks')")
+            .fetch_all(pool)
+            .await?;
+    if info.is_empty() {
+        return Ok(false);
+    }
+    let pk_cols = info.iter().filter(|(_, _, pk)| *pk > 0).count();
+    if pk_cols >= 3 {
+        return Ok(false);
+    }
+    let mut tx = pool.begin().await?;
+    // 上一次迁移若在 rename 前中断，残留的 bookmarks_new 会让 CREATE 失败
+    sqlx::query("DROP TABLE IF EXISTS bookmarks_new")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        r#"
+        CREATE TABLE bookmarks_new (
+            book_url TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            book_name TEXT NOT NULL DEFAULT '',
+            book_author TEXT NOT NULL DEFAULT '',
+            paragraph_index INTEGER DEFAULT 0,
+            chapter_index INTEGER DEFAULT 0,
+            chapter_name TEXT NOT NULL DEFAULT '',
+            book_text TEXT NOT NULL DEFAULT '',
+            content TEXT NOT NULL DEFAULT '',
+            created_at INTEGER DEFAULT 0,
+            user_namespace TEXT DEFAULT '',
+            raw_json TEXT,
+            PRIMARY KEY (book_url, title, user_namespace)
+        );
+        "#,
+    )
+    .execute(&mut *tx)
+    .await?;
+    // 列顺序与原表一致（`SELECT *` 的读取方按位置映射）；空/缺 ns 归到 default
+    sqlx::query(
+        r#"
+        INSERT OR REPLACE INTO bookmarks_new
+            (book_url, title, book_name, book_author, paragraph_index, chapter_index,
+             chapter_name, book_text, content, created_at, user_namespace, raw_json)
+        SELECT book_url, title, book_name, book_author, paragraph_index, chapter_index,
+               chapter_name, book_text, content, created_at,
+               CASE WHEN user_namespace IS NULL OR user_namespace = '' THEN 'default'
+                    ELSE user_namespace END,
+               raw_json
+        FROM bookmarks
+        "#,
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DROP TABLE bookmarks")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("ALTER TABLE bookmarks_new RENAME TO bookmarks")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// S1 历史数据修复：`book_chapters.user_namespace = 'default'` 但书实际属于别的
+/// 命名空间（早期 INSERT 漏写 ns）的行，按书的归属归位。只在「该书 url 在整个
+/// books 表里只属于一个命名空间」时搬——多个用户共有同一 url 时归属不可判定，
+/// 留给重新导入/刷新覆盖。返回搬动的行数。
+async fn backfill_chapters_ns(pool: &SqlitePool) -> Result<usize> {
+    let mut tx = pool.begin().await?;
+    let inserted = sqlx::query(
+        r#"
+        INSERT OR IGNORE INTO book_chapters
+            (book_url, chapter_index, title, content, user_namespace)
+        SELECT c.book_url, c.chapter_index, c.title, c.content, b.user_namespace
+        FROM book_chapters c
+        JOIN books b ON b.book_url = c.book_url
+        WHERE c.user_namespace = 'default' AND b.user_namespace <> 'default'
+          AND (SELECT COUNT(DISTINCT b2.user_namespace) FROM books b2
+               WHERE b2.book_url = c.book_url) = 1
+        "#,
+    )
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if inserted == 0 {
+        tx.rollback().await.ok();
+        return Ok(0);
+    }
+    sqlx::query(
+        r#"
+        DELETE FROM book_chapters
+        WHERE user_namespace = 'default'
+          AND book_url IN (SELECT book_url FROM books WHERE user_namespace <> 'default')
+          AND (SELECT COUNT(DISTINCT b2.user_namespace) FROM books b2
+               WHERE b2.book_url = book_chapters.book_url) = 1
+        "#,
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(inserted as usize)
 }
 
 /// 历史缺陷补全：搜索入架的书未带 canUpdate（后端实体默认 false），落库 can_update=0 →
@@ -1604,6 +1722,153 @@ mod tests {
     /// 独立临时目录（避免污染真实 storage/reader.db）
     fn test_dir(tag: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("reader-migrate-test-{}-{tag}", std::process::id()))
+    }
+
+    /// S4：旧库 bookmarks 主键是 (book_url,title)——迁移后补 user_namespace，
+    /// 空/缺 ns 的行归到 default（否则老用户书签在新主键下会撞成一条）
+    #[tokio::test]
+    async fn test_migrate_bookmarks_pk_adds_namespace() {
+        let dir = test_dir("bookmarks-pk");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut config = AppConfig::from_env();
+        config.work_dir = dir.to_string_lossy().into_owned();
+        let storage = init(&config).await.unwrap();
+
+        // 还原成旧 schema（PK 不含 user_namespace）+ 两行历史数据
+        sqlx::query("DROP TABLE bookmarks")
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE bookmarks (
+                book_url TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                book_name TEXT NOT NULL DEFAULT '',
+                book_author TEXT NOT NULL DEFAULT '',
+                paragraph_index INTEGER DEFAULT 0,
+                chapter_index INTEGER DEFAULT 0,
+                chapter_name TEXT NOT NULL DEFAULT '',
+                book_text TEXT NOT NULL DEFAULT '',
+                content TEXT NOT NULL DEFAULT '',
+                created_at INTEGER DEFAULT 0,
+                user_namespace TEXT DEFAULT '',
+                raw_json TEXT,
+                PRIMARY KEY (book_url, title)
+            )
+            "#,
+        )
+        .execute(&storage.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO bookmarks (book_url, title, content, user_namespace)
+             VALUES ('u1', 't1', '空 ns', ''), ('u2', 't2', '有 ns', 'alice')",
+        )
+        .execute(&storage.pool)
+        .await
+        .unwrap();
+
+        assert!(
+            migrate_bookmarks_pk_ns(&storage.pool).await.unwrap(),
+            "旧主键应触发迁移"
+        );
+        assert!(
+            !migrate_bookmarks_pk_ns(&storage.pool).await.unwrap(),
+            "迁移必须幂等"
+        );
+
+        let rows: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT book_url, title, user_namespace FROM bookmarks ORDER BY book_url",
+        )
+        .fetch_all(&storage.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("u1".to_string(), "t1".to_string(), "default".to_string()),
+                ("u2".to_string(), "t2".to_string(), "alice".to_string()),
+            ],
+            "空 ns 归 default，已有 ns 原样保留"
+        );
+
+        // 新主键 3 列：同 (book_url,title) 允许不同 ns 并存
+        sqlx::query(
+            "INSERT INTO bookmarks (book_url, title, content, user_namespace)
+             VALUES ('u1', 't1', 'alice 的', 'alice')",
+        )
+        .execute(&storage.pool)
+        .await
+        .unwrap();
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM bookmarks WHERE book_url = 'u1' AND title = 't1'",
+        )
+        .fetch_one(&storage.pool)
+        .await
+        .unwrap();
+        assert_eq!(n, 2, "同 (book_url,title) 不同 ns 应并存");
+
+        storage.pool.close().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// S1 数据修复：早期 4 列 INSERT 把非 default 用户的章节写进 'default' →
+    /// 迁移按书的归属归位；同一 url 被多个命名空间共有时归属不可判定，保持原样
+    #[tokio::test]
+    async fn test_backfill_chapters_ns_moves_legacy_default_rows() {
+        let dir = test_dir("chapters-ns");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut config = AppConfig::from_env();
+        config.work_dir = dir.to_string_lossy().into_owned();
+        let storage = init(&config).await.unwrap();
+
+        let own = "local://store/own";
+        let shared = "local://store/shared";
+        let mk = |url: &str| Book {
+            book_url: url.to_string(),
+            name: "本地书".into(),
+            origin: "local".into(),
+            ..Default::default()
+        };
+        storage.upsert_book("alice", &mk(own)).await.unwrap();
+        storage.upsert_book("alice", &mk(shared)).await.unwrap();
+        storage.upsert_book("bob", &mk(shared)).await.unwrap();
+        // 旧行为：章节行落 'default'
+        storage
+            .save_chapters(own, &[("第一章".into(), "正文".into())])
+            .await
+            .unwrap();
+        storage
+            .save_chapters(shared, &[("第一章".into(), "正文".into())])
+            .await
+            .unwrap();
+
+        let moved = backfill_chapters_ns(&storage.pool).await.unwrap();
+        assert_eq!(moved, 1, "只应搬走归属唯一的那一行");
+
+        let alice_own = storage.list_chapters_ns("alice", own).await.unwrap();
+        assert_eq!(alice_own.len(), 1, "唯一归属的行应归位到 alice");
+        assert!(
+            storage
+                .list_chapters_ns("default", own)
+                .await
+                .unwrap()
+                .is_empty(),
+            "旧 'default' 行应删除（否则本人读不到、管理员读到全站）"
+        );
+        assert_eq!(
+            storage
+                .list_chapters_ns("default", shared)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "多命名空间共有的 url 归属不可判定 → 保持原样"
+        );
+
+        storage.pool.close().await;
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 构造最小 legacy data 目录（users.json + 各命名空间 legacy 文件）

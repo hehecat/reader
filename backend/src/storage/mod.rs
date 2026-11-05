@@ -639,7 +639,7 @@ pub async fn init(config: &AppConfig) -> Result<Storage> {
     .execute(&pool)
     .await?;
 
-    // 书签（任务规格：PRIMARY KEY (book_url, title)）
+    // 书签（S4：主键必须含 user_namespace，否则两个用户同 url+title 互相覆盖）
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS bookmarks (
@@ -655,7 +655,7 @@ pub async fn init(config: &AppConfig) -> Result<Storage> {
             created_at INTEGER DEFAULT 0,
             user_namespace TEXT DEFAULT '',
             raw_json TEXT,
-            PRIMARY KEY (book_url, title)
+            PRIMARY KEY (book_url, title, user_namespace)
         );
         "#,
     )
@@ -2679,7 +2679,44 @@ impl Storage {
         Ok(())
     }
 
-    /// 本地书章节列表
+    /// 保存章节（本地书，按命名空间隔离）——多用户下必须用这个，
+    /// 否则行落表默认 `user_namespace='default'`，本人读不到、管理员反而读到全站。
+    pub async fn save_chapters_ns(
+        &self,
+        ns: &str,
+        book_url: &str,
+        chapters: &[(String, String)],
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for (i, (title, content)) in chapters.iter().enumerate() {
+            sqlx::query(
+                "INSERT OR REPLACE INTO book_chapters (book_url, chapter_index, title, content, user_namespace) VALUES (?1, ?2, ?3, ?4, ?5)",
+            )
+            .bind(book_url)
+            .bind(i as i64)
+            .bind(title)
+            .bind(content)
+            .bind(ns)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// 本地书章节列表（按命名空间隔离）——阅读器/目录接口用这个
+    pub async fn list_chapters_ns(&self, ns: &str, book_url: &str) -> Result<Vec<(i64, String)>> {
+        let rows = sqlx::query_as::<_, (i64, String)>(
+            "SELECT chapter_index, title FROM book_chapters WHERE book_url = ?1 AND user_namespace = ?2 ORDER BY chapter_index",
+        )
+        .bind(book_url)
+        .bind(ns)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// 本地书章节列表（不含 ns 过滤，仅供管理员/对账等全站视角；用户请求路径勿用）
     pub async fn list_chapters(&self, book_url: &str) -> Result<Vec<(i64, String)>> {
         let rows = sqlx::query_as::<_, (i64, String)>(
             "SELECT chapter_index, title FROM book_chapters WHERE book_url = ?1 ORDER BY chapter_index",
@@ -2736,6 +2773,22 @@ impl Storage {
         .fetch_one(&self.pool)
         .await?;
         Ok(r.0)
+    }
+
+    /// 本地书章节列表（含字数，按命名空间隔离）——目录接口用这个
+    pub async fn list_chapters_with_word_count_ns(
+        &self,
+        ns: &str,
+        book_url: &str,
+    ) -> Result<Vec<(i64, String, i64)>> {
+        let rows = sqlx::query_as::<_, (i64, String, i64)>(
+            "SELECT chapter_index, title, length(content) FROM book_chapters WHERE book_url = ?1 AND user_namespace = ?2 ORDER BY chapter_index",
+        )
+        .bind(book_url)
+        .bind(ns)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 
     /// 本地书章节列表（含字数：SQLite length() 对 TEXT 按字符数统计正文，避免整章内容回传）
@@ -3149,20 +3202,18 @@ impl Storage {
     }
 
     /// 删除本地书（含章节）
-    /// 安全：book_chapters 无命名空间列——按书架归属（books.user_namespace）过滤后再删，
-    /// 防止跨用户删他人本地书缓存（P1-C1）
+    /// 安全：book_chapters 自带 user_namespace 列——直接按 ns 过滤删除（S1/S3），
+    /// 防止跨用户删他人本地书章节缓存
     /// P3-A 标注：当前无生产调用点——本地书删除走 [`Self::delete_book`]（P1-C1 已含章节
     /// 清理）；本函数保留为 storage 层原语（ns 隔离校验 + 测试覆盖），供后续
     /// 本地书专属删除 API 复用。
     pub async fn delete_local_book(&self, ns: &str, book_url: &str) -> Result<()> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query(
-            "DELETE FROM book_chapters WHERE book_url = ?1              AND book_url IN (SELECT book_url FROM books WHERE user_namespace = ?2)",
-        )
-        .bind(book_url)
-        .bind(ns)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("DELETE FROM book_chapters WHERE book_url = ?1 AND user_namespace = ?2")
+            .bind(book_url)
+            .bind(ns)
+            .execute(&mut *tx)
+            .await?;
         sqlx::query("DELETE FROM books WHERE user_namespace = ?1 AND book_url = ?2")
             .bind(ns)
             .bind(book_url)
@@ -3184,21 +3235,18 @@ impl Storage {
         .await?
         .flatten();
         let mut tx = self.pool.begin().await?;
-        // P1-C1：book_chapters/toc_cache 无命名空间列——按书架归属过滤后删（跨用户删除防护）
-        sqlx::query(
-            "DELETE FROM book_chapters WHERE book_url = ?1              AND book_url IN (SELECT book_url FROM books WHERE user_namespace = ?2)",
-        )
-        .bind(book_url)
-        .bind(ns)
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query(
-            "DELETE FROM toc_cache WHERE book_url = ?1              AND book_url IN (SELECT book_url FROM books WHERE user_namespace = ?2)",
-        )
-        .bind(book_url)
-        .bind(ns)
-        .execute(&mut *tx)
-        .await?;
+        // S1/S3：book_chapters 与 toc_cache 都带 user_namespace 列——直接按 ns 删，
+        // 不再用「books 表里该书是否属于本 ns」的子查询（那会误删同 url 的他人缓存行）
+        sqlx::query("DELETE FROM book_chapters WHERE book_url = ?1 AND user_namespace = ?2")
+            .bind(book_url)
+            .bind(ns)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM toc_cache WHERE book_url = ?1 AND user_namespace = ?2")
+            .bind(book_url)
+            .bind(ns)
+            .execute(&mut *tx)
+            .await?;
         let r = sqlx::query("DELETE FROM books WHERE user_namespace = ?1 AND book_url = ?2")
             .bind(ns)
             .bind(book_url)
@@ -3495,7 +3543,7 @@ impl Storage {
         time: i64,
     ) -> Result<u64> {
         let r = sqlx::query(
-            "UPDATE books SET dur_chapter_title = COALESCE(?3, dur_chapter_title),              dur_chapter_index = ?4, dur_chapter_pos = ?5, dur_chapter_time = ?6              WHERE user_namespace = ?1 AND book_url = ?2",
+            "UPDATE books SET dur_chapter_title = COALESCE(?3, dur_chapter_title),              dur_chapter_index = ?4, dur_chapter_pos = ?5, dur_chapter_time = ?6              WHERE user_namespace = ?1 AND book_url = ?2              AND COALESCE(dur_chapter_time, 0) <= ?6",
         )
         .bind(ns)
         .bind(book_url)
@@ -4204,10 +4252,10 @@ impl Storage {
         Ok(r.map(|x| x.0))
     }
 
-    /// 保存用户配置（INSERT OR REPLACE）
+    /// 保存用户配置（S9：旧时间戳不覆盖新——同一秒内仍按后写胜出）
     pub async fn save_user_config(&self, ns: &str, key: &str, config: &str) -> Result<()> {
         sqlx::query(
-            "INSERT OR REPLACE INTO user_config (user_namespace, ns, config, updated_at)              VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO user_config (user_namespace, ns, config, updated_at)              VALUES (?1, ?2, ?3, ?4)              ON CONFLICT(user_namespace, ns) DO UPDATE SET              config = excluded.config, updated_at = excluded.updated_at              WHERE excluded.updated_at >= user_config.updated_at",
         )
         .bind(ns)
         .bind(key)
@@ -4703,13 +4751,15 @@ impl Storage {
             .map(|c| (c.title.clone(), c.content.clone()))
             .collect();
         for (i, (title, content)) in chapters.iter().enumerate() {
+            // S1：必须带 user_namespace，否则行落到 'default'，本人（非 default ns）读不到
             sqlx::query(
-                "INSERT OR REPLACE INTO book_chapters (book_url, chapter_index, title, content) VALUES (?1,?2,?3,?4)",
+                "INSERT OR REPLACE INTO book_chapters (book_url, chapter_index, title, content, user_namespace) VALUES (?1,?2,?3,?4,?5)",
             )
             .bind(&info.book_url)
             .bind(i as i64)
             .bind(title)
             .bind(content)
+            .bind(ns)
             .execute(&mut *tx)
             .await?;
         }
@@ -4745,19 +4795,22 @@ impl Storage {
             return Ok(false);
         }
         let mut tx = self.pool.begin().await?;
-        // 覆盖式重建章节（重复迁移幂等）
-        sqlx::query("DELETE FROM book_chapters WHERE book_url = ?1")
+        // 覆盖式重建章节（重复迁移幂等）——S3：只清本 ns 的章节，
+        // 同 book_url 的他人章节缓存不能动
+        sqlx::query("DELETE FROM book_chapters WHERE book_url = ?1 AND user_namespace = ?2")
             .bind(book_url)
+            .bind(ns)
             .execute(&mut *tx)
             .await?;
         for (i, (title, content)) in chapters.iter().enumerate() {
             sqlx::query(
-                "INSERT OR REPLACE INTO book_chapters (book_url, chapter_index, title, content) VALUES (?1,?2,?3,?4)",
+                "INSERT OR REPLACE INTO book_chapters (book_url, chapter_index, title, content, user_namespace) VALUES (?1,?2,?3,?4,?5)",
             )
             .bind(book_url)
             .bind(i as i64)
             .bind(title)
             .bind(content)
+            .bind(ns)
             .execute(&mut *tx)
             .await?;
         }
@@ -4873,26 +4926,41 @@ impl Storage {
             anyhow::bail!("书籍不存在或无权操作");
         }
         let mut tx = self.pool.begin().await?;
-        sqlx::query(
-            "DELETE FROM book_chapters WHERE book_url = ?1              AND book_url IN (SELECT book_url FROM books WHERE user_namespace = ?2)",
-        )
-        .bind(book_url)
-        .bind(ns)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("DELETE FROM book_chapters WHERE book_url = ?1 AND user_namespace = ?2")
+            .bind(book_url)
+            .bind(ns)
+            .execute(&mut *tx)
+            .await?;
         for (i, (title, content)) in chapters.iter().enumerate() {
             sqlx::query(
-                "INSERT INTO book_chapters (book_url, chapter_index, title, content) VALUES (?1, ?2, ?3, ?4)",
+                "INSERT OR REPLACE INTO book_chapters (book_url, chapter_index, title, content, user_namespace) VALUES (?1, ?2, ?3, ?4, ?5)",
             )
             .bind(book_url)
             .bind(i as i64)
             .bind(title)
             .bind(content)
+            .bind(ns)
             .execute(&mut *tx)
             .await?;
         }
         tx.commit().await?;
         Ok(())
+    }
+
+    /// 本地书章节（含正文，按命名空间隔离——epub 生成等用户路径用这个）
+    pub async fn list_chapters_full_ns(
+        &self,
+        ns: &str,
+        book_url: &str,
+    ) -> Result<Vec<(i64, String, String)>> {
+        let rows = sqlx::query_as::<_, (i64, String, String)>(
+            "SELECT chapter_index, title, content FROM book_chapters WHERE book_url = ?1 AND user_namespace = ?2 ORDER BY chapter_index",
+        )
+        .bind(book_url)
+        .bind(ns)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 
     /// 本地书章节（含正文，全量——对账任务 epub 生成用）
@@ -4961,8 +5029,8 @@ impl Storage {
             INSERT OR REPLACE INTO users
                 (username, password, salt, token, enable_webdav, enable_local_store,
                  enable_book_source, enable_rss_source, book_source_limit, book_limit,
-                 is_admin, last_login_at, created_at, user_namespace)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                 is_admin, last_login_at, created_at, user_namespace, disabled, token_map)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
             "#,
         )
         .bind(&user.username)
@@ -4979,6 +5047,10 @@ impl Storage {
         .bind(user.last_login_at)
         .bind(user.created_at)
         .bind(&user.user_namespace)
+        // 补漏：INSERT OR REPLACE 会整行覆盖，不带这两列等于把停用状态清回启用、
+        // 把多端会话表清空（创建时传 disabled:true 不生效 / 恢复备份丢会话）
+        .bind(user.disabled)
+        .bind(user.token_map.as_ref().map(|v| v.to_string()))
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -5114,7 +5186,8 @@ impl Storage {
 
     /// F-25 退出登录：清空用户 token（token 立即失效）
     pub async fn logout_user(&self, username: &str) -> Result<u64> {
-        let r = sqlx::query("UPDATE users SET token = '' WHERE username = ?1")
+        // S7：token_map 也要清空——否则退出登录后旧 token 仍能通过 token_map_valid 校验
+        let r = sqlx::query("UPDATE users SET token = '', token_map = '[]' WHERE username = ?1")
             .bind(username)
             .execute(&self.pool)
             .await?;
@@ -5344,8 +5417,9 @@ impl Storage {
         salt: &str,
         encrypted_password: &str,
     ) -> Result<u64> {
+        // S7：改密必须同时吊销 token_map 里的多端 token（否则旧会话继续有效）
         let r = sqlx::query(
-            "UPDATE users SET password = ?1, salt = ?2, token = '' WHERE username = ?3",
+            "UPDATE users SET password = ?1, salt = ?2, token = '', token_map = '[]' WHERE username = ?3",
         )
         .bind(encrypted_password)
         .bind(salt)
@@ -7684,6 +7758,46 @@ mod tests {
         cleanup(storage, "book").await;
     }
 
+    /// S10：旧的 durChapterTime 不得覆盖新进度（多端/离线乱序同步）；更新的照写
+    #[tokio::test]
+    async fn test_progress_older_timestamp_does_not_overwrite() {
+        let storage = test_storage("progress-ts").await;
+        let url = "https://book.com/ts";
+        storage
+            .upsert_book("default", &shelf_book(url, "书"))
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .update_book_progress("default", url, Some("第5章"), 4, 100, 2000)
+                .await
+                .unwrap(),
+            1
+        );
+        // 旧时间戳 → 0 行（调用方可当幂等跳过），库里保持第5章
+        assert_eq!(
+            storage
+                .update_book_progress("default", url, Some("第2章"), 1, 10, 1000)
+                .await
+                .unwrap(),
+            0,
+            "旧时间戳不应覆盖"
+        );
+        let b = storage.find_book("default", url).await.unwrap().unwrap();
+        assert_eq!(b.dur_chapter_index, 4);
+        assert_eq!(b.dur_chapter_title.as_deref(), Some("第5章"));
+        assert_eq!(b.dur_chapter_time, 2000);
+        // 更新的时间戳 → 正常写入
+        assert_eq!(
+            storage
+                .update_book_progress("default", url, Some("第6章"), 5, 0, 3000)
+                .await
+                .unwrap(),
+            1
+        );
+        cleanup(storage, "progress-ts").await;
+    }
+
     /// 本地书入库：books.type 使用传入 book_type（回归：旧代码写死 1=音频，
     /// 导致本地 EPUB 全部按音频分支读取失败）
     #[tokio::test]
@@ -7897,6 +8011,55 @@ mod tests {
         );
 
         cleanup(storage, "bookmark").await;
+    }
+
+    /// S4：两个命名空间用同一 (book_url, title) 各存一条——必须互不覆盖
+    #[tokio::test]
+    async fn test_bookmark_same_title_isolated_across_namespaces() {
+        let storage = test_storage("bookmark-ns").await;
+        let url = "https://book.com/same";
+        let mk = |ns_content: &str| crate::model::Bookmark {
+            book_url: url.into(),
+            title: "同一标题".into(),
+            content: ns_content.into(),
+            created_at: 1000,
+            ..Default::default()
+        };
+        storage
+            .save_bookmark("alice", &mk("alice 的批注"))
+            .await
+            .unwrap();
+        storage
+            .save_bookmark("bob", &mk("bob 的批注"))
+            .await
+            .unwrap();
+
+        let alice = storage.list_bookmarks("alice", url).await.unwrap();
+        let bob = storage.list_bookmarks("bob", url).await.unwrap();
+        assert_eq!(alice.len(), 1, "alice 只应有自己的一条");
+        assert_eq!(bob.len(), 1, "bob 只应有自己的一条");
+        assert_eq!(alice[0].content, "alice 的批注");
+        assert_eq!(
+            bob[0].content, "bob 的批注",
+            "同 (book_url,title) 不得互相覆盖"
+        );
+
+        // 删自己的不动别人的
+        assert_eq!(
+            storage
+                .delete_bookmark("alice", url, "同一标题")
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(storage
+            .list_bookmarks("alice", url)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(storage.list_bookmarks("bob", url).await.unwrap().len(), 1);
+
+        cleanup(storage, "bookmark-ns").await;
     }
 
     /// 分组：新建（自增 id）→ 列表 → 按 id 覆盖 → 书设分组
@@ -8264,6 +8427,102 @@ mod tests {
             .is_empty());
         assert_eq!(storage.logout_user("ghost").await.unwrap(), 0);
         cleanup(storage, "logout").await;
+    }
+
+    /// S7：登出 / 改密必须清空 token_map——否则其他设备的 token 仍然有效
+    #[tokio::test]
+    async fn test_logout_and_reset_clear_token_map() {
+        let storage = test_storage("tokenmap-clear").await;
+        storage
+            .insert_user(&User {
+                username: "alice".into(),
+                token: "t1".into(),
+                token_map: Some(serde_json::json!({ "dev2": 9_999_999_999_999i64 })),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        storage.logout_user("alice").await.unwrap();
+        let u = storage.find_user("alice").await.unwrap().unwrap();
+        assert!(u.token.is_empty());
+        assert!(
+            crate::model::user::token_map_list(&u.token_map).is_empty(),
+            "登出应清空 token_map"
+        );
+
+        // 改密同理：先塞回一个设备 token
+        sqlx::query("UPDATE users SET token = 't9', token_map = ?1 WHERE username = 'alice'")
+            .bind(r#"{"dev3": 9999999999999}"#)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        storage
+            .reset_user_password("alice", "s2", "enc2")
+            .await
+            .unwrap();
+        let u = storage.find_user("alice").await.unwrap().unwrap();
+        assert!(u.token.is_empty());
+        assert!(
+            crate::model::user::token_map_list(&u.token_map).is_empty(),
+            "改密应清空 token_map"
+        );
+
+        cleanup(storage, "tokenmap-clear").await;
+    }
+
+    /// 建号必须落下 disabled / token_map：INSERT OR REPLACE 整行覆盖，
+    /// 少这两列会让「创建即停用」失效、让恢复备份把多端会话清空
+    #[tokio::test]
+    async fn test_insert_user_persists_disabled_and_token_map() {
+        let storage = test_storage("insert-disabled").await;
+        storage
+            .insert_user(&User {
+                username: "alice".into(),
+                disabled: true,
+                token_map: Some(serde_json::json!({ "dev2": 9_999_999_999_999i64 })),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let u = storage.find_user("alice").await.unwrap().unwrap();
+        assert!(u.disabled, "建号带 disabled:true 应生效");
+        assert_eq!(
+            crate::model::user::token_map_list(&u.token_map).len(),
+            1,
+            "建号带的 token_map 不应被丢掉"
+        );
+        cleanup(storage, "insert-disabled").await;
+    }
+
+    /// S9：时间戳更旧的个人配置不得覆盖较新的（廉价版：不报 409，只是丢弃旧写）
+    #[tokio::test]
+    async fn test_user_config_older_updated_at_not_overwrite() {
+        let storage = test_storage("usercfg-ts").await;
+        storage
+            .save_user_config("default", "global", r#"{"a":1}"#)
+            .await
+            .unwrap();
+        // 把库里时间戳推到很远的未来，模拟「离线旧配置回写」
+        sqlx::query(
+            "UPDATE user_config SET updated_at = ?1 WHERE user_namespace = 'default' AND ns = 'global'",
+        )
+        .bind(i64::MAX / 2)
+        .execute(&storage.pool)
+        .await
+        .unwrap();
+        storage
+            .save_user_config("default", "global", r#"{"a":2}"#)
+            .await
+            .unwrap();
+        let got = storage
+            .get_user_config("default", "global")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(got.contains("\"a\":1"), "旧时间戳不应覆盖: {got}");
+
+        cleanup(storage, "usercfg-ts").await;
     }
 
     /// GAP 59：登录追加 token（token_map 上限 5、去重）；登出仅移除当前设备 token

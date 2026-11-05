@@ -5219,7 +5219,7 @@ async fn collect_export_chapters(
         let book = shelf.ok_or_else(|| "书籍不存在（请先加入书架）".to_string())?;
         let rows = state
             .storage
-            .list_chapters(url)
+            .list_chapters_ns(ns, url)
             .await
             .map_err(|e| format!("读取章节失败: {e}"))?;
         let mut chapters = Vec::with_capacity(rows.len());
@@ -5651,7 +5651,8 @@ async fn cache_book_sse(
     if task_id.is_empty() {
         return sse_error(ReturnData::err("参数错误"));
     }
-    let progress = match crate::service::cache_job::progress_of_key(&task_id) {
+    // S5：taskId 也按命名空间隔离——他人 taskId 查不到
+    let progress = match crate::service::cache_job::progress_of_key(&namespace, &task_id) {
         Some(p) => p,
         None if !has_task_id && !url.is_empty() => {
             // P0（legacy cacheBookSSE 自执行语义）：仅带 url 且无运行中任务时
@@ -5723,7 +5724,7 @@ async fn cancel_cache_book(
     headers: HeaderMap,
     body: Option<axum::body::Bytes>,
 ) -> Json<ReturnData> {
-    let _namespace = match resolve_namespace(&state, &params, &headers).await {
+    let namespace = match resolve_namespace(&state, &params, &headers).await {
         Ok(ns) => ns,
         Err(ret) => return Json(ret),
     };
@@ -5734,7 +5735,7 @@ async fn cancel_cache_book(
     if task_id.is_empty() {
         return Json(ReturnData::err("参数错误"));
     }
-    let cancelled = crate::service::cache_job::cancel_key(&task_id);
+    let cancelled = crate::service::cache_job::cancel_key(&namespace, &task_id);
     Json(ReturnData::ok(json!({ "cancelled": cancelled })))
 }
 
@@ -5948,7 +5949,11 @@ async fn refresh_local_book(
         .iter()
         .map(|c| (c.title.clone(), c.content.clone()))
         .collect();
-    if let Err(e) = state.storage.save_chapters(&url, &pairs).await {
+    if let Err(e) = state
+        .storage
+        .save_chapters_ns(&namespace, &url, &pairs)
+        .await
+    {
         tracing::error!("refreshLocalBook 章节入库失败: {e}");
         return Json(ReturnData::err("刷新失败"));
     }
@@ -8122,7 +8127,9 @@ pub(crate) async fn resolve_current_user(
     }
     match state.storage.find_user(username).await {
         Ok(Some(user)) => {
-            let token_ok = (!user.token.is_empty() && user.token == token)
+            // S8：常量时间比较（普通 == 会在首个不同字节处返回，可被逐字节探测）
+            let token_ok = (!user.token.is_empty()
+                && crate::util::constant_time::ct_eq(&user.token, token))
                 || crate::model::user::token_map_valid(&user.token_map, token, now_millis());
             if !token_ok {
                 return Err(login_required());
@@ -8311,6 +8318,11 @@ async fn opds_ns(
             // 系统用户账号（users 表；argon2id 或 legacy 双 md5——统一校验，MD5 通过自动升级）
             if let Ok(Some(user)) = state.storage.find_user(username).await {
                 if crate::util::password::verify_password(&state.storage, &user, password).await {
+                    // S6：停用账号不能凭 Basic 继续认证（与 /reader3/login 口径一致，
+                    // 统一 401，不额外泄露账号状态）
+                    if user.disabled {
+                        return Err(opds_unauthorized());
+                    }
                     crate::util::login_limit::reset(&user.username, client_ip);
                     return Ok(user.username);
                 }
@@ -9161,6 +9173,9 @@ async fn save_book_progress(
         .update_book_progress(&namespace, &book_url, title.as_deref(), index, pos, time)
         .await
     {
+        // S10：0 = 本次 durChapterTime 比库里的旧（被更新的记录更新）→ 幂等跳过。
+        // 书还在书架上时不算失败，只是没写入（旧客户端/多端乱序同步的常态）
+        Ok(0) if old.is_some() => Json(ReturnData::ok(serde_json::Value::Null)),
         Ok(0) => Json(ReturnData::err("书籍未加入书架")),
         Ok(_) => {
             // 增量累计阅读时长/字数到 reading_stats（今日行）
@@ -10476,7 +10491,7 @@ async fn graph_sse(
     headers: HeaderMap,
     body: Option<axum::body::Bytes>,
 ) -> Response {
-    let _namespace = match resolve_namespace(&state, &params, &headers).await {
+    let namespace = match resolve_namespace(&state, &params, &headers).await {
         Ok(ns) => ns,
         Err(ret) => return sse_error(ret),
     };
@@ -10488,7 +10503,8 @@ async fn graph_sse(
     if url.trim().is_empty() {
         return sse_error(ReturnData::err("参数错误"));
     }
-    let Some(progress) = crate::service::graph::progress_of(&url) else {
+    // S5：按 (ns, url) 查——同 url 的他人任务不可见
+    let Some(progress) = crate::service::graph::progress_of(&namespace, &url) else {
         return sse_error(ReturnData::err("这本书还没有生成任务（先调用 graphStart）"));
     };
 
@@ -10540,7 +10556,7 @@ async fn graph_cancel(
     headers: HeaderMap,
     body: Option<axum::body::Bytes>,
 ) -> Json<ReturnData> {
-    let _namespace = match resolve_namespace(&state, &params, &headers).await {
+    let namespace = match resolve_namespace(&state, &params, &headers).await {
         Ok(ns) => ns,
         Err(ret) => return Json(ret),
     };
@@ -10551,7 +10567,8 @@ async fn graph_cancel(
     if url.trim().is_empty() {
         return Json(ReturnData::err("参数错误"));
     }
-    let cancelled = crate::service::graph::cancel(&url);
+    // S5：只能取消本命名空间的任务
+    let cancelled = crate::service::graph::cancel(&namespace, &url);
     Json(ReturnData::ok(json!({ "cancelled": cancelled })))
 }
 
@@ -12071,7 +12088,7 @@ async fn get_chapter_list_by_rule(
                 // 无关联文件（已迁移 local:// DB 书）→ 章节表现状预览
                 match state
                     .storage
-                    .list_chapters_with_word_count(&bk.book_url)
+                    .list_chapters_with_word_count_ns(&namespace, &bk.book_url)
                     .await
                 {
                     Ok(rows) if !rows.is_empty() => rows
@@ -13006,6 +13023,12 @@ async fn scan_local_book_dir(
         hasher.update(abs.as_bytes());
         let id = format!("{:x}", hasher.finalize());
         let book_url = format!("local://store/{id}");
+        // S11：批量导入逐个校验配额，满了就停（后面的文件必然也失败）
+        if let Err(ret) = ensure_book_quota(&state, &namespace, &book_url).await {
+            failed += 1;
+            errors.push(json!({ "name": file_name, "error": ret.error_msg }));
+            break;
+        }
         let ext = crate::service::local_book::file_ext(&file_name);
         let (book_name, book_author) = local_book_display_meta(&file_name, &ext, &imported_book);
         let book = crate::model::book_chapter::BookInfo {
@@ -13189,6 +13212,10 @@ async fn upload_local_book(
         ..Default::default()
     };
 
+    // S11：上传导入同样受书籍数上限约束
+    if let Err(ret) = ensure_book_quota(&state, &namespace, &book_url).await {
+        return Json(ret);
+    }
     if let Err(e) = state
         .storage
         .save_local_book(&namespace, &book, &imported)
@@ -13394,6 +13421,23 @@ fn resolve_loc_book_file(
     }
 }
 
+/// P0-1：文件型本地书路径是否属于该命名空间（必须在 `storage_dir/data/<ns>/` 之下）。
+///
+/// 只认路径归属、不查 books 表：legacy 书的 book_url 与磁盘路径未必逐字节一致
+/// （迁移/改名后对不上），用 find_book 做闸门会误杀正常阅读；而 `resolve_loc_book_file`
+/// 只保证不逃出 storage_dir 根，根下所有用户目录都在里面——所以必须再按 ns 收一层。
+fn loc_file_owned_by(storage_dir: &std::path::Path, ns: &str, book_part: &str) -> bool {
+    let ns = if ns.is_empty() { "default" } else { ns };
+    let Some(abs) = resolve_loc_book_file(storage_dir, book_part) else {
+        return false;
+    };
+    let root = storage_dir.join("data").join(ns);
+    let Ok(root) = root.canonicalize() else {
+        return false;
+    };
+    abs.starts_with(&root)
+}
+
 /// legacy 本地书目录：toc_url 是分章正则（或空）——查书架定位 TXT 文件 → 按规则分章
 async fn get_book_toc_loc_book(
     state: &AppState,
@@ -13415,7 +13459,11 @@ async fn get_book_toc_loc_book(
     let book_url = &book.book_url;
     tracing::debug!("loc_book toc: req={req_url} matched={book_url}");
     // GAP 171：已迁移（migrateLocBook）的书——章节表命中即 DB 直读（含字数）
-    if let Ok(chapters) = state.storage.list_chapters_with_word_count(book_url).await {
+    if let Ok(chapters) = state
+        .storage
+        .list_chapters_with_word_count_ns(namespace, book_url)
+        .await
+    {
         if !chapters.is_empty() {
             return toc_json_from_chapters(book_url, &chapters);
         }
@@ -13469,10 +13517,19 @@ async fn get_book_toc_loc_book(
 /// 文件型本地书目录：按扩展名解析（TXT 用用户规则）→ 章节列表（chapterUrl = bookUrl#index）
 async fn get_book_toc_file(state: &AppState, ns: &str, book_url: &str) -> Option<Json<ReturnData>> {
     // GAP 171：已迁移（migrateLocBook）的书——章节表命中即 DB 直读（含字数）
-    if let Ok(chapters) = state.storage.list_chapters_with_word_count(book_url).await {
+    if let Ok(chapters) = state
+        .storage
+        .list_chapters_with_word_count_ns(ns, book_url)
+        .await
+    {
         if !chapters.is_empty() {
             return toc_json_from_chapters(book_url, &chapters);
         }
+    }
+    // P0-1：文件必须属于本命名空间（storage_dir/data/<ns>/ 之下）
+    if !loc_file_owned_by(&state.storage.config.storage_dir(), ns, book_url) {
+        tracing::debug!("loc book toc: 跨命名空间路径被拒 [{ns}] {book_url}");
+        return None;
     }
     // 优先严格路径（防穿越），失败回退 legacy 目录式 index.epub 定位
     let path = resolve_storage_path(&state.storage.config.storage_dir(), book_url)
@@ -13540,6 +13597,12 @@ async fn get_book_content_file(
     let index: i64 = idx_part.parse().ok()?;
     // epubContent=1 仅对 EPUB 生效（legacy epubContent 语义；其余格式走纯文本）
     let is_epub = epub_content && crate::service::local_book::file_ext(book_part) == "epub";
+    // P0-1：路径必须落在 storage_dir/data/<本 ns>/ 之内——否则 B 用户能拿
+    // `storage/data/testuser01/...` 直读 A 的文件（resolve_loc_book_file 只挡逃出 storage 根）
+    if !loc_file_owned_by(&state.storage.config.storage_dir(), ns, book_part) {
+        tracing::debug!("loc book content: 跨命名空间路径被拒 [{ns}] {book_part}");
+        return None;
+    }
     let shelf = state.storage.find_book(ns, book_part).await.ok().flatten();
     // 非文本文型分派（legacy getBookContent 漫画/PDF 页图模式）——优先于文本通道
     if let Some(ret) = local_book_image_content(state, ns, book_part, index, shelf.as_ref()).await {
@@ -13592,12 +13655,12 @@ async fn get_book_content_file(
 /// 本地书目录（local://book_id/toc）
 async fn get_book_toc_local(
     state: &AppState,
-    _namespace: &str,
+    ns: &str,
     book_url: &str,
 ) -> Option<Json<ReturnData>> {
     let chapters = state
         .storage
-        .list_chapters_with_word_count(book_url)
+        .list_chapters_with_word_count_ns(ns, book_url)
         .await
         .ok()?;
     let list: Vec<serde_json::Value> = chapters
@@ -13662,6 +13725,35 @@ fn wrap_epub_html(text: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!("<html><body>{html}</body></html>")
+}
+
+/// S11：本地书导入也要吃书籍数上限（与 saveBook 同口径：limit<=0 不限制；
+/// 已在书架上的同一本书重导入不占新名额）。
+async fn ensure_book_quota(state: &AppState, ns: &str, book_url: &str) -> Result<(), ReturnData> {
+    if state
+        .storage
+        .find_book(ns, book_url)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        return Ok(());
+    }
+    let Some(limit) = state.storage.book_limit_for(ns).await.ok().flatten() else {
+        return Ok(());
+    };
+    if limit <= 0 {
+        return Ok(());
+    }
+    let count = state.storage.count_books_for_user(ns).await.map_err(|e| {
+        tracing::error!("统计书籍数失败: {e}");
+        ReturnData::err("系统错误")
+    })?;
+    if count >= limit {
+        return Err(ReturnData::err("你已达到书籍数上限，请联系管理员"));
+    }
+    Ok(())
 }
 
 /// 本地书源文件定位（漫画页图解压用）：
@@ -16936,6 +17028,52 @@ mod tests {
         cleanup(state, dir).await;
     }
 
+    /// P0-1：文件型本地书通道必须校验路径的命名空间归属
+    /// （原实现只挡「逃出 storage 根」，B 用户能拿 storage/data/testuser01/... 直读 A 的文件）
+    #[tokio::test]
+    async fn test_loc_book_file_channel_rejects_cross_namespace_path() {
+        let (state, dir) = test_state("locnsfile").await;
+        let storage_dir = state.storage.config.storage_dir();
+        let a_dir = storage_dir.join("data").join("userA");
+        let b_dir = storage_dir.join("data").join("userB");
+        std::fs::create_dir_all(&a_dir).unwrap();
+        std::fs::create_dir_all(&b_dir).unwrap();
+        std::fs::write(a_dir.join("x.txt"), "SECRET_A_TEXT").unwrap();
+        std::fs::write(b_dir.join("x.txt"), "SECRET_B_TEXT").unwrap();
+
+        // ① 跨命名空间：userA 传 userB 的路径 → 必须拿不到
+        assert!(
+            get_book_content_file(&state, "userA", "storage/data/userB/x.txt#0", false)
+                .await
+                .is_none(),
+            "跨命名空间正文路径必须被拒"
+        );
+        assert!(
+            get_book_toc_file(&state, "userA", "storage/data/userB/x.txt")
+                .await
+                .is_none(),
+            "跨命名空间目录路径必须被拒"
+        );
+
+        // ② 本命名空间：正常读到正文（防止修完把正常阅读打死）
+        let ret = get_book_content_file(&state, "userA", "storage/data/userA/x.txt#0", false)
+            .await
+            .expect("本命名空间正文应可读");
+        let content = ret.0.data["content"].as_str().unwrap_or_default();
+        assert!(
+            content.contains("SECRET_A_TEXT"),
+            "本命名空间应读到自己的正文: {content}"
+        );
+        assert!(
+            get_book_toc_file(&state, "userA", "storage/data/userA/x.txt")
+                .await
+                .is_some(),
+            "本命名空间目录应可解析"
+        );
+
+        cleanup(state, dir).await;
+    }
+
     /// 书源导出：attachment + 内容为当前命名空间书源 JSON
     #[tokio::test]
     async fn test_export_book_sources() {
@@ -19681,6 +19819,36 @@ mod tests {
         .expect("禁用独立账号后系统用户应通过");
         assert_eq!(ns, "alice");
 
+        // S6：停用账号即使密码正确也拿不到命名空间（否则停用形同虚设）
+        state
+            .storage
+            .update_user_permissions(
+                "alice",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(true),
+            )
+            .await
+            .unwrap();
+        let ret = opds_ns(
+            &state,
+            &basic("alice", "pw123456"),
+            &HashMap::new(),
+            "198.51.100.61",
+        )
+        .await;
+        assert!(ret.is_err(), "停用账号的 OPDS Basic 认证必须失败");
+        assert_eq!(
+            ret.unwrap_err().status(),
+            StatusCode::UNAUTHORIZED,
+            "失败形态应与认证失败一致（不泄露停用状态）"
+        );
+
         cleanup(state, dir).await;
     }
 
@@ -21032,11 +21200,15 @@ mod tests {
         assert!(ret.0.data["started"].as_bool().unwrap());
         // 等待完成
         assert!(
-            crate::service::cache_job::wait_finished(book_url, std::time::Duration::from_secs(5))
-                .await,
+            crate::service::cache_job::wait_finished(
+                "default",
+                book_url,
+                std::time::Duration::from_secs(5)
+            )
+            .await,
             "任务应在 5s 内完成"
         );
-        let p = crate::service::cache_job::progress_of(book_url).unwrap();
+        let p = crate::service::cache_job::progress_of("default", book_url).unwrap();
         let p = p.lock().unwrap_or_else(|e| e.into_inner());
         assert!(p.finished);
         assert_eq!(p.total, 2);
@@ -21179,11 +21351,15 @@ mod tests {
         .await;
         assert!(ret.0.is_success, "{}", ret.0.error_msg);
         assert!(
-            crate::service::cache_job::wait_finished(&book_url, std::time::Duration::from_secs(10))
-                .await,
+            crate::service::cache_job::wait_finished(
+                "default",
+                &book_url,
+                std::time::Duration::from_secs(10)
+            )
+            .await,
             "书源书缓存应在 10s 内完成"
         );
-        let p = crate::service::cache_job::progress_of(&book_url).unwrap();
+        let p = crate::service::cache_job::progress_of("default", &book_url).unwrap();
         let p = p.lock().unwrap_or_else(|e| e.into_inner());
         assert!(p.finished, "任务应结束");
         assert_eq!(p.total, 2);
@@ -21212,7 +21388,7 @@ mod tests {
             Some("正文二。")
         );
         // 清理任务表
-        crate::service::cache_job::cancel(&book_url);
+        crate::service::cache_job::cancel("default", &book_url);
         cleanup(state, dir).await;
     }
 
@@ -21268,7 +21444,7 @@ mod tests {
         // 本地书任务立即结束（章节已在库）；轮询等待 finished
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            let p = crate::service::cache_job::progress_of_key(&task_id)
+            let p = crate::service::cache_job::progress_of_key("default", &task_id)
                 .map(|p| p.lock().unwrap_or_else(|e| e.into_inner()).clone());
             if let Some(p) = p {
                 if p.finished {
@@ -21329,7 +21505,7 @@ mod tests {
         assert_eq!(ret.0.error_msg, "缓存范围参数错误");
 
         // 清理任务表
-        crate::service::cache_job::cancel_key(&task_id);
+        crate::service::cache_job::cancel_key("default", &task_id);
         cleanup(state, dir).await;
     }
 
@@ -21377,7 +21553,7 @@ mod tests {
         assert_eq!(task_id, "local://cache-range-json#0-1");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            let p = crate::service::cache_job::progress_of_key(&task_id)
+            let p = crate::service::cache_job::progress_of_key("default", &task_id)
                 .map(|p| p.lock().unwrap_or_else(|e| e.into_inner()).clone());
             if let Some(p) = p {
                 if p.finished {
@@ -21390,7 +21566,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
-        crate::service::cache_job::cancel_key(&task_id);
+        crate::service::cache_job::cancel_key("default", &task_id);
         cleanup(state, dir).await;
     }
 

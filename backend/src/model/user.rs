@@ -64,8 +64,10 @@ pub fn token_map_contains(token_map: &Option<serde_json::Value>, token: &str) ->
     token_map_list(token_map).iter().any(|t| t == token)
 }
 
-/// token 是否有效（含过期检查）：对象形态按过期时间戳判定（已过期 → false）；
-/// 数组形态（旧数据）无过期信息 → 视为有效。
+/// token 是否有效（含过期检查）：**只**认对象形态里的数字过期时间戳。
+/// S8：其它形态一律无效——字符串/对象/数组等值没有可判定的过期语义，放行等于
+/// 让手改或旧格式数据变成永不过期的 token；数组形态（更早的旧数据）同样没有
+/// 过期信息 → 按无效处理（用户重新登录即可拿到带 exp 的 token）。
 pub fn token_map_valid(token_map: &Option<serde_json::Value>, token: &str, now_ms: i64) -> bool {
     let Some(v) = token_map else { return false };
     match v {
@@ -73,11 +75,10 @@ pub fn token_map_valid(token_map: &Option<serde_json::Value>, token: &str, now_m
             Some(serde_json::Value::Number(n)) => {
                 n.as_i64().map(|exp| exp > now_ms).unwrap_or(false)
             }
-            // 无过期信息（非数字值/手改数据）→ 视为有效
-            Some(_) => true,
-            None => false,
+            // 非数字 exp（字符串/对象/数组/null）→ 无过期信息 → 无效
+            _ => false,
         },
-        _ => token_map_contains(token_map, token),
+        _ => false,
     }
 }
 
@@ -220,10 +221,13 @@ mod tests {
         let m = Some(json!({"fresh": now + 1000, "stale": now - 1000, "no_exp": "x"}));
         assert!(token_map_valid(&m, "fresh", now));
         assert!(!token_map_valid(&m, "stale", now), "过期 token 失效");
-        assert!(token_map_valid(&m, "no_exp", now), "无过期信息 → 视为有效");
+        assert!(
+            !token_map_valid(&m, "no_exp", now),
+            "S8：非数字 exp 无过期语义 → 一律无效（旧行为是视为有效，等于永不过期）"
+        );
         assert!(!token_map_valid(&m, "missing", now));
-        // 旧数组形态：无过期信息 → 视为有效
-        assert!(token_map_valid(&Some(json!(["t1"])), "t1", now));
+        // 旧数组形态：无过期信息 → 无效（重新登录即可）
+        assert!(!token_map_valid(&Some(json!(["t1"])), "t1", now));
     }
 
     #[test]

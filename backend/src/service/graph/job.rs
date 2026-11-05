@@ -60,9 +60,15 @@ pub struct JobOptions {
     pub max_batches: Option<usize>,
 }
 
-/// 内存任务表（book_url → 进度句柄）
+/// 内存任务表（`{ns}\u{{1}}{book_url}` → 进度句柄）
+/// S5：键必须带命名空间——只按 book_url 做键时，B 用户能读到/取消 A 用户的同 url 任务
 static GRAPH_TASKS: LazyLock<Mutex<HashMap<String, Arc<Mutex<GraphProgress>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 任务表键：命名空间 + 书 url（`\u{{1}}` 分隔，url 里不可能出现该控制字符）
+fn task_key(ns: &str, book_url: &str) -> String {
+    format!("{ns}\u{1}{book_url}")
+}
 
 /// 进程级 storage 句柄：`progress_of` 是同步签名，DB 回落要靠它。
 /// 由 graph 相关 handler 在入口处注册（同 `crawler::register_cookie_storage` 的做法）。
@@ -268,8 +274,9 @@ pub fn start_job(
     }
     register_storage(storage.clone());
 
+    let key = task_key(&ns, &book_url);
     // 同一本书已有在跑的任务 → 复用，绝不重复烧 token
-    if let Some(existing) = mem_progress(&book_url) {
+    if let Some(existing) = mem_progress(&key) {
         let (running_job, total_batches, done) = {
             let p = lock_progress(&existing);
             if is_terminal(&p.status) {
@@ -359,11 +366,11 @@ pub fn start_job(
     let total_hint = progress_batches(&progress);
     {
         let mut map = lock_tasks();
-        map.insert(book_url.clone(), progress.clone());
+        map.insert(key.clone(), progress.clone());
     }
     // 先落行（前端立刻能看到任务存在），失败就地清理内存态
     if let Err(e) = block_on(storage.graph_job_create(&job_id, &ns, &book_url, total_hint as i64)) {
-        lock_tasks().remove(&book_url);
+        lock_tasks().remove(&key);
         return Err(anyhow!("创建任务失败: {e}"));
     }
 
@@ -433,25 +440,27 @@ fn load_covered(
 }
 
 /// 查询进度：优先内存态；进程重启后回落到 `book_graph_jobs` 最近一行
-pub fn progress_of(book_url: &str) -> Option<Arc<Mutex<GraphProgress>>> {
-    if let Some(p) = mem_progress(book_url) {
+/// S5：按 (ns, book_url) 查——不同用户的同 url 书互不可见
+pub fn progress_of(ns: &str, book_url: &str) -> Option<Arc<Mutex<GraphProgress>>> {
+    if let Some(p) = mem_progress(&task_key(ns, book_url)) {
         return Some(p);
     }
     let storage = GRAPH_STORAGE
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .clone()?;
-    let row = block_on(load_latest_progress(&storage, book_url))?;
+    let row = block_on(load_latest_progress(&storage, ns, book_url))?;
     Some(Arc::new(Mutex::new(row)))
 }
 
-fn mem_progress(book_url: &str) -> Option<Arc<Mutex<GraphProgress>>> {
-    lock_tasks().get(book_url).cloned()
+/// 按已拼好的表键取内存任务（键见 [`task_key`]）
+fn mem_progress(key: &str) -> Option<Arc<Mutex<GraphProgress>>> {
+    lock_tasks().get(key).cloned()
 }
 
 /// 取消任务（置 cancelled 标记）；返回是否命中。不删表项——SSE 还要读到 cancelled 收尾。
-pub fn cancel(book_url: &str) -> bool {
-    let Some(p) = mem_progress(book_url) else {
+pub fn cancel(ns: &str, book_url: &str) -> bool {
+    let Some(p) = mem_progress(&task_key(ns, book_url)) else {
         return false;
     };
     let mut p = lock_progress(&p);
@@ -837,13 +846,18 @@ async fn set_total_batches(storage: &Storage, job_id: &str, total: usize) -> Res
 ///
 /// 注意：DB 里 queued/running 但内存里没有对应任务 = 上次进程异常中断（含 panic），
 /// 这类行若原样回显，前端 SSE 会永远等一个不会结束的任务 → 这里按 failed 回显。
-async fn load_latest_progress(storage: &Storage, book_url: &str) -> Option<GraphProgress> {
+async fn load_latest_progress(
+    storage: &Storage,
+    ns: &str,
+    book_url: &str,
+) -> Option<GraphProgress> {
     let row = sqlx::query_as::<_, (String, String, i64, i64, i64, i64, i64, Option<String>)>(
         "SELECT job_id, status, total_batches, done_batches, chapters_scanned, prompt_tokens, \
          completion_tokens, error FROM book_graph_jobs WHERE book_url = ?1 \
-         ORDER BY created_at DESC LIMIT 1",
+         AND user_namespace = ?2 ORDER BY created_at DESC LIMIT 1",
     )
     .bind(book_url)
+    .bind(ns)
     .fetch_optional(&storage.pool)
     .await
     .ok()
@@ -864,9 +878,10 @@ async fn load_latest_progress(storage: &Storage, book_url: &str) -> Option<Graph
     }
     let (characters, relations) = sqlx::query_as::<_, (i64, i64)>(
         "SELECT characters, relations FROM book_graphs WHERE book_url = ?1 \
-         ORDER BY updated_at DESC LIMIT 1",
+         AND user_namespace = ?2 ORDER BY updated_at DESC LIMIT 1",
     )
     .bind(book_url)
+    .bind(ns)
     .fetch_optional(&storage.pool)
     .await
     .ok()
@@ -968,7 +983,10 @@ mod tests {
             err.to_string().contains("已缓存章节"),
             "错误文案应说明缺已缓存章节: {err}"
         );
-        assert!(mem_progress(url).is_none(), "失败时不应留下内存任务");
+        assert!(
+            mem_progress(&task_key("default", url)).is_none(),
+            "失败时不应留下内存任务"
+        );
         storage.pool.close().await;
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -1077,7 +1095,7 @@ mod tests {
             "全覆盖且成品已在，必须不启动任务"
         );
         assert!(
-            mem_progress(url).is_none(),
+            mem_progress(&task_key(ns, url)).is_none(),
             "已是最新时不该留内存任务（否则 SSE 会挂住）"
         );
 
@@ -1107,8 +1125,9 @@ mod tests {
     /// 任务表命中/未命中 + 取消语义
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn progress_of_hits_and_misses() {
+        let ns = "default";
         let url = "https://example.com/book/progress-hit";
-        assert!(progress_of(url).is_none(), "未登记的书应查不到");
+        assert!(progress_of(ns, url).is_none(), "未登记的书应查不到");
         let progress = Arc::new(Mutex::new(GraphProgress {
             job_id: "job-1".to_string(),
             status: ST_RUNNING.to_string(),
@@ -1116,9 +1135,9 @@ mod tests {
             done_batches: 2,
             ..Default::default()
         }));
-        lock_tasks().insert(url.to_string(), progress);
+        lock_tasks().insert(task_key(ns, url), progress);
 
-        let hit = progress_of(url).expect("应命中内存任务表");
+        let hit = progress_of(ns, url).expect("应命中内存任务表");
         {
             let p = lock_progress(&hit);
             assert_eq!(p.job_id, "job-1");
@@ -1128,13 +1147,16 @@ mod tests {
         }
 
         // 在跑的任务可取消；取消后是终态，不能再取消
-        assert!(cancel(url), "running 任务应可取消");
+        assert!(cancel(ns, url), "running 任务应可取消");
         assert!(
-            progress_of(url).is_some_and(|p| lock_progress(&p).status == ST_CANCELLED),
+            progress_of(ns, url).is_some_and(|p| lock_progress(&p).status == ST_CANCELLED),
             "取消后应能读到 cancelled 终态"
         );
-        assert!(!cancel(url), "已终态的任务不算命中");
-        lock_tasks().remove(url);
+        assert!(!cancel(ns, url), "已终态的任务不算命中");
+        // 别的命名空间看不到、也取消不了同 url 的任务（S5 隔离）
+        assert!(progress_of("other", url).is_none(), "跨命名空间不应命中");
+        assert!(!cancel("other", url), "跨命名空间不应能取消");
+        lock_tasks().remove(&task_key(ns, url));
     }
 
     /// 终态判定

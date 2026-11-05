@@ -98,9 +98,12 @@ export const apiClient: AxiosInstance = axios.create({
 apiClient.interceptors.request.use((config) => {
   const token = getAccessToken();
   const params = (config.params ?? {}) as Record<string, unknown>;
-  // 调用方显式传入的 accessToken 优先
+  // token 走请求头而非 query: query 会进 access log / Referer / 浏览器历史 / 反代日志.
+  // 后端 access_token_of 依次取 query accessToken → 头 accessToken → Authorization: Bearer.
+  // 调用方显式传入的 params.accessToken 保持原样, 不覆盖 (query 优先级高于头).
+  // 用 headers.set 而非整体赋值, 避免冲掉实例/单次请求的默认 headers.
   if (token !== null && params.accessToken === undefined) {
-    config.params = { ...params, accessToken: token };
+    config.headers.set("accessToken", token);
   }
   return config;
 });
@@ -135,7 +138,7 @@ export interface ApiParams {
 export interface ApiRequestConfig {
   timeout?: number;
   signal?: AbortSignal;
-  /** 额外 query 参数(如管理接口的 secureKey), 与 accessToken 一并发送 */
+  /** 额外 query 参数(如管理接口的 secureKey); accessToken 由拦截器走请求头, 不在这里 */
   params?: ApiParams;
 }
 
