@@ -41,4 +41,18 @@ fi
 
 docker compose up -d
 docker compose ps
-echo "部署完成: 4396 -> 容器 8080; 宿主 caddy root 指向 $(pwd)/web-dist"
+
+# 宿主 caddy 反代的是 READER_PORT 这个口(见 .env); 端口和 caddy 侧对不上就是 502,
+# 所以起完直接探一次本地 /health, 别等用户来报
+PORT="$(grep -E '^READER_PORT=' .env 2>/dev/null | tail -1 | cut -d= -f2)"
+PORT="${PORT:-8080}"
+for i in $(seq 1 20); do
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "http://127.0.0.1:$PORT/health" || true)"
+  [ "$code" = "200" ] && break
+  sleep 1
+done
+if [ "$code" = "200" ]; then
+  echo "部署完成: 宿主 $PORT -> 容器 8080, /health 200; 宿主 caddy root 指向 $(pwd)/web-dist"
+else
+  echo "警告: 宿主 $PORT /health 返回 ${code:-无响应} —— 检查 .env 的 READER_PORT 是否与 caddy 反代口一致" >&2
+fi
