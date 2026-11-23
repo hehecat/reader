@@ -59,7 +59,6 @@ pnpm build                          # tsc -b && vite build
 - 测试与源码同文件的 `#[cfg(test)]` 模块；跨模块集成测试在 `backend/tests/`。
 - 存储表结构与高频索引集中在 `backend/src/storage/schema.rs`（纯净建表，已移除旧版 JSON 迁移器）。
 - 提交信息说清「为什么」，不要只写「update」。
-- 大改动前先看 `backend/BACKEND-NOTES.md`（v5 时代设计背景，与现状冲突时以代码为准）。
 
 ## 常见坑
 

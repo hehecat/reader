@@ -23,18 +23,14 @@ services:
       # 搜索抓取重试次数(死源排空速度); 源站普遍慢时可下调
       READER_HTTP_RETRIES: "1"
       READER_BROWSER_FIRST: "0"
-      # 多用户开关: 默认启用多用户模式; 可经 .env 覆盖
-      READER_APP_MODE: "${READER_APP_MODE:-multi}"
-      READER_APP_SECURE: "${READER_APP_SECURE:-true}"
-      # secure 模式必填(可经 .env 覆盖): 注册邀请码
+      # SQLite WAL 连接池上限
+      READER_DB_MAX_CONNECTIONS: "${READER_DB_MAX_CONNECTIONS:-24}"
+      # 默认单用户免登录；多用户安全模式可在 .env 设为 multi + true 并填写邀请码
+      READER_APP_MODE: "${READER_APP_MODE:-single}"
+      READER_APP_SECURE: "${READER_APP_SECURE:-false}"
       READER_APP_INVITECODE: "${READER_APP_INVITECODE:-}"
       TZ: Asia/Shanghai
-      # AI 阅读助手(OpenAI 兼容端点; 默认关闭 = 不填 BASE_URL/KEY 则面板不可用)
-      READER_AI_BASE_URL: "${READER_AI_BASE_URL:-}"
-      READER_AI_API_KEY: "${READER_AI_API_KEY:-}"
-      READER_AI_MODEL: "${READER_AI_MODEL:-deepseek-v4.1-flash}"
-      READER_AI_MAX_TOKENS: "${READER_AI_MAX_TOKENS:-3500}"
-    # 需要接入外部网关(如 octopus)或固定内网解析时, 写进
+    # 需要接入外部网关或固定内网解析时, 写进
     # docker-compose.override.yml(已 gitignore, 参考 docker-compose.override.yml.example)
     restart: unless-stopped
 
