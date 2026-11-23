@@ -1,5 +1,0 @@
-allowBuilds:
-  esbuild: true
-minimumReleaseAgeExclude:
-  - '@types/react-dom@19.2.7'
-  - lucide-react@1.40.0

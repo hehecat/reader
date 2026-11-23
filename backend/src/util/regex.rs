@@ -153,20 +153,87 @@ impl Regex {
         }
     }
 
-    /// 全部替换（fancy 引擎替换出错 → 原样返回）
+    /// 全部替换（fancy 引擎替换出错 → 原样返回；兼容 Java/legado `$1s` 数字组后紧跟字母/数字语法）
     pub fn replace_all<'t>(&'t self, text: &'t str, rep: &str) -> Cow<'t, str> {
+        let rep = normalize_java_replacement(rep);
         match &self.inner {
-            Inner::Std(re) => re.replace_all(text, rep),
-            Inner::Fancy(re) => re.try_replacen(text, 0, rep).unwrap_or(Cow::Borrowed(text)),
+            Inner::Std(re) => re.replace_all(text, rep.as_ref()),
+            Inner::Fancy(re) => re
+                .try_replacen(text, 0, rep.as_ref())
+                .unwrap_or(Cow::Borrowed(text)),
         }
     }
 
     /// 仅替换第一个匹配（legado `###` replaceFirst 语义；无匹配 → 原样返回）
     pub fn replace_first<'t>(&'t self, text: &'t str, rep: &str) -> Cow<'t, str> {
+        let rep = normalize_java_replacement(rep);
         match &self.inner {
-            Inner::Std(re) => re.replacen(text, 1, rep),
-            Inner::Fancy(re) => re.try_replacen(text, 1, rep).unwrap_or(Cow::Borrowed(text)),
+            Inner::Std(re) => re.replacen(text, 1, rep.as_ref()),
+            Inner::Fancy(re) => re
+                .try_replacen(text, 1, rep.as_ref())
+                .unwrap_or(Cow::Borrowed(text)),
         }
+    }
+
+    /// 返回首个匹配的原始切片 `group(0)`（供 legado `###` 提取替换语义使用）
+    pub fn find_str<'t>(&self, text: &'t str) -> Option<&'t str> {
+        match &self.inner {
+            Inner::Std(re) => re.find(text).map(|m| m.as_str()),
+            Inner::Fancy(re) => re.find(text).ok().flatten().map(|m| m.as_str()),
+        }
+    }
+}
+
+/// 将 Java/legado 替换串中的 `$1s` 归一为 Rust `regex`/`fancy-regex` 兼容的 `${1}s`：
+/// Rust `regex` 默认将 `$1s` 视作名为 `1s` 的捕获组从而替换为空串，而书源大量使用 `$1s.jpg`。
+fn normalize_java_replacement(rep: &str) -> Cow<'_, str> {
+    if !rep.contains('$') {
+        return Cow::Borrowed(rep);
+    }
+    let bytes = rep.as_bytes();
+    let mut out: Option<String> = None;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'$' && i + 1 < bytes.len() {
+            if bytes[i + 1] == b'$' {
+                if let Some(buf) = out.as_mut() {
+                    buf.push_str("$$");
+                }
+                i += 2;
+                continue;
+            }
+            if bytes[i + 1].is_ascii_digit() {
+                let mut end = i + 2;
+                while end < bytes.len() && bytes[end].is_ascii_digit() {
+                    end += 1;
+                }
+                let next_is_ident =
+                    end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_');
+                if next_is_ident {
+                    let buf = out.get_or_insert_with(|| {
+                        let mut s = String::with_capacity(rep.len() + 4);
+                        s.push_str(&rep[..i]);
+                        s
+                    });
+                    buf.push_str("${");
+                    buf.push_str(&rep[i + 1..end]);
+                    buf.push('}');
+                    i = end;
+                    continue;
+                }
+            }
+        }
+        if let Some(buf) = out.as_mut() {
+            let ch = rep[i..].chars().next().unwrap();
+            buf.push(ch);
+            i += ch.len_utf8();
+        } else {
+            i += rep[i..].chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    match out {
+        Some(s) => Cow::Owned(s),
+        None => Cow::Borrowed(rep),
     }
 }
 

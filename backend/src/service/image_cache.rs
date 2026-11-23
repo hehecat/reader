@@ -163,7 +163,7 @@ impl ImageCache {
     ) -> anyhow::Result<FetchOutcome> {
         let key = cache_key(ns, url);
         if self.max_bytes > 0 {
-            if let Some((bytes, ct)) = self.read_disk(&key) {
+            if let Some((bytes, ct)) = self.read_disk_async(&key).await {
                 return Ok((bytes, Some(ct.to_string()), 200, true));
             }
         }
@@ -177,7 +177,7 @@ impl ImageCache {
         let _guard = gate.lock().await;
         // 等待期间可能已被并发请求写入 → 再次查盘
         if self.max_bytes > 0 {
-            if let Some((bytes, ct)) = self.read_disk(&key) {
+            if let Some((bytes, ct)) = self.read_disk_async(&key).await {
                 return Ok((bytes, Some(ct.to_string()), 200, true));
             }
         }
@@ -186,7 +186,8 @@ impl ImageCache {
         if self.max_bytes > 0 {
             if let Ok((bytes, content_type, status)) = &result {
                 if *status == 200 {
-                    self.write_disk(&key, bytes, content_type.as_deref());
+                    self.write_disk_async(&key, bytes, content_type.as_deref())
+                        .await;
                 }
             }
         }
@@ -199,24 +200,23 @@ impl ImageCache {
         result.map(|(bytes, ct, status)| (bytes, ct, status, false))
     }
 
-    /// 读盘命中：索引查扩展名 → 读文件 → 刷新 LRU 时钟。
-    /// 文件读取在索引锁内完成（与 LRU 清理互斥，避免删读竞态）。
-    fn read_disk(&self, key: &str) -> Option<(Vec<u8>, &'static str)> {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let ext = state.entries.get(key).map(|e| e.ext.clone())?;
-        let path = self.dir.join(format!("{key}.{ext}"));
-        let bytes = std::fs::read(&path).ok()?;
-        // 命中：刷新 LRU 时钟
-        let now = self.clock.fetch_add(1, Ordering::Relaxed);
-        if let Some(e) = state.entries.get_mut(key) {
-            e.last_used = now;
-        }
+    /// 异步读盘命中：仅短时持锁查扩展名并刷新 LRU 时钟，文件读取走 `tokio::fs::read`
+    /// （文件由临时文件 + rename 原子落盘；若读前已被 LRU 清理则回退未命中重抓）。
+    async fn read_disk_async(&self, key: &str) -> Option<(Vec<u8>, &'static str)> {
+        let (path, ext) = {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let entry = state.entries.get_mut(key)?;
+            entry.last_used = self.clock.fetch_add(1, Ordering::Relaxed);
+            let ext = entry.ext.clone();
+            (self.dir.join(format!("{key}.{ext}")), ext)
+        };
+        let bytes = tokio::fs::read(&path).await.ok()?;
         Some((bytes, content_type_for_ext(&ext)))
     }
 
-    /// 写盘：白名单 Content-Type 才落盘；临时文件 + rename 原子写（读方永远见完整文件）；
-    /// 随后按容量 LRU 清理。
-    fn write_disk(&self, key: &str, bytes: &[u8], content_type: Option<&str>) {
+    /// 异步写盘：白名单 Content-Type 才落盘；临时文件 + rename 原子写（读方永远见完整文件）；
+    /// 随后按容量异步 LRU 清理。
+    async fn write_disk_async(&self, key: &str, bytes: &[u8], content_type: Option<&str>) {
         let Some(ext) = content_type.and_then(ext_for_content_type) else {
             return; // 非白名单类型：不缓存（原样透传）
         };
@@ -224,7 +224,7 @@ impl ImageCache {
         if (bytes.len() as u64) > self.max_bytes {
             return;
         }
-        if std::fs::create_dir_all(&self.dir).is_err() {
+        if tokio::fs::create_dir_all(&self.dir).await.is_err() {
             return;
         }
         let path = self.dir.join(format!("{key}.{ext}"));
@@ -233,33 +233,35 @@ impl ImageCache {
             std::process::id(),
             TMP_SEQ.fetch_add(1, Ordering::Relaxed)
         ));
-        if std::fs::write(&tmp, bytes).is_err() {
+        if tokio::fs::write(&tmp, bytes).await.is_err() {
             return;
         }
-        if std::fs::rename(&tmp, &path).is_err() {
-            let _ = std::fs::remove_file(&tmp);
+        if tokio::fs::rename(&tmp, &path).await.is_err() {
+            let _ = tokio::fs::remove_file(&tmp).await;
             return;
         }
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let now = self.clock.fetch_add(1, Ordering::Relaxed);
-        if let Some(old) = state.entries.insert(
-            key.to_string(),
-            CacheEntry {
-                size: bytes.len() as u64,
-                last_used: now,
-                ext: ext.to_string(),
-            },
-        ) {
-            state.total_bytes = state.total_bytes.saturating_sub(old.size);
+        {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let now = self.clock.fetch_add(1, Ordering::Relaxed);
+            if let Some(old) = state.entries.insert(
+                key.to_string(),
+                CacheEntry {
+                    size: bytes.len() as u64,
+                    last_used: now,
+                    ext: ext.to_string(),
+                },
+            ) {
+                state.total_bytes = state.total_bytes.saturating_sub(old.size);
+            }
+            state.total_bytes = state.total_bytes.saturating_add(bytes.len() as u64);
         }
-        state.total_bytes = state.total_bytes.saturating_add(bytes.len() as u64);
-        drop(state);
-        self.evict_lru();
+        self.evict_lru_async().await;
     }
 
-    /// 容量超限 → LRU 清理（最近最少使用：last_used 最小者先删），直到总字节 ≤ 上限
-    fn evict_lru(&self) {
+    /// 从内存索引摘除超出容量的最久未使用条目（锁内仅操作内存，无磁盘 I/O）
+    fn collect_lru_victims(&self) -> Vec<(String, String, PathBuf)> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut victims = Vec::new();
         while state.total_bytes > self.max_bytes {
             let victim = state
                 .entries
@@ -273,10 +275,28 @@ impl ImageCache {
                 .expect("victim 刚取自 entries，必然存在");
             state.total_bytes = state.total_bytes.saturating_sub(entry.size);
             let path = self.dir.join(format!("{victim}.{}", entry.ext));
+            victims.push((victim, entry.ext, path));
+        }
+        victims
+    }
+
+    /// 容量超限 → 异步 LRU 清理（锁外执行 `tokio::fs::remove_file`）
+    async fn evict_lru_async(&self) {
+        for (victim, ext, path) in self.collect_lru_victims() {
+            if tokio::fs::remove_file(&path).await.is_err() {
+                tracing::debug!("图片缓存 LRU 删除失败（可能已被外部清理）: {path:?}");
+            }
+            tracing::debug!("图片缓存 LRU 清理: {victim}.{ext}");
+        }
+    }
+
+    /// 容量超限 → 同步 LRU 清理（仅启动 `seed_from_disk` 同步构造阶段调用）
+    fn evict_lru_sync(&self) {
+        for (victim, ext, path) in self.collect_lru_victims() {
             if std::fs::remove_file(&path).is_err() {
                 tracing::debug!("图片缓存 LRU 删除失败（可能已被外部清理）: {path:?}");
             }
-            tracing::debug!("图片缓存 LRU 清理: {victim}.{}", entry.ext);
+            tracing::debug!("图片缓存 LRU 清理: {victim}.{ext}");
         }
     }
 
@@ -328,7 +348,7 @@ impl ImageCache {
             state.total_bytes = state.total_bytes.saturating_add(meta.len());
         }
         drop(state);
-        self.evict_lru();
+        self.evict_lru_sync();
     }
 }
 

@@ -32,7 +32,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend
-      # rust-embed 在编译期要求 #[folder] 目录存在；frontend/dist 不入库，
+      # rust-embed 在编译期要求 #[folder] 目录存在；frontend-v2/dist 不入库，
       # 这里放占位文件（与 Dockerfile builder 阶段同一手法），CI 不跑前端构建
       - name: 占位前端产物
         run: mkdir -p web-ui/dist && printf '<!doctype html><title>ci-placeholder</title>' > web-ui/dist/index.html
@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: frontend
+        working-directory: frontend-v2
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -59,7 +59,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
+          cache-dependency-path: frontend-v2/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       # build = tsc -b && vite build，顺带做类型检查

@@ -13,20 +13,18 @@ use rust_embed::RustEmbed;
 #[folder = "web-ui/dist/"]
 pub struct WebAssets;
 
-/// 取内嵌前端文件（rel 为去除首斜杠的路径；含 SPA index.html）
-pub fn get(rel: &str) -> Option<(Vec<u8>, &'static str)> {
+/// 精确读取内嵌前端文件（rel 为去除首斜杠的路径；缺失时返回 None，绝不把缺失的静态资源伪装成 index.html）
+pub fn get_exact(rel: &str) -> Option<(Vec<u8>, &'static str)> {
     let path = rel.trim_start_matches('/');
     if path.is_empty() {
         return index_html();
     }
-    let file = WebAssets::get(path).or_else(|| WebAssets::get(&format!("{path}/index.html")));
-    match file {
-        Some(f) => {
-            let mime = mime_for(path);
-            Some((f.data.into_owned(), mime))
-        }
-        None => index_html(),
-    }
+    WebAssets::get(path).map(|f| (f.data.into_owned(), mime_for(path)))
+}
+
+/// 兼容旧签名：等价于精确读取，找不到时再由路由层决定是返回 404 还是 SPA index.html
+pub fn get(rel: &str) -> Option<(Vec<u8>, &'static str)> {
+    get_exact(rel)
 }
 
 /// SPA 入口

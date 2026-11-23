@@ -60,6 +60,21 @@ pub fn to_webp(bytes: &[u8], quality: u8) -> Option<Vec<u8>> {
     Some(out.into_inner())
 }
 
+/// 异步 WebP 转码：将像素解码与无损 WebP 编码下沉到 Tokio 阻塞线程池，
+/// 避免在 async handler 中阻塞 worker 线程；已是 webp 或无效小输入直接快速返回。
+pub async fn to_webp_async(bytes: Vec<u8>, quality: u8) -> Option<Vec<u8>> {
+    if bytes.len() < 16 {
+        return None;
+    }
+    if &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return Some(bytes);
+    }
+    tokio::task::spawn_blocking(move || to_webp(&bytes, quality))
+        .await
+        .ok()
+        .flatten()
+}
+
 /// 是否 HEIC/HEIF 封面：扩展名或 Content-Type 任一命中即需转码。
 /// 两者都不可靠（源 URL 可能无扩展名、Content-Type 可能是 octet-stream），
 /// 任一命中即转 —— 转码失败由调用方降级，不会因此毁掉封面。
@@ -80,12 +95,18 @@ pub fn is_heif(ext: &str, content_type: Option<&str>) -> bool {
 /// 调用方应走 `spawn_blocking`。`heif-convert` 缺失或失败 → None。
 pub fn heif_to_jpeg(bytes: &[u8]) -> Option<Vec<u8>> {
     use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
+    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir();
-    let input = dir.join(format!("reader-cover-{}-{stamp}.heic", std::process::id()));
+    let input = dir.join(format!(
+        "reader-cover-{}-{stamp}-{seq}.heic",
+        std::process::id()
+    ));
     let output = input.with_extension("jpg");
     let result = (|| {
         let mut file = std::fs::File::create(&input).ok()?;
@@ -203,6 +224,28 @@ mod tests {
     fn test_to_webp_invalid_input() {
         assert!(to_webp(b"<html>not an image</html>", 80).is_none());
         assert!(to_webp(b"tiny", 80).is_none());
+    }
+
+    /// 异步 WebP 转码（spawn_blocking）：PNG 正常转码、已 webp 直通、无效输入返回 None
+    #[tokio::test]
+    async fn test_to_webp_async_from_png() {
+        let img = image::RgbaImage::from_pixel(4, 4, image::Rgba([30, 120, 200, 255]));
+        let mut png_buf = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut png_buf, image::ImageFormat::Png)
+            .expect("PNG 编码应成功");
+        let png = png_buf.into_inner();
+
+        let webp = to_webp_async(png, 80).await.expect("异步 webp 转码应成功");
+        assert_eq!(&webp[0..4], b"RIFF");
+        assert_eq!(&webp[8..12], b"WEBP");
+
+        // 已 webp 输入直通
+        let passthrough = to_webp_async(webp.clone(), 80)
+            .await
+            .expect("webp 直通应成功");
+        assert_eq!(passthrough, webp);
+
+        assert!(to_webp_async(b"tiny".to_vec(), 80).await.is_none());
     }
 
     /// 构造 WxH PNG（编码 4x4 后改写 IHDR 宽高字段并重算 CRC——不解码像素即可预检）

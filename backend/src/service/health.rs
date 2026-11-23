@@ -95,18 +95,17 @@ pub async fn check_source(_ns: &str, source: &BookSource) -> (bool, String) {
         .as_deref()
         .map(crawler::parse_header)
         .unwrap_or_default();
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .user_agent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36")
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => return (false, format!("客户端构建失败: {e}")),
-    };
+    let client = crawler::shared_http_client();
+    let req_timeout = Duration::from_secs(8);
     let req_headers = to_reqwest_headers(&headers);
 
     // HEAD 优先（轻量）
-    let head = client.head(base).headers(req_headers.clone()).send().await;
+    let head = client
+        .head(base)
+        .timeout(req_timeout)
+        .headers(req_headers.clone())
+        .send()
+        .await;
     if let Ok(resp) = head {
         let status = resp.status().as_u16();
         if status == 405 || status == 501 {
@@ -115,7 +114,12 @@ pub async fn check_source(_ns: &str, source: &BookSource) -> (bool, String) {
             return (true, format!("HEAD {status}"));
         } else {
             // 4xx/5xx：不视为“网络失效”，但按不可用处理（GET 兜底验证首页）
-            let get = client.get(base).headers(req_headers.clone()).send().await;
+            let get = client
+                .get(base)
+                .timeout(req_timeout)
+                .headers(req_headers.clone())
+                .send()
+                .await;
             return match get {
                 Ok(r) if r.status().as_u16() < 400 => {
                     (true, format!("GET {}", r.status().as_u16()))
@@ -126,7 +130,13 @@ pub async fn check_source(_ns: &str, source: &BookSource) -> (bool, String) {
         }
     }
     // GET 兜底
-    match client.get(base).headers(req_headers).send().await {
+    match client
+        .get(base)
+        .timeout(req_timeout)
+        .headers(req_headers)
+        .send()
+        .await
+    {
         Ok(resp) => {
             let status = resp.status().as_u16();
             if status < 400 {

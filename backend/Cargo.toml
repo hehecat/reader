@@ -5,6 +5,13 @@ edition = "2021"
 description = "阅读3服务器版 Rust 重构（API/数据兼容 legacy 分支，吸收 SQLite/多规则解析/书籍格式扩展）"
 license = "GPL-3.0"
 
+[features]
+default = ["dict", "camoufox"]
+# 离线词典查询与后台词库构建（可按需关闭以精简核心部署）
+dict = []
+# 外部 Camoufox 浏览器过盾与交互登录桥接（可按需关闭以精简核心部署）
+camoufox = []
+
 [dependencies]
 # Web
 axum = { version = "0.7", features = ["macros", "json", "multipart"] }
@@ -14,14 +21,11 @@ tower-http = { version = "0.5", features = ["cors", "trace", "fs", "compression-
 tower = "0.5"            # 中间件（Layer/Service trait——GAP 60 Cache-Control）
 http = "1"
 
-# 数据库（SQLite，兼容迁移自 JSON storage）
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate"] }
-
-# MongoDB 备份/恢复（backupToMongodb / restoreFromMongodb；默认 feature：rustls TLS + dns-resolver 支持 mongodb+srv://）
-mongodb = "3.8"
+# 数据库（SQLite）
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "macros"] }
 
 # HTTP 客户端（书源抓取）
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http3", "json", "gzip", "brotli", "deflate", "cookies", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "json", "gzip", "brotli", "deflate", "cookies", "stream"] }
 
 # 序列化/配置
 serde = { version = "1", features = ["derive"] }
@@ -37,15 +41,10 @@ sxd-document = "0.3"      # XPath（XML 文档）
 sxd-xpath = "0.4"         # XPath 求值
 boa_engine = "0.19"       # JS 引擎（纯 Rust，书源 JS 规则）
 
-# RSS
-feed-rs = "1"
-
-# Edge TTS（微软语音 WebSocket 合成）
-tokio-tungstenite = "0.24"
+# Edge TTS（微软语音 WebSocket 合成，需启用 rustls-tls-webpki-roots 支持 wss://）
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 
 # 工具
-# 系统监控（服务监控页：真实内存/CPU——Windows 不再全 0M；默认 features 含进程/CPU 采样）
-sysinfo = "0.30"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "registry"] }
 anyhow = "1"
@@ -66,35 +65,22 @@ urlencoding = "2"
 url = "2"
 futures = "0.3"
 rand = "0.8"
-once_cell = "1"
 encoding_rs = "0.8"       # 编码检测（兼容 EncodingDetect）
 chardetng = "0.1"         # 统计式编码探测（legacy ICU4J CharsetDetector 对应）
-zip = { version = "0.6", default-features = false, features = ["deflate"] }  # EPUB/CBZ 解包
-flate2 = "1"            # UMD 正文 zlib 解压（umdlib 语义）
-aes = "0.8"           # 书源 JS 解密（java.aesBase64DecodeToString）
+zip = { version = "0.6", default-features = false, features = ["deflate"] }  # EPUB 解包 / 备份归档
+flate2 = "1"              # parser/js.rs gzip 工具依赖
+aes = "0.8"               # 书源 JS 解密（java.aesBase64DecodeToString）
 cbc = { version = "0.1", features = ["alloc", "block-padding"] }
 block-padding = "0.3"
-mobi = "0.8.0"
-lopdf = "0.44.0"
 quick-xml = "0.41.0"
 ttf-parser = "0.24"
-notify = "6"           # GAP 170 本地书双轨同步：书仓目录文件监听
+notify = "6"              # GAP 170 本地书双轨同步：书仓目录文件监听
 fancy-regex = "0.19.0"
-# GAP 130 正文图片代理 webp 转换（仅 jpeg/png/gif/webp 编解码，避免完整 image 依赖面）
+# 正文图片代理 webp 转换（仅 jpeg/png/gif/webp 编解码，避免完整 image 依赖面）
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 serde_stacker = "0.1"
 
-# ---- gui feature（同一二进制的桌面变体：双击开窗口，关窗收托盘）----
-# 默认不启用——CLI/musl 静态构建零影响；gui 构建为 glibc 动态链接（webkit2gtk）
-tao = { version = "0.30", optional = true }
-wry = { version = "0.46", optional = true }
-tray-icon = { version = "0.19", optional = true }
-jieba-rs = "0.11"
-
-[features]
-gui = ["dep:tao", "dep:wry", "dep:tray-icon"]
-
-# 开发/测试构建：完整 debuginfo 让 85k 行的单 crate 编译与链接都慢，且 target/ 膨胀到 20G+。
+# 开发/测试构建：完整 debuginfo 让单 crate 编译与链接都慢，且 target/ 膨胀到 20G+。
 # 行号表足够看 backtrace；依赖连行号表都不要（依赖出问题只看栈顶就够）。
 [profile.dev]
 debug = "line-tables-only"
@@ -102,11 +88,17 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
+[profile.dev.build-override]
+opt-level = 2
+
 [profile.test]
 debug = "line-tables-only"
 
 [profile.test.package."*"]
 debug = false
+
+[profile.test.build-override]
+opt-level = 2
 
 [profile.release]
 lto = true

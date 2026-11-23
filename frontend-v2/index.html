@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <meta name="theme-color" content="#fcfaf6" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#171513" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>砚台 · 在线小说阅读</title>
+    <script>
+      (function () {
+        try {
+          var raw = localStorage.getItem("mojuan.prefs.v2");
+          var parsed = raw ? JSON.parse(raw) : null;
+          var theme = parsed && parsed.state && parsed.state.theme ? parsed.state.theme : "system";
+          var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          var resolved = theme === "system" ? (prefersDark ? "dark" : "paper") : theme;
+          document.documentElement.dataset.paper = resolved;
+          if (resolved === "dark") document.documentElement.classList.add("dark");
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

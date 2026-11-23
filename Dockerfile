@@ -1,17 +1,17 @@
 # ============================================================
 # reader 统一镜像多阶段构建 (context = 仓库根)
-#   frontend/ React (vite + pnpm) → dist
+#   frontend-v2/ React (vite + pnpm) → dist
 #   backend/  Rust (axum) → reader-dev 二进制, rust-embed 内嵌同一份 dist
 #   camoufox  验证码/登录浏览器后端 (pip 包 + Firefox 二进制, 构建期下载)
 # 构建: docker build -t reader .
 # ============================================================
 
-# ---------- 阶段 1：前端构建 (React) ----------
+# ---------- 阶段 1：前端构建 (React / Frontend v2) ----------
 FROM node:22-slim AS web
 WORKDIR /web
-COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
-RUN npm i -g pnpm@11 && pnpm fetch --frozen-lockfile
-COPY frontend ./
+COPY frontend-v2/package.json frontend-v2/pnpm-lock.yaml frontend-v2/pnpm-workspace.yaml ./
+RUN corepack enable && pnpm fetch --frozen-lockfile
+COPY frontend-v2 ./
 RUN pnpm install --frozen-lockfile --offline && pnpm build
 
 # ---------- 阶段 2：后端编译（cargo-chef 三段式: 依赖层缓存, src 改动只编本 crate） ----------
@@ -23,14 +23,13 @@ WORKDIR /app
 COPY backend/Cargo.toml backend/Cargo.lock ./
 COPY backend/src ./src
 COPY backend/.cargo ./.cargo
-# rust-embed/include_bytes 路径占位（prepare 只扫源码不编译, 真产物在 cook/build 阶段注入）
-RUN mkdir -p web-ui/dist web-ui/public/fonts \
+# rust-embed 路径占位（prepare 只扫源码不编译, 真产物在 cook/build 阶段注入）
+RUN mkdir -p web-ui/dist \
     && echo '<!doctype html><title>placeholder</title>' > web-ui/dist/index.html
 RUN cargo chef prepare --recipe-path /app/recipe.json
 
 FROM chef AS cook
 WORKDIR /app
-ENV RUSTFLAGS="--cfg reqwest_unstable"
 COPY --from=planner /app/recipe.json /app/recipe.json
 RUN cargo chef cook --release --recipe-path /app/recipe.json
 
@@ -38,8 +37,6 @@ FROM cook AS builder
 WORKDIR /app
 COPY backend/src ./src
 COPY backend/.cargo ./.cargo
-# GAP 176：epub 导出内嵌中文字体（include_bytes 编译期内嵌, 路径相对 cargo 根）
-COPY backend/web-ui/public/fonts ./web-ui/public/fonts
 # rust-embed 编译期嵌入前端（web-ui/dist 由 web 阶段产出——本仓库不存旧前端产物）
 COPY --from=web /web/dist ./web-ui/dist
 RUN cargo build --release

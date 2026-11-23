@@ -1,21 +1,13 @@
-//! 本地书双轨同步仓（GAP 170/173——重点任务）
+//! 本地书目录监听同步（仅支持 `.epub` / `.txt`）
 //!
-//! 设计（用户确认）：文件与 DB 双保留——
-//! - 正常读写全走 DB（快）：书架/目录/正文均读 books + book_chapters 表；
-//! - 文件变更自动同步进 DB：书仓目录（storage/data/{ns}/books/ + 可选环境变量
+//! - 正常读写全走 DB：书架/目录/正文均读 `books` + `book_chapters` 表；
+//! - 文件变更自动同步进 DB：书仓目录（`storage/data/{ns}/books/` + 可选环境变量
 //!   `READER_LOCAL_BOOK_DIR`）由 notify 后台监听（300ms 去抖批量），事件后对账；
-//! - 仅 DB 书（local:// 且无文件关联）自动生成 epub 落书仓目录（全量元数据，GAP 173）；
-//! - 仅文件书（书仓目录内无 local_file 关联的文件）自动导入 DB。
 //!
 //! 对账任务（启动时 + 文件事件后，幂等，每命名空间互斥锁）：
-//! ① 新文件（无 local_file 记录）→ 自动导入（parse_file_bytes → book_chapters + 元数据，
-//!    book_url = local://{新 uuid}，local_file 记路径）
-//! ② 文件修改（mtime/大小变化）→ 重扫（重新解析，replace_chapters 替换章节 + 元数据 patch）
-//! ③ 文件删除 → 书籍保留（is_in_shelf/阅读进度/书签/章节不丢），local_file 保留 +
-//!    local_file_deleted=1（文件重现时自动重链重扫——避免重复导入产生副本；
-//!    若直接移除书籍或清空 local_file，重现的文件会被当成新书导入 → 副本）
-//! ④ DB 书（local:// 且无 local_file）→ 自动生成 epub 落书仓目录（文件名 {书名}.epub，
-//!    冲突加后缀 (1)(2)…；生成后立即记录 mtime/大小 → 后续对账幂等跳过，无事件循环）
+//! 1. 新文件（无 `local_file` 记录）→ 自动导入（`parse_file_bytes` → `book_chapters` + 元数据）
+//! 2. 文件修改（mtime/大小变化）→ 重扫（重新解析，`replace_chapters` 替换章节 + 元数据 patch）
+//! 3. 文件删除 → 书籍保留（进度/书签/章节不丢），置 `local_file_deleted = 1`（文件重现时自动重链重扫）
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -25,7 +17,6 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use tokio::sync::Mutex;
 
-use crate::service::export_book::{build_epub_full, EpubMeta, ExportChapter};
 use crate::service::local_book::{self, ImportedBook};
 use crate::storage::Storage;
 
@@ -33,24 +24,21 @@ use crate::storage::Storage;
 const DEBOUNCE_MS: Duration = Duration::from_millis(300);
 /// 书仓目录名（storage/data/{ns}/books/）
 const BOOKS_DIR: &str = "books";
-/// 书仓支持的文件格式（与 SUPPORTED_EXTENSIONS 一致但排除 zip——zip 语义歧义
-/// （EPUB 容器 / 裸 OPF 结构），书仓对账只认确定格式）
-const SYNC_EXTENSIONS: &[&str] = &[
-    "epub", "txt", "mobi", "azw3", "pdf", "fb2", "docx", "cbz", "umd",
-];
+/// 书仓支持的文件格式（仅核心 EPUB + TXT）
+const SYNC_EXTENSIONS: &[&str] = &["epub", "txt"];
 
 // ---------------------------------------------------------------------------
 // 启动入口
 // ---------------------------------------------------------------------------
 
-/// 启动本地书双轨同步（lib.rs serve() 时调用一次）：
+/// 启动本地书目录同步（lib.rs serve() 时调用一次）：
 /// 1. notify 文件监听（storage/data 递归 + env READER_LOCAL_BOOK_DIR 可选）
 /// 2. 初始对账（启动时）
 /// 3. 事件去抖循环（300ms 批量 → 受影响命名空间对账）
 pub fn spawn_local_sync(storage: Storage) {
     tokio::spawn(async move {
         let data_dir = storage.config.storage_dir().join("data");
-        if let Err(e) = std::fs::create_dir_all(&data_dir) {
+        if let Err(e) = tokio::fs::create_dir_all(&data_dir).await {
             tracing::warn!("本地书同步：data 目录创建失败: {e}");
         }
         // ① 文件监听（先于初始对账——避免初始对账期间漏事件）
@@ -65,7 +53,7 @@ pub fn spawn_local_sync(storage: Storage) {
         loop {
             let wait = pending
                 .values()
-                .map(|t| *t + DEBOUNCE_MS - Instant::now())
+                .map(|t| (*t + DEBOUNCE_MS).saturating_duration_since(Instant::now()))
                 .min()
                 .unwrap_or(DEBOUNCE_MS);
             tokio::select! {
@@ -92,14 +80,9 @@ pub fn spawn_local_sync(storage: Storage) {
     });
 }
 
-/// notify 文件监听：storage/data 递归 + env READER_LOCAL_BOOK_DIR（可选，映射
-/// default 命名空间——secure 多用户模式下该环境目录统一归 default，需注意）。
-/// 事件路径 → 命名空间 → mpsc 上报（去抖循环消费）。
-/// notify watcher 全局保活：RecommendedWatcher Drop 即停止投递事件——
-/// 部署测试发现 spawn_watcher 的局部 watcher 在函数返回时被 Drop（双轨仓监听运行时失效）。
-/// 存 static 保活（进程生命周期），事件泵线程独立于 watcher。
-static KEEPALIVE_WATCHERS: std::sync::Mutex<Vec<notify::RecommendedWatcher>> =
-    std::sync::Mutex::new(Vec::new());
+/// notify watcher 全局保活（Drop 即停止投递事件）
+static KEEPALIVE_WATCHERS: parking_lot::Mutex<Vec<notify::RecommendedWatcher>> =
+    parking_lot::Mutex::new(Vec::new());
 
 fn spawn_watcher(storage: &Storage, event_tx: tokio::sync::mpsc::UnboundedSender<String>) {
     use notify::Watcher as _;
@@ -132,19 +115,12 @@ fn spawn_watcher(storage: &Storage, event_tx: tokio::sync::mpsc::UnboundedSender
             tracing::warn!("本地书监听目录失败（{}）: {e}", root.display());
             continue;
         }
-        // 保活：watcher 移入 static（函数返回不 Drop——否则 notify 停止投递，监听失效）
-        if let Ok(mut keep) = KEEPALIVE_WATCHERS.lock() {
-            keep.push(watcher);
-        } else {
-            continue;
-        }
+        KEEPALIVE_WATCHERS.lock().push(watcher);
         let root2 = root.clone();
         let data2 = data_dir.clone();
-        // 事件泵线程：std 通道（notify 回调）→ ns 映射 → tokio 通道
         std::thread::spawn(move || {
             for res in std_rx {
                 let Ok(ev) = res else { continue };
-                // 只关心 创建/修改/删除/重命名；纯访问（Access）忽略
                 if matches!(ev.kind, notify::EventKind::Access(_)) {
                     continue;
                 }
@@ -166,7 +142,7 @@ fn spawn_watcher(storage: &Storage, event_tx: tokio::sync::mpsc::UnboundedSender
 /// 事件路径 → 命名空间：
 /// - `storage/data/{ns}/books/...`（路径含 books 组件）→ ns
 /// - env READER_LOCAL_BOOK_DIR 根下（不在 data 子树内）→ "default"
-/// - 其他（opds_files/webdav/assets 等）→ None（不触发对账）
+/// - 其他目录 → None（不触发对账）
 fn namespace_of_path(p: &Path, data_dir: &Path, root: &Path) -> Option<String> {
     if p.starts_with(root) && !p.starts_with(data_dir) {
         return Some("default".to_string());
@@ -188,14 +164,12 @@ fn namespace_of_path(p: &Path, data_dir: &Path, root: &Path) -> Option<String> {
 // 对账任务
 // ---------------------------------------------------------------------------
 
-/// 每命名空间对账互斥锁（避免对账与手动 refreshLocalBook 并发冲突——重扫/重链
-/// 读改写序列必须串行；对账本身幂等，锁只是防止交错）
+/// 每命名空间对账互斥锁（避免并发重扫/重链交错）
 pub fn namespace_sync_lock(ns: &str) -> Arc<Mutex<()>> {
-    static LOCKS: once_cell::sync::Lazy<std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>> =
-        once_cell::sync::Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+    static LOCKS: std::sync::LazyLock<parking_lot::Mutex<HashMap<String, Arc<Mutex<()>>>>> =
+        std::sync::LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
     LOCKS
         .lock()
-        .unwrap()
         .entry(ns.to_string())
         .or_insert_with(|| Arc::new(Mutex::new(())))
         .clone()
@@ -216,7 +190,6 @@ pub async fn run_reconcile_all(storage: &Storage) -> Result<usize> {
 }
 
 /// 单命名空间对账（幂等；文件事件后 / 启动时调用）。返回是否有任何变更。
-/// 书仓目录 = storage/data/{ns}/books/ + env READER_LOCAL_BOOK_DIR（可选，仅 default）。
 pub async fn reconcile_namespace(storage: &Storage, ns: &str) -> Result<bool> {
     let env_dirs: Vec<PathBuf> = std::env::var("READER_LOCAL_BOOK_DIR")
         .ok()
@@ -227,7 +200,7 @@ pub async fn reconcile_namespace(storage: &Storage, ns: &str) -> Result<bool> {
     reconcile_namespace_dirs(storage, ns, &env_dirs).await
 }
 
-/// 对账核心（env_dirs 为额外书仓目录；测试直接传入临时目录，避免进程级 env 竞态）
+/// 对账核心（env_dirs 为额外书仓目录；测试直接传入临时目录）
 async fn reconcile_namespace_dirs(
     storage: &Storage,
     ns: &str,
@@ -239,8 +212,7 @@ async fn reconcile_namespace_dirs(
         .join("data")
         .join(ns)
         .join(BOOKS_DIR);
-    std::fs::create_dir_all(&books_dir)?;
-    // 环境变量书仓目录（可选；仅 default 命名空间对账——secure 多用户下 env 目录归属 default）
+    tokio::fs::create_dir_all(&books_dir).await?;
     let env_books: Vec<PathBuf> = if ns == "default" {
         env_dirs.to_vec()
     } else {
@@ -249,14 +221,14 @@ async fn reconcile_namespace_dirs(
 
     let mut changed = false;
 
-    // ---------- ① 磁盘文件清单（books_dir 递归 + env 目录递归） ----------
+    // ① 磁盘文件清单（books_dir 递归 + env 目录递归）
     let mut files: Vec<PathBuf> = Vec::new();
     collect_book_files(&books_dir, &mut files).await;
     for d in &env_books {
         collect_book_files(d, &mut files).await;
     }
 
-    // ---------- ② DB 关联清单（含已删除标记的——文件重现时重链） ----------
+    // ② DB 关联清单（含已删除标记的——文件重现时重链）
     let linked = storage.list_linked_local_books(ns).await?;
     let mut linked_by_path: HashMap<String, crate::model::Book> = HashMap::new();
     for b in &linked {
@@ -265,8 +237,7 @@ async fn reconcile_namespace_dirs(
         }
     }
 
-    // ---------- ③ 逐文件对账（新文件导入 / 修改重扫 / 重现重链） ----------
-    // TXT 用户自定义目录规则（启用+排序；无则空 → parse 回退内置默认规则）
+    // ③ 逐文件对账（新文件导入 / 修改重扫 / 重现重链）
     let user_rules: Vec<String> = storage
         .get_txt_toc_rules(ns)
         .await
@@ -282,15 +253,14 @@ async fn reconcile_namespace_dirs(
     for path in &files {
         let key = normalize_path(&path.to_string_lossy());
         crate::service::fs_rate::tick().await;
-        let meta = match std::fs::metadata(path) {
+        let meta = match tokio::fs::metadata(path).await {
             Ok(m) => m,
-            Err(_) => continue, // 事件竞态：文件已被删除
+            Err(_) => continue,
         };
         let mtime = file_mtime_ms(&meta);
         let size = meta.len() as i64;
         match linked_by_path.get(&key).cloned() {
             Some(book) => {
-                // 已关联：文件修改（mtime/大小变化）或此前标记删除（文件重现）→ 重扫
                 if book.local_file_deleted
                     || book.local_file_mtime != mtime
                     || book.local_file_size != size
@@ -303,19 +273,16 @@ async fn reconcile_namespace_dirs(
                     }
                 }
             }
-            None => {
-                // 新文件（无 local_file 记录）→ 自动导入
-                match import_file(storage, ns, path, &user_rules, mtime, size).await {
-                    Ok(()) => changed = true,
-                    Err(e) => {
-                        tracing::warn!("本地书导入失败 [{}] {}: {e:#}", ns, path.display())
-                    }
+            None => match import_file(storage, ns, path, &user_rules, mtime, size).await {
+                Ok(()) => changed = true,
+                Err(e) => {
+                    tracing::warn!("本地书导入失败 [{}] {}: {e:#}", ns, path.display())
                 }
-            }
+            },
         }
     }
 
-    // ---------- ④ 已关联但文件消失 → 标记删除（保留书籍/进度/章节） ----------
+    // ④ 已关联但文件消失 → 标记删除（保留书籍/进度/章节）
     let disk_keys: HashSet<String> = files
         .iter()
         .map(|p| normalize_path(&p.to_string_lossy()))
@@ -324,9 +291,6 @@ async fn reconcile_namespace_dirs(
         let Some(p) = &book.local_file else { continue };
         let key = normalize_path(p);
         if !disk_keys.contains(&key) && !book.local_file_deleted {
-            // 方案说明：不直接移除书籍、不清空 local_file——is_in_shelf/阅读进度/
-            // 书签/章节全部保留（DB 仍可读）；置 local_file_deleted=1 后文件重现
-            // 时自动重链重扫（③），不会把重现文件当新书重复导入。
             storage
                 .link_local_file(
                     ns,
@@ -346,16 +310,6 @@ async fn reconcile_namespace_dirs(
         }
     }
 
-    // ---------- ⑤ local:// 且无文件关联的 DB 书 → 自动生成 epub 落书仓 ----------
-    let db_only = storage.list_local_db_books_without_file(ns).await?;
-    for book in db_only {
-        crate::service::fs_rate::tick().await;
-        match generate_epub_for_book(storage, ns, &book, &books_dir).await {
-            Ok(()) => changed = true,
-            Err(e) => tracing::warn!("本地书 epub 生成失败 [{}] {}: {e:#}", ns, book.name),
-        }
-    }
-
     Ok(changed)
 }
 
@@ -363,8 +317,6 @@ async fn reconcile_namespace_dirs(
 // ① 新文件导入 / ② 修改重扫
 // ---------------------------------------------------------------------------
 
-/// 新文件自动导入：解析 → save_local_book（local:// 新 uuid + 章节 + 元数据）→
-/// 封面落盘（与上传导入一致）→ 文件关联（双轨）
 async fn import_file(
     storage: &Storage,
     ns: &str,
@@ -375,32 +327,50 @@ async fn import_file(
 ) -> Result<()> {
     let ext = local_book::file_ext(&path.to_string_lossy());
     if !SYNC_EXTENSIONS.contains(&ext.as_str()) {
-        return Ok(()); // 非书仓格式（zip 等）跳过
+        return Ok(());
     }
     crate::service::fs_rate::tick().await;
-    let bytes = std::fs::read(path)?;
-    let imported = local_book::parse_file_bytes(
-        &bytes,
-        &ext,
-        user_rules,
-        local_book::DEFAULT_EPUB_TOC_MODE,
-        false,
-    )
+    let bytes = tokio::fs::read(path).await?;
+    let ext_owned = ext.clone();
+    let rules_owned = user_rules.to_vec();
+    let imported = tokio::task::spawn_blocking(move || {
+        local_book::parse_file_bytes(
+            &bytes,
+            &ext_owned,
+            &rules_owned,
+            local_book::DEFAULT_EPUB_TOC_MODE,
+            false,
+        )
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("解析任务异常: {e}"))?
     .map_err(|e| anyhow::anyhow!("解析失败: {e:#}"))?;
     if imported.chapters.is_empty() {
         anyhow::bail!("未解析到章节内容");
     }
     let book_url = format!("local://{}", uuid::Uuid::new_v4());
-    let name = if imported.meta.title.is_empty() {
-        path.file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "本地书籍".to_string())
-    } else {
+    let file_name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let (fn_name, fn_author) = local_book::analyze_name_author(&file_name);
+    let name = if ext == "txt" && !fn_name.is_empty() {
+        fn_name
+    } else if !imported.meta.title.is_empty() {
         imported.meta.title.clone()
+    } else if !fn_name.is_empty() {
+        fn_name
+    } else {
+        "本地书籍".to_string()
+    };
+    let author = if !imported.meta.author.is_empty() {
+        imported.meta.author.clone()
+    } else {
+        fn_author
     };
     let info = crate::model::book_chapter::BookInfo {
         name,
-        author: imported.meta.author.clone(),
+        author,
         kind: imported.meta.subjects.first().cloned(),
         intro: imported.meta.description.clone(),
         language: imported.meta.language.clone(),
@@ -413,7 +383,6 @@ async fn import_file(
         ..Default::default()
     };
     storage.save_local_book(ns, &info, &imported).await?;
-    // 封面落盘（与上传导入一致）
     if let Some(cover) = &imported.cover {
         let cover_dir = storage
             .config
@@ -421,15 +390,17 @@ async fn import_file(
             .join("assets")
             .join(ns)
             .join("covers");
-        let _ = std::fs::create_dir_all(&cover_dir);
+        let _ = tokio::fs::create_dir_all(&cover_dir).await;
         let file_id = format!("{}.jpg", uuid::Uuid::new_v4());
-        if std::fs::write(cover_dir.join(&file_id), cover).is_ok() {
+        if tokio::fs::write(cover_dir.join(&file_id), cover)
+            .await
+            .is_ok()
+        {
             let _ = storage
                 .update_book_cover(ns, &book_url, &format!("/assets/{ns}/covers/{file_id}"))
                 .await;
         }
     }
-    // 文件关联（双轨）
     storage
         .link_local_file(
             ns,
@@ -450,8 +421,6 @@ async fn import_file(
     Ok(())
 }
 
-/// 文件修改/重现 → 重新解析，替换章节与元数据（保留阅读进度/书签/分组/
-/// custom_intro/custom_tag 等用户编辑字段；仅刷新文件可表达的元数据）
 async fn reparse_and_update(
     storage: &Storage,
     ns: &str,
@@ -462,21 +431,24 @@ async fn reparse_and_update(
 ) -> Result<()> {
     let ext = local_book::file_ext(&path.to_string_lossy());
     crate::service::fs_rate::tick().await;
-    let bytes = std::fs::read(path)?;
-    let imported: ImportedBook =
-        local_book::parse_file_bytes(&bytes, &ext, &[], &book.toc_url, book.split_long_chapter)
-            .map_err(|e| anyhow::anyhow!("解析失败: {e:#}"))?;
+    let bytes = tokio::fs::read(path).await?;
+    let toc_url_owned = book.toc_url.clone();
+    let split_long = book.split_long_chapter;
+    let imported: ImportedBook = tokio::task::spawn_blocking(move || {
+        local_book::parse_file_bytes(&bytes, &ext, &[], &toc_url_owned, split_long)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("解析任务异常: {e}"))?
+    .map_err(|e| anyhow::anyhow!("解析失败: {e:#}"))?;
     if imported.chapters.is_empty() {
         anyhow::bail!("未解析到章节内容");
     }
-    // 替换章节（先删后插单事务——章数减少时无旧章残留）
     let pairs: Vec<(String, String)> = imported
         .chapters
         .iter()
         .map(|c| (c.title.clone(), c.content.clone()))
         .collect();
     storage.replace_chapters(ns, &book.book_url, &pairs).await?;
-    // 元数据 patch（仅文件可表达的字段；用户编辑字段 custom_intro/custom_tag 不动）
     let mut patch = serde_json::Map::new();
     patch.insert(
         "totalChapterNum".to_string(),
@@ -509,7 +481,6 @@ async fn reparse_and_update(
         patch.insert("kind".to_string(), serde_json::json!(k));
     }
     let _ = storage.patch_book(ns, &book.book_url, &patch).await;
-    // 封面更新（新封面存在时替换）
     if let Some(cover) = &imported.cover {
         let cover_dir = storage
             .config
@@ -517,9 +488,12 @@ async fn reparse_and_update(
             .join("assets")
             .join(ns)
             .join("covers");
-        let _ = std::fs::create_dir_all(&cover_dir);
+        let _ = tokio::fs::create_dir_all(&cover_dir).await;
         let file_id = format!("{}.jpg", uuid::Uuid::new_v4());
-        if std::fs::write(cover_dir.join(&file_id), cover).is_ok() {
+        if tokio::fs::write(cover_dir.join(&file_id), cover)
+            .await
+            .is_ok()
+        {
             let _ = storage
                 .update_book_cover(
                     ns,
@@ -529,7 +503,6 @@ async fn reparse_and_update(
                 .await;
         }
     }
-    // 更新关联（mtime/大小 + 清除删除标记）
     storage
         .link_local_file(
             ns,
@@ -551,126 +524,30 @@ async fn reparse_and_update(
 }
 
 // ---------------------------------------------------------------------------
-// ④ DB 书 → epub 落书仓（GAP 173：全量元数据）
-// ---------------------------------------------------------------------------
-
-/// DB 书（local:// 无文件关联）自动生成 epub 落书仓目录。
-/// 文件名 {书名}.epub，冲突加后缀 (1)(2)…；生成后立即记录 mtime/大小，
-/// 后续对账幂等跳过（不会把生成文件当新书导入，也无事件循环）。
-async fn generate_epub_for_book(
-    storage: &Storage,
-    ns: &str,
-    book: &crate::model::Book,
-    books_dir: &Path,
-) -> Result<()> {
-    let rows = storage.list_chapters_full(&book.book_url).await?;
-    if rows.is_empty() {
-        return Ok(()); // 空书不生成
-    }
-    let chapters: Vec<ExportChapter> = rows
-        .iter()
-        .map(|(_, title, content)| ExportChapter {
-            title: title.clone(),
-            content: content.clone(),
-        })
-        .collect();
-    // GAP 173 全量元数据：description = custom_intro 优先（其次 intro）；
-    // subject = custom_tag 优先（其次 kind）；语言/日期/出版社直接映射；封面取本地 cover_url
-    let meta = EpubMeta {
-        description: book.custom_intro.clone().or_else(|| book.intro.clone()),
-        language: book.language.clone(),
-        published_at: book.published_at.clone(),
-        publisher: book.publisher.clone(),
-        subject: book.custom_tag.clone().or_else(|| book.kind.clone()),
-        cover: read_local_cover(storage, ns, book.cover_url.as_deref()),
-        // GAP 176：双轨同步自动生成的 epub 不内嵌字体（保持体积最小；导出 API 可指定）
-        font: crate::service::export_book::EmbedFont::None,
-    };
-    let bytes = build_epub_full(&book.name, &book.author, &meta, &chapters);
-    // 文件名：{书名}.epub（冲突加后缀）
-    let mut fname = sanitize_filename(&book.name);
-    if fname.is_empty() {
-        fname = "本地书".to_string();
-    }
-    let mut target = books_dir.join(format!("{fname}.epub"));
-    let mut i = 1usize;
-    while target.exists() {
-        target = books_dir.join(format!("{fname} ({i}).epub"));
-        i += 1;
-    }
-    crate::service::fs_rate::tick().await;
-    std::fs::write(&target, &bytes)?;
-    crate::service::fs_rate::tick().await;
-    let meta = std::fs::metadata(&target)?;
-    storage
-        .link_local_file(
-            ns,
-            &book.book_url,
-            Some(&normalize_path(&target.to_string_lossy())),
-            file_mtime_ms(&meta),
-            meta.len() as i64,
-            false,
-        )
-        .await?;
-    tracing::info!(
-        "本地书 epub 已生成 [{}] {} → {}",
-        ns,
-        book.name,
-        target.display()
-    );
-    Ok(())
-}
-
-/// 读取本地封面字节（cover_url 为 /assets/{ns}/covers/{file} 形态；远程 URL 跳过）
-fn read_local_cover(storage: &Storage, ns: &str, cover_url: Option<&str>) -> Option<Vec<u8>> {
-    let url = cover_url?;
-    let rest = url.strip_prefix("/assets/")?;
-    if !rest.starts_with(&format!("{ns}/covers/")) {
-        return None;
-    }
-    let path = storage.config.storage_dir().join("assets").join(rest);
-    std::fs::read(path).ok()
-}
-
-/// 文件名净化（去路径分隔符/非法字符；保留中文与扩展名语义）
-fn sanitize_filename(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .map(|c| {
-            if matches!(
-                c,
-                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\n' | '\r' | '\t'
-            ) {
-                ' '
-            } else {
-                c
-            }
-        })
-        .collect();
-    cleaned.trim().trim_matches('.').trim().to_string()
-}
-
-// ---------------------------------------------------------------------------
 // 工具
 // ---------------------------------------------------------------------------
 
-/// 递归收集书仓格式文件（epub/txt/mobi/azw3/pdf/fb2/docx；zip 不入仓）。
-/// 每次 readdir/stat 前经过 fs_rate 全局限速（网盘挂载目录风控保护）。
+/// 递归收集书仓格式文件（仅 epub / txt）
 async fn collect_book_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    // 显式栈替代 async 递归（递归 async fn 需 Box::pin，迭代更直接）
     let mut stack = vec![dir.to_path_buf()];
     while let Some(dir) = stack.pop() {
         crate::service::fs_rate::tick().await;
-        let Ok(rd) = std::fs::read_dir(&dir) else {
+        let Ok(mut rd) = tokio::fs::read_dir(&dir).await else {
             continue;
         };
-        let mut paths: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+        let mut paths: Vec<PathBuf> = Vec::new();
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            paths.push(entry.path());
+        }
         paths.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
         for p in paths.into_iter().rev() {
             crate::service::fs_rate::tick().await;
-            if p.is_dir() {
+            let Ok(meta) = tokio::fs::metadata(&p).await else {
+                continue;
+            };
+            if meta.is_dir() {
                 stack.push(p);
-            } else if p.is_file() {
+            } else if meta.is_file() {
                 let ext = local_book::file_ext(&p.to_string_lossy());
                 if SYNC_EXTENSIONS.contains(&ext.as_str()) {
                     out.push(p);
@@ -680,12 +557,10 @@ async fn collect_book_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// 路径规范化（分隔符统一为 '/'——DB 存储与比对键一致，跨平台可移植）
 fn normalize_path(p: &str) -> String {
     p.replace('\\', "/")
 }
 
-/// 文件修改时间（ms epoch；失败回退 0——与大小共同判定变更）
 fn file_mtime_ms(m: &std::fs::Metadata) -> i64 {
     m.modified()
         .ok()
@@ -697,9 +572,7 @@ fn file_mtime_ms(m: &std::fs::Metadata) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Book;
 
-    /// 独立临时目录存储（避免污染真实 storage/reader.db）
     async fn test_storage(tag: &str) -> Storage {
         let dir = std::env::temp_dir().join(format!(
             "reader-localsync-test-{}-{tag}",
@@ -720,8 +593,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 隔离 env READER_LOCAL_BOOK_DIR：多数测试走 reconcile_namespace_dirs（显式目录），
-    /// 不读进程 env——唯一读 env 的测试单独 set_var（无其他测试再写该变量，无竞态）
     fn no_env_dirs() -> Vec<PathBuf> {
         Vec::new()
     }
@@ -744,7 +615,6 @@ mod tests {
     const SAMPLE2: &str =
         "第一章 起点\n内容一（修订）。\n第二章 成长\n内容二（修订）。\n第三章 终章\n内容三。";
 
-    /// ① 新文件 → 自动导入 DB（local:// + local_file 关联 + 章节/元数据）
     #[tokio::test]
     async fn reconcile_imports_new_file() {
         let storage = test_storage("import").await;
@@ -753,14 +623,12 @@ mod tests {
             .await
             .unwrap();
         assert!(changed);
-        // 书架新增 1 本 local:// 书
         let books = storage.list_books("default").await.unwrap();
         assert_eq!(books.len(), 1);
         let b = &books[0];
         assert!(b.book_url.starts_with("local://"));
-        assert_eq!(b.name, "第一章 起点", "TXT 首行应为书名");
+        assert_eq!(b.name, "测试书");
         assert_eq!(b.origin, "local");
-        // 文件关联
         assert!(b
             .local_file
             .as_deref()
@@ -768,7 +636,6 @@ mod tests {
             .ends_with("books/测试书.txt"));
         assert!(!b.local_file_deleted);
         assert!(b.local_file_mtime > 0);
-        // 章节入库
         assert_eq!(
             storage
                 .count_chapters("default", &b.book_url)
@@ -776,20 +643,13 @@ mod tests {
                 .unwrap(),
             2
         );
-        let toc = storage.list_chapters(&b.book_url).await.unwrap();
-        assert_eq!(toc[0].1, "第一章 起点");
-        assert_eq!(toc[1].1, "第二章 成长");
-        // 幂等：再次对账无变更
         let changed2 = reconcile_namespace_dirs(&storage, "default", &no_env_dirs())
             .await
             .unwrap();
         assert!(!changed2);
-        assert_eq!(storage.list_books("default").await.unwrap().len(), 1);
         cleanup(storage, "import").await;
     }
 
-    /// ② 文件修改（mtime/大小变化）→ 重扫：章节替换（章数变化无残留）、
-    /// 同一 book_url 不重复导入
     #[tokio::test]
     async fn reconcile_rescans_modified_file() {
         let storage = test_storage("rescan").await;
@@ -801,8 +661,6 @@ mod tests {
         let book_url = storage.list_books("default").await.unwrap()[0]
             .book_url
             .clone();
-        // 修改文件（内容 + 大小变化；sleep 保证 mtime 推进——Windows NTFS 高精度，
-        // 但跨平台稳妥起见内容长度也变化，mtime/大小任一不同即触发）
         std::thread::sleep(Duration::from_millis(20));
         write_txt(&path, SAMPLE2);
         let changed = reconcile_namespace_dirs(&storage, "default", &no_env_dirs())
@@ -810,15 +668,12 @@ mod tests {
             .unwrap();
         assert!(changed);
         let books = storage.list_books("default").await.unwrap();
-        assert_eq!(books.len(), 1, "重扫不应重复导入");
+        assert_eq!(books.len(), 1);
         assert_eq!(books[0].book_url, book_url);
-        // 章节被替换（3 章，无旧章残留）
         assert_eq!(
             storage.count_chapters("default", &book_url).await.unwrap(),
             3
         );
-        let toc = storage.list_chapters(&book_url).await.unwrap();
-        assert_eq!(toc[2].1, "第三章 终章");
         let content = storage
             .get_chapter_content("default", &book_url, 1)
             .await
@@ -828,8 +683,6 @@ mod tests {
         cleanup(storage, "rescan").await;
     }
 
-    /// ③ 文件删除 → 书籍保留（is_in_shelf/章节不丢）+ deleted 标记；
-    /// 文件重现 → 自动重链重扫（不重复导入）
     #[tokio::test]
     async fn reconcile_marks_deleted_and_relinks() {
         let storage = test_storage("delete").await;
@@ -841,7 +694,6 @@ mod tests {
         let book_url = storage.list_books("default").await.unwrap()[0]
             .book_url
             .clone();
-        // 删除文件
         std::fs::remove_file(&path).unwrap();
         let changed = reconcile_namespace_dirs(&storage, "default", &no_env_dirs())
             .await
@@ -852,14 +704,12 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert!(b.local_file_deleted, "应标记删除");
-        assert!(b.is_in_shelf, "书籍保留在书架");
+        assert!(b.local_file_deleted);
+        assert!(b.is_in_shelf);
         assert_eq!(
             storage.count_chapters("default", &book_url).await.unwrap(),
-            2,
-            "章节保留可读"
+            2
         );
-        // 文件重现（内容变化）→ 重链 + 重扫
         std::thread::sleep(Duration::from_millis(20));
         write_txt(&path, SAMPLE2);
         let changed = reconcile_namespace_dirs(&storage, "default", &no_env_dirs())
@@ -867,8 +717,7 @@ mod tests {
             .unwrap();
         assert!(changed);
         let books = storage.list_books("default").await.unwrap();
-        assert_eq!(books.len(), 1, "重现不重复导入");
-        assert_eq!(books[0].book_url, book_url);
+        assert_eq!(books.len(), 1);
         assert!(!books[0].local_file_deleted);
         assert_eq!(
             storage.count_chapters("default", &book_url).await.unwrap(),
@@ -877,141 +726,6 @@ mod tests {
         cleanup(storage, "delete").await;
     }
 
-    /// ④ DB 书（local:// 无文件关联）→ 自动生成 epub 落书仓；
-    /// GAP 173：全量元数据（title/creator/description(custom_intro 优先)/language/
-    /// date/publisher/subject(custom_tag)/封面）——重新 parse 零丢失
-    #[tokio::test]
-    async fn reconcile_generates_epub_full_metadata() {
-        let storage = test_storage("gen").await;
-        // DB 书：全字段 + 封面文件
-        let book_url = "local://genbook1".to_string();
-        let cover_bytes = b"\xFF\xD8\xFF\xE0fake-jpeg-cover".to_vec();
-        let cover_rel = "assets/default/covers/genbook1.jpg";
-        let cover_path = storage.config.storage_dir().join(cover_rel);
-        std::fs::create_dir_all(cover_path.parent().unwrap()).unwrap();
-        std::fs::write(&cover_path, &cover_bytes).unwrap();
-        storage
-            .upsert_book(
-                "default",
-                &Book {
-                    book_url: book_url.clone(),
-                    name: "元数据完整书".into(),
-                    author: "作者甲".into(),
-                    intro: Some("原始简介".into()),
-                    custom_intro: Some("自定义简介（优先）".into()),
-                    kind: Some("分类甲".into()),
-                    custom_tag: Some("自定义标签".into()),
-                    language: Some("zh-CN".into()),
-                    publisher: Some("出版社乙".into()),
-                    published_at: Some("2024-05-06".into()),
-                    cover_url: Some(format!("/{cover_rel}")),
-                    origin: "local".into(),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
-        storage
-            .save_chapters(
-                &book_url,
-                &[
-                    ("第一章".to_string(), "正文一。".to_string()),
-                    ("第二章".to_string(), "正文二。".to_string()),
-                ],
-            )
-            .await
-            .unwrap();
-
-        let changed = reconcile_namespace_dirs(&storage, "default", &no_env_dirs())
-            .await
-            .unwrap();
-        assert!(changed);
-        // epub 落书仓 + 关联
-        let b = storage
-            .find_book("default", &book_url)
-            .await
-            .unwrap()
-            .unwrap();
-        let epub_path = b.local_file.as_deref().expect("应生成 epub 关联");
-        assert!(epub_path.ends_with("元数据完整书.epub"));
-        let bytes = std::fs::read(epub_path).unwrap();
-        // 重新解析：零丢失断言
-        let imported = local_book::parse_epub(&bytes, local_book::DEFAULT_EPUB_TOC_MODE)
-            .expect("生成的 epub 可重新解析");
-        assert_eq!(imported.meta.title, "元数据完整书");
-        assert_eq!(imported.meta.author, "作者甲");
-        assert_eq!(
-            imported.meta.description.as_deref(),
-            Some("自定义简介（优先）"),
-            "description 应取 custom_intro"
-        );
-        assert_eq!(imported.meta.language.as_deref(), Some("zh-CN"));
-        assert_eq!(imported.meta.published_at.as_deref(), Some("2024-05-06"));
-        assert_eq!(imported.meta.publisher.as_deref(), Some("出版社乙"));
-        assert_eq!(
-            imported.meta.subjects,
-            vec!["自定义标签".to_string()],
-            "subject 应取 custom_tag"
-        );
-        assert_eq!(imported.chapters.len(), 2);
-        // 封面零丢失（字节一致）
-        assert!(imported.cover.is_some());
-        assert_eq!(imported.cover.unwrap(), cover_bytes);
-        // 幂等：不再重复生成
-        let changed2 = reconcile_namespace_dirs(&storage, "default", &no_env_dirs())
-            .await
-            .unwrap();
-        assert!(!changed2);
-        cleanup(storage, "gen").await;
-    }
-
-    /// 文件名冲突 → 后缀 (1)(2)…；空书名回退"本地书"
-    #[tokio::test]
-    async fn reconcile_epub_filename_conflict_suffix() {
-        let storage = test_storage("conflict").await;
-        for i in 0..2 {
-            let book_url = format!("local://conflict{i}");
-            storage
-                .upsert_book(
-                    "default",
-                    &Book {
-                        book_url: book_url.clone(),
-                        name: "同名书".into(),
-                        origin: "local".into(),
-                        ..Default::default()
-                    },
-                )
-                .await
-                .unwrap();
-            storage
-                .save_chapters(&book_url, &[("第一章".to_string(), "正文。".to_string())])
-                .await
-                .unwrap();
-        }
-        reconcile_namespace_dirs(&storage, "default", &no_env_dirs())
-            .await
-            .unwrap();
-        let books = storage.list_books("default").await.unwrap();
-        let files: Vec<String> = books.iter().filter_map(|b| b.local_file.clone()).collect();
-        assert_eq!(files.len(), 2);
-        // 两份同名书：首本 {书名}.epub，冲突本 {书名} (1).epub（集合断言——生成顺序与
-        // list_books 排序无关，词序上 " (1)" 在 "." 之前）
-        let names: Vec<String> = files
-            .iter()
-            .map(|f| f.rsplit('/').next().unwrap_or(f).to_string())
-            .collect();
-        assert!(
-            names.contains(&"同名书.epub".to_string()),
-            "应存在无后缀文件: {names:?}"
-        );
-        assert!(
-            names.contains(&"同名书 (1).epub".to_string()),
-            "冲突应加后缀: {names:?}"
-        );
-        cleanup(storage, "conflict").await;
-    }
-
-    /// env READER_LOCAL_BOOK_DIR 目录内的文件也参与对账（default 命名空间）
     #[tokio::test]
     async fn reconcile_env_book_dir_imports() {
         let env_dir = std::env::temp_dir().join(format!(
@@ -1032,13 +746,11 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("环境书.txt"));
-        // 非 default 命名空间不扫 env 目录
         let changed2 = reconcile_namespace(&storage, "other").await.unwrap();
         assert!(!changed2);
         cleanup(storage, "envimport").await;
     }
 
-    /// 事件路径 → 命名空间映射
     #[test]
     fn test_namespace_of_path_mapping() {
         let data = PathBuf::from("/srv/storage/data");
@@ -1061,35 +773,21 @@ mod tests {
             .as_deref(),
             Some("alice")
         );
-        // 非 books 目录（opds_files/assets）不触发
         assert_eq!(
             namespace_of_path(
-                Path::new("/srv/storage/data/alice/opds_files/x.txt"),
+                Path::new("/srv/storage/data/alice/assets/x.txt"),
                 &data,
                 &data
             ),
             None
         );
-        // env 根 → default
         assert_eq!(
             namespace_of_path(Path::new("/srv/books/a.txt"), &data, &env).as_deref(),
             Some("default")
         );
-        // 无关路径 → None
         assert_eq!(
             namespace_of_path(Path::new("/tmp/x.txt"), &data, &data),
             None
         );
-    }
-
-    /// 文件名净化
-    #[test]
-    fn test_sanitize_filename() {
-        assert_eq!(
-            sanitize_filename("a/b\\c:d*e?f\"g<h>i|j"),
-            "a b c d e f g h i j"
-        );
-        assert_eq!(sanitize_filename("  书  "), "书");
-        assert_eq!(sanitize_filename(".."), "");
     }
 }

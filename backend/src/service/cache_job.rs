@@ -164,7 +164,7 @@ async fn run_job(
             .iter()
             .any(|e| url.to_lowercase().ends_with(&format!(".{e}")));
     if is_file_book {
-        let path = crate::api::router::resolve_export_file_path(&storage.config.storage_dir(), url)
+        let path = crate::api::books::resolve_local_file_path(&storage.config.storage_dir(), url)
             .ok_or_else(|| anyhow!("本地书文件不存在"))?;
         let imported = crate::service::local_book::parse_loc_book_path(
             &path,

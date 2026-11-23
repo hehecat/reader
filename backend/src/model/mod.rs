@@ -1,4 +1,4 @@
-//! 数据模型（兼容 legacy 实体）
+//! 数据模型
 
 pub mod book;
 pub mod book_chapter;
@@ -8,8 +8,7 @@ pub mod bookmark;
 pub mod cookie;
 pub mod http_tts;
 pub mod replace_rule;
-pub mod rss;
-pub mod source_sub;
+pub mod source_stat;
 pub mod txt_toc_rule;
 pub mod user;
 
@@ -21,10 +20,6 @@ pub use bookmark::Bookmark;
 pub use cookie::CookieRow;
 pub use http_tts::HttpTts;
 pub use replace_rule::ReplaceRule;
-pub use rss::{RssArticle, RssSource};
-pub use source_sub::SourceSub;
+pub use source_stat::SourceStat;
 pub use txt_toc_rule::TxtTocRule;
 pub use user::User;
-
-pub mod source_stat;
-pub use source_stat::SourceStat;

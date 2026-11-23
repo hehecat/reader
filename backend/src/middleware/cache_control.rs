@@ -9,7 +9,7 @@
 //! | `/assets/**`（封面等用户资源，legacy 以 md5 文件名存储——同名即同内容） | `public, max-age=2592000`（30 天） |
 //! | `/`、`*.html`、无扩展名路径（SPA 路由——实际返回 index.html） | `no-cache` |
 //! | 其他带扩展名的前端文件（favicon 等非 hash 文件） | `public, max-age=86400`（1 天） |
-//! | `/reader3/**`、`/opds*`、`/health`（API） | 不修改 |
+//! | `/reader3/**`、`/health`（API） | 不修改 |
 
 use std::future::Future;
 use std::pin::Pin;
@@ -31,7 +31,7 @@ const CACHE_1D: &str = "public, max-age=86400";
 /// 依据请求路径决定 Cache-Control 策略（None = 不修改响应）
 fn cache_policy(path: &str) -> Option<&'static str> {
     // API 路径一律不动
-    if path.starts_with("/reader3") || path.starts_with("/opds") || path == "/health" {
+    if path.starts_with("/reader3") || path == "/health" {
         return None;
     }
     if path.starts_with("/static/") || path.starts_with("/fonts/") {
@@ -40,9 +40,9 @@ fn cache_policy(path: &str) -> Option<&'static str> {
     if path.starts_with("/assets/") {
         return Some(CACHE_30D);
     }
-    // SPA：/ 与无扩展名路径实际返回 index.html（含 /assets 目录重定向等边界）
+    // SPA：/、index.html、sw.js 与无扩展名路径不长缓存，保证发版与 SW 更新即时生效
     let last_segment = path.trim_end_matches('/').rsplit('/').next().unwrap_or("");
-    if path == "/" || path.ends_with(".html") || !last_segment.contains('.') {
+    if path == "/" || path == "/sw.js" || path.ends_with(".html") || !last_segment.contains('.') {
         return Some(NO_CACHE);
     }
     // 其他带扩展名的前端文件（favicon.ico 等）
@@ -132,6 +132,7 @@ mod tests {
     fn index_html_and_spa_routes_are_no_cache() {
         assert_eq!(cache_policy("/"), Some(NO_CACHE));
         assert_eq!(cache_policy("/index.html"), Some(NO_CACHE));
+        assert_eq!(cache_policy("/sw.js"), Some(NO_CACHE));
         assert_eq!(cache_policy("/login"), Some(NO_CACHE));
         assert_eq!(cache_policy("/reader"), Some(NO_CACHE));
     }
@@ -139,9 +140,7 @@ mod tests {
     #[test]
     fn api_paths_untouched() {
         assert_eq!(cache_policy("/reader3/getBookshelf"), None);
-        assert_eq!(cache_policy("/reader3/webdav/path/to/file"), None);
-        assert_eq!(cache_policy("/opds"), None);
-        assert_eq!(cache_policy("/opds-save"), None);
+        assert_eq!(cache_policy("/reader3/file/list"), None);
         assert_eq!(cache_policy("/health"), None);
     }
 

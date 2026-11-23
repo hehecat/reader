@@ -124,8 +124,6 @@ pub struct Book {
     #[serde(rename = "tocHtml")]
     #[sqlx(rename = "toc_html")]
     pub toc_html: Option<String>,
-    /// 是否 CBZ 漫画（legado 扩展字段）
-    pub cbz: bool,
     /// 展示封面（legado 扩展）
     #[serde(rename = "displayCover")]
     #[sqlx(rename = "display_cover")]
@@ -138,12 +136,6 @@ pub struct Book {
     #[serde(rename = "localEpub")]
     #[sqlx(rename = "local_epub")]
     pub local_epub: bool,
-    /// 本地 PDF 标记（legado 扩展，Boolean）
-    #[serde(rename = "localPdf")]
-    #[sqlx(rename = "local_pdf")]
-    pub local_pdf: bool,
-    /// 是否 PDF（legado 扩展）
-    pub pdf: bool,
     /// 是否拆分长章节（legado 扩展）
     #[serde(rename = "splitLongChapter")]
     #[sqlx(rename = "split_long_chapter")]
@@ -164,10 +156,6 @@ pub struct Book {
     #[serde(rename = "createdAt")]
     #[sqlx(rename = "created_at")]
     pub created_at: i64,
-    /// 迁移保底：原始 JSON 全量（未知字段也不丢）
-    #[serde(skip)]
-    #[sqlx(rename = "raw_json")]
-    pub raw_json: Option<String>,
     /// 本地书双轨同步（GAP 170）：关联的书仓文件路径（服务端内部字段——不对外序列化，
     /// 客户端 saveBook 无法改写；仅对账/导入/重扫任务维护）
     #[serde(skip)]

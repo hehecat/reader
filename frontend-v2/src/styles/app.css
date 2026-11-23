@@ -1,0 +1,634 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ==========================================================================
+   砚台 · READER DESK — 东方纸墨质感设计系统
+   四套主题：日间宣纸 (paper) · 羊皮纸 (parchment) · 护眼青瓷 (celadon) · 夜间玄墨 (dark)
+   - line / line-strong：发丝线 (hairline)，按纸色调校对比度，浅色 ≈ 1.25:1 / 1.5:1
+   - glass：浮层玻璃态；popover：实底浮层（菜单/下拉，保证文字可读）
+   ========================================================================== */
+
+:root,
+[data-paper="paper"] {
+  color-scheme: light;
+  --bg: #f8f6f2;
+  --bg-elevated: #fcfbf8;
+  --bg-subtle: #f1eee7;
+  --bg-hover: #e9e5dc;
+  --ink: #24201c;
+  --ink-secondary: #524c45;
+  --ink-muted: #787067;
+  --line: #e5e0d7;
+  --line-strong: #d3cdc1;
+  --accent: #8e2d24;
+  --accent-soft: rgba(142, 45, 36, 0.09);
+  --accent-ink: #fdfbf8;
+  --danger: #c7362b;
+  --danger-soft: rgba(199, 54, 43, 0.1);
+  --success: #2a7a52;
+  --success-soft: rgba(42, 122, 82, 0.1);
+  --warn: #ad6b14;
+  --warn-soft: rgba(173, 107, 20, 0.12);
+
+  --glass: rgba(252, 251, 248, 0.88);
+  --glass-strong: rgba(252, 251, 248, 0.96);
+  --glass-border: rgba(36, 32, 28, 0.09);
+  --popover: #fcfbf8;
+  --popover-border: rgba(36, 32, 28, 0.12);
+  --highlight: rgba(255, 254, 251, 0.82);
+  --scrim: rgba(28, 22, 16, 0.22);
+  --grain-opacity: 0.035;
+  --shadow-sm: 0 1px 2px rgba(24, 20, 16, 0.04), 0 4px 12px -4px rgba(24, 20, 16, 0.05);
+  --shadow-float:
+    0 12px 34px -8px rgba(24, 20, 16, 0.12),
+    0 2px 8px -2px rgba(24, 20, 16, 0.06),
+    inset 0 1px 0 var(--highlight);
+  --shadow-popover:
+    0 16px 40px -12px rgba(24, 20, 16, 0.18),
+    0 4px 12px -4px rgba(24, 20, 16, 0.08),
+    0 0 0 0.5px rgba(24, 20, 16, 0.04),
+    inset 0 1px 0 var(--highlight);
+  --shadow-sheet:
+    -12px 0 44px -12px rgba(20, 16, 12, 0.15),
+    0 0 0 1px rgba(38, 34, 30, 0.07);
+  --shadow-sheet-mobile:
+    0 -14px 40px -12px rgba(20, 16, 12, 0.18),
+    0 0 0 1px rgba(38, 34, 30, 0.06);
+  --shadow-book:
+    0 10px 22px -8px rgba(24, 18, 12, 0.2),
+    0 3px 8px -3px rgba(24, 18, 12, 0.1);
+  --shadow-book-hover:
+    0 18px 32px -10px rgba(24, 18, 12, 0.26),
+    0 6px 12px -4px rgba(24, 18, 12, 0.12);
+  --shadow-primary: 0 1px 0 rgba(255, 255, 255, 0.18) inset, 0 4px 14px -4px color-mix(in oklab, var(--accent) 55%, transparent);
+}
+
+[data-paper="parchment"] {
+  color-scheme: light;
+  --bg: #f6eeda;
+  --bg-elevated: #fbf5e6;
+  --bg-subtle: #eee3ca;
+  --bg-hover: #e4d6b8;
+  --ink: #433422;
+  --ink-secondary: #5e4b34;
+  --ink-muted: #786448;
+  --line: #ddcba8;
+  --line-strong: #c9b289;
+  --accent: #8a5a2b;
+  --accent-soft: rgba(138, 90, 43, 0.12);
+  --accent-ink: #fdf8ee;
+  --danger: #b3402f;
+  --danger-soft: rgba(179, 64, 47, 0.12);
+  --success: #2c6e49;
+  --success-soft: rgba(44, 110, 73, 0.12);
+  --warn: #9c6112;
+  --warn-soft: rgba(156, 97, 18, 0.13);
+
+  --glass: rgba(251, 245, 230, 0.88);
+  --glass-strong: rgba(251, 245, 230, 0.95);
+  --glass-border: rgba(67, 52, 34, 0.12);
+  --popover: #fcf7ea;
+  --popover-border: rgba(67, 52, 34, 0.16);
+  --highlight: rgba(255, 251, 240, 0.75);
+  --scrim: rgba(48, 32, 14, 0.24);
+  --grain-opacity: 0.05;
+  --shadow-sm: 0 1px 2px rgba(56, 38, 16, 0.05), 0 4px 12px -4px rgba(56, 38, 16, 0.07);
+  --shadow-float:
+    0 14px 36px -8px rgba(56, 38, 16, 0.15),
+    0 2px 8px -2px rgba(56, 38, 16, 0.08),
+    inset 0 1px 0 var(--highlight);
+  --shadow-popover:
+    0 16px 40px -12px rgba(56, 38, 16, 0.22),
+    0 4px 12px -4px rgba(56, 38, 16, 0.1),
+    inset 0 1px 0 var(--highlight);
+  --shadow-sheet:
+    -12px 0 46px -12px rgba(48, 32, 14, 0.18),
+    0 0 0 1px rgba(67, 52, 34, 0.1);
+  --shadow-sheet-mobile:
+    0 -14px 40px -12px rgba(48, 32, 14, 0.2),
+    0 0 0 1px rgba(67, 52, 34, 0.09);
+}
+
+[data-paper="celadon"] {
+  color-scheme: light;
+  --bg: #edf4ee;
+  --bg-elevated: #f6fbf7;
+  --bg-subtle: #e1ede3;
+  --bg-hover: #d3e4d6;
+  --ink: #223529;
+  --ink-secondary: #435e4d;
+  --ink-muted: #62806d;
+  --line: #cee0d1;
+  --line-strong: #b4cdb9;
+  --accent: #2e6b4c;
+  --accent-soft: rgba(46, 107, 76, 0.12);
+  --accent-ink: #f7fcf8;
+  --danger: #bf392d;
+  --danger-soft: rgba(191, 57, 45, 0.11);
+  --success: #226a48;
+  --success-soft: rgba(34, 106, 72, 0.12);
+  --warn: #9f6714;
+  --warn-soft: rgba(159, 103, 20, 0.13);
+
+  --glass: rgba(246, 251, 247, 0.86);
+  --glass-strong: rgba(246, 251, 247, 0.95);
+  --glass-border: rgba(34, 53, 41, 0.11);
+  --popover: #f8fcf9;
+  --popover-border: rgba(34, 53, 41, 0.14);
+  --highlight: rgba(255, 255, 255, 0.8);
+  --scrim: rgba(18, 36, 26, 0.22);
+  --grain-opacity: 0.03;
+  --shadow-sm: 0 1px 2px rgba(18, 40, 28, 0.05), 0 4px 12px -4px rgba(18, 40, 28, 0.06);
+  --shadow-float:
+    0 12px 34px -8px rgba(18, 40, 28, 0.13),
+    0 2px 8px -2px rgba(18, 40, 28, 0.07),
+    inset 0 1px 0 var(--highlight);
+  --shadow-popover:
+    0 16px 40px -12px rgba(18, 40, 28, 0.2),
+    0 4px 12px -4px rgba(18, 40, 28, 0.08),
+    inset 0 1px 0 var(--highlight);
+  --shadow-sheet:
+    -12px 0 44px -12px rgba(16, 36, 24, 0.16),
+    0 0 0 1px rgba(34, 53, 41, 0.08);
+  --shadow-sheet-mobile:
+    0 -14px 40px -12px rgba(16, 36, 24, 0.18),
+    0 0 0 1px rgba(34, 53, 41, 0.08);
+}
+
+.dark,
+[data-paper="dark"] {
+  color-scheme: dark;
+  --bg: #171513;
+  --bg-elevated: #201d1a;
+  --bg-subtle: #292521;
+  --bg-hover: #332e29;
+  --ink: #e8e4dc;
+  --ink-secondary: #b5aea3;
+  --ink-muted: #8a8378;
+  --line: rgba(255, 244, 228, 0.095);
+  --line-strong: rgba(255, 244, 228, 0.17);
+  --accent: #df7d5e;
+  --accent-soft: rgba(223, 125, 94, 0.15);
+  --accent-ink: #171513;
+  --danger: #e86458;
+  --danger-soft: rgba(232, 100, 88, 0.15);
+  --success: #4eb882;
+  --success-soft: rgba(78, 184, 130, 0.14);
+  --warn: #e0a043;
+  --warn-soft: rgba(224, 160, 67, 0.15);
+
+  --glass: rgba(32, 29, 26, 0.84);
+  --glass-strong: rgba(32, 29, 26, 0.95);
+  --glass-border: rgba(255, 244, 228, 0.1);
+  --popover: #24201d;
+  --popover-border: rgba(255, 244, 228, 0.12);
+  --highlight: rgba(255, 255, 255, 0.06);
+  --scrim: rgba(0, 0, 0, 0.5);
+  --grain-opacity: 0.025;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35), 0 4px 14px -4px rgba(0, 0, 0, 0.42);
+  --shadow-float:
+    0 18px 42px -10px rgba(0, 0, 0, 0.58),
+    0 4px 12px -2px rgba(0, 0, 0, 0.38),
+    inset 0 1px 0 var(--highlight);
+  --shadow-popover:
+    0 20px 46px -12px rgba(0, 0, 0, 0.66),
+    0 4px 14px -4px rgba(0, 0, 0, 0.42),
+    inset 0 1px 0 var(--highlight);
+  --shadow-sheet:
+    -16px 0 54px -10px rgba(0, 0, 0, 0.62),
+    0 0 0 1px rgba(255, 244, 228, 0.08);
+  --shadow-sheet-mobile:
+    0 -16px 48px -10px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(255, 244, 228, 0.08);
+  --shadow-book:
+    0 14px 28px -10px rgba(0, 0, 0, 0.6),
+    0 4px 10px -3px rgba(0, 0, 0, 0.4);
+  --shadow-book-hover:
+    0 22px 38px -12px rgba(0, 0, 0, 0.72),
+    0 6px 14px -4px rgba(0, 0, 0, 0.5);
+  --shadow-primary: 0 1px 0 rgba(255, 255, 255, 0.2) inset, 0 4px 16px -4px color-mix(in oklab, var(--accent) 45%, transparent);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-elevated: var(--bg-elevated);
+  --color-subtle: var(--bg-subtle);
+  --color-hover: var(--bg-hover);
+  --color-ink: var(--ink);
+  --color-ink-secondary: var(--ink-secondary);
+  --color-ink-muted: var(--ink-muted);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-ink);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+
+  --font-serif:
+    "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", Georgia, serif;
+  --font-kai:
+    "LXGW WenKai", "Kaiti SC", "STKaiti", "KaiTi", "Noto Serif SC", serif;
+  --font-sans:
+    "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono:
+    "JetBrains Mono", "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@layer base {
+  * {
+    border-color: var(--line);
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--accent) 20%, transparent);
+    color: var(--ink);
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100dvh;
+    height: 100%;
+  }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-feature-settings: "palt" 0, "kern" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    transition:
+      background-color 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      color 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  /* 键盘焦点：统一朱砂色柔光环（鼠标点击不显示） */
+  :where(a, button, [role="button"], [role="tab"], [role="switch"], [role="option"], summary):focus-visible {
+    outline: 2px solid color-mix(in oklab, var(--accent) 62%, transparent);
+    outline-offset: 2px;
+  }
+  :where(input, textarea, select):focus-visible {
+    outline: none;
+  }
+
+  kbd {
+    font-family: var(--font-mono);
+    font-feature-settings: "tnum" 1;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+}
+
+/* ==========================================================================
+   Surfaces —— 放入 components 层，保证 Tailwind 工具类（border-danger 等）可覆盖
+   ========================================================================== */
+@layer components {
+  /* 浮层玻璃态：高不透明度 + 柔焦，文字始终清晰；顶部 1px 内高光模拟纸面反光 */
+  .surface-glass {
+    background: color-mix(in oklab, var(--bg-elevated) 94%, transparent);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--shadow-float);
+    backdrop-filter: blur(22px) saturate(1.45);
+    -webkit-backdrop-filter: blur(22px) saturate(1.45);
+  }
+
+  /* 实底浮层：菜单 / 下拉 / 主题选择，绝不透底 */
+  .surface-popover {
+    background: var(--popover);
+    border: 1px solid var(--popover-border);
+    box-shadow: var(--shadow-popover);
+  }
+
+  .surface-sheet {
+    background: var(--glass-strong);
+    box-shadow: var(--shadow-sheet);
+    backdrop-filter: blur(26px) saturate(1.3);
+    -webkit-backdrop-filter: blur(26px) saturate(1.3);
+  }
+  @media (max-width: 639px) {
+    .surface-sheet {
+      box-shadow: var(--shadow-sheet-mobile);
+    }
+  }
+
+  .surface-workbench {
+    background: color-mix(in oklab, var(--bg-elevated) 96%, transparent);
+    backdrop-filter: blur(24px) saturate(1.25);
+    -webkit-backdrop-filter: blur(24px) saturate(1.25);
+  }
+
+  /* 无 backdrop-filter 支持（或省电模式）时退化为实底，避免透底发灰 */
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .surface-glass,
+    .surface-sheet,
+    .surface-workbench {
+      background: var(--bg-elevated);
+    }
+  }
+
+  /* 宣纸纤维肌理：极淡噪点，四套纸色各自调校浓度 */
+  .paper-grain {
+    position: relative;
+    isolation: isolate;
+  }
+  .paper-grain::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    opacity: var(--grain-opacity);
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.9 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    background-size: 160px 160px;
+  }
+  .dark .paper-grain::before {
+    mix-blend-mode: screen;
+    filter: invert(1);
+  }
+
+  /* 发丝线：在高 DPR 屏下保持 0.5px 视觉粗细 */
+  .hairline-b {
+    box-shadow: inset 0 -1px 0 var(--line);
+  }
+  @media (min-resolution: 2dppx) {
+    .hairline-b {
+      box-shadow: inset 0 -0.5px 0 var(--line-strong);
+    }
+  }
+
+  /* 快捷键角标 */
+  .kbd-chip {
+    display: inline-flex;
+    min-width: 1.25rem;
+    height: 1.25rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.125rem;
+    padding: 0 0.3125rem;
+    border-radius: 0.375rem;
+    border: 1px solid var(--line-strong);
+    border-bottom-width: 1.5px;
+    background: var(--bg-elevated);
+    color: var(--ink-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    box-shadow: 0 1px 0 color-mix(in oklab, var(--ink) 4%, transparent);
+  }
+
+  /* 封面 / 卡片加载骨架流光 */
+  .skeleton-sheen {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(
+      100deg,
+      transparent 20%,
+      rgba(255, 255, 255, 0.16) 42%,
+      rgba(255, 255, 255, 0.28) 50%,
+      rgba(255, 255, 255, 0.16) 58%,
+      transparent 80%
+    );
+    background-size: 220% 100%;
+    animation: skeleton-sheen 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+  .dark .skeleton-sheen {
+    background-image: linear-gradient(
+      100deg,
+      transparent 20%,
+      rgba(255, 255, 255, 0.05) 42%,
+      rgba(255, 255, 255, 0.1) 50%,
+      rgba(255, 255, 255, 0.05) 58%,
+      transparent 80%
+    );
+  }
+
+  /* 表单错误轻摇 */
+  .shake-x {
+    animation: shake-x 380ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+  }
+
+  /* 竖排书法文本 */
+  .vertical-rl {
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+  }
+}
+
+@keyframes skeleton-sheen {
+  0% {
+    background-position: 120% 0;
+  }
+  100% {
+    background-position: -120% 0;
+  }
+}
+
+@keyframes shake-x {
+  10%,
+  90% {
+    transform: translateX(-1px);
+  }
+  20%,
+  80% {
+    transform: translateX(2px);
+  }
+  30%,
+  50%,
+  70% {
+    transform: translateX(-4px);
+  }
+  40%,
+  60% {
+    transform: translateX(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-sheen,
+  .shake-x {
+    animation: none;
+  }
+}
+
+/* Vaul / iOS Spatial Z-Depth Receding Canvas when a Floating Sheet opens */
+[data-vaul-canvas="true"] {
+  transform-origin: center top;
+  transition:
+    transform 380ms cubic-bezier(0.32, 0.72, 0, 1),
+    border-radius 380ms cubic-bezier(0.32, 0.72, 0, 1),
+    filter 380ms cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html.sheet-depth-active [data-vaul-canvas="true"] {
+    transform: scale(0.98) translateY(4px);
+    border-radius: 18px;
+    filter: brightness(0.97);
+    overflow: hidden;
+  }
+  html.dark.sheet-depth-active [data-vaul-canvas="true"] {
+    filter: brightness(0.88);
+  }
+}
+
+/* Horizontal overflow fade hint for pill strips */
+.scroll-fade-x {
+  mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 20px), transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 20px), transparent 100%);
+}
+
+/* Dynamic Island Live TTS Waveform Equalizer */
+@keyframes tts-eq {
+  0%,
+  100% {
+    transform: scaleY(0.28);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+.tts-eq-bar {
+  width: 2.5px;
+  height: 15px;
+  border-radius: 999px;
+  transform-origin: center bottom;
+  animation: tts-eq 0.88s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+}
+.tts-eq-bar[data-paused="true"] {
+  animation-play-state: paused;
+  transform: scaleY(0.32);
+  opacity: 0.45;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tts-eq-bar {
+    animation: none;
+    transform: scaleY(0.65);
+  }
+}
+
+/* Tactile spread page-turn sheen pulse */
+@keyframes spread-turn-sheen {
+  0% {
+    opacity: 0.72;
+    transform: translateX(var(--turn-from, 28px));
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(0);
+  }
+}
+.spread-turn-flash {
+  pointer-events: none;
+  animation: spread-turn-sheen 280ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Open-book spread center gutter shadow */
+.spread-gutter {
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.02) 40%,
+    rgba(0, 0, 0, 0.065) 49.4%,
+    rgba(255, 255, 255, 0.32) 50.2%,
+    rgba(0, 0, 0, 0.035) 52.5%,
+    transparent 100%
+  );
+}
+.dark .spread-gutter {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.16) 40%,
+    rgba(0, 0, 0, 0.38) 49.4%,
+    rgba(255, 255, 255, 0.05) 50.2%,
+    rgba(0, 0, 0, 0.22) 52.5%,
+    transparent 100%
+  );
+}
+
+/* 精细发丝滚动条：静止时近乎隐形，悬停容器时浮现，拖拽时染朱砂 */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--ink-muted) 32%, transparent) transparent;
+  }
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  background-color: color-mix(in oklab, var(--ink-muted) 22%, transparent);
+  transition: background-color 160ms ease;
+}
+*:hover::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklab, var(--ink-muted) 38%, transparent);
+}
+*::-webkit-scrollbar-thumb:hover {
+  border-width: 2px;
+  background-color: color-mix(in oklab, var(--ink-muted) 55%, transparent);
+}
+*::-webkit-scrollbar-thumb:active {
+  background-color: color-mix(in oklab, var(--accent) 65%, transparent);
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Reader inline images */
+.reader-img-box {
+  display: block;
+  margin: 1.25em auto;
+  max-width: 100%;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  background: var(--bg-subtle);
+}
+.reader-img-box img {
+  display: block;
+  max-width: 100%;
+  max-height: 75vh;
+  margin: 0 auto;
+  object-fit: contain;
+}
+
+/* Safe area helpers */
+.safe-b {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.safe-t {
+  padding-top: env(safe-area-inset-top, 0px);
+}

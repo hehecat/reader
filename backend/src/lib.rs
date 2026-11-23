@@ -108,10 +108,8 @@ impl AppConfig {
                 "READER_APP_DEFAULTUSERENABLEBOOKSOURCE",
                 true,
             ),
-            default_user_enable_rss_source: env_flag_default(
-                "READER_APP_DEFAULTUSERENABLERSSSOURCE",
-                true,
-            ),
+            // RSS 功能已移除，保留字段以兼容 /getUserInfo 与 /getUsers JSON 结构
+            default_user_enable_rss_source: false,
             default_user_book_source_limit: env_i64("READER_APP_DEFAULTUSERBOOKSOURCELIMIT", 80000),
             default_user_book_limit: env_i64("READER_APP_DEFAULTUSERBOOKLIMIT", 5000),
             upload_max_mb: env_i64("READER_UPLOAD_MAX_MB", 100),
@@ -156,26 +154,24 @@ impl AppConfig {
         }
         // GAP 170 本地书双轨同步仓：启动对账 + 书仓目录文件监听（notify，300ms 去抖）
         service::local_sync::spawn_local_sync(storage.clone());
-        // F-35 定时书架更新检查（每 10 分钟）+ GAP #101 订阅/RSS 自动刷新
+        // 定时书架更新检查（每 10 分钟）
         service::schedule::spawn_schedule_jobs(storage.clone());
-        // GAP #57 自动备份（每天 READER_AUTO_BACKUP_HOUR 03:00 默认）
+        // 自动备份（每天 READER_AUTO_BACKUP_HOUR，默认 03:00）
         service::schedule::spawn_auto_backup_job(storage.clone());
         let app = api::router(self.clone(), storage);
-        // GAP 60：静态资源 Cache-Control（hash 文件名 30 天 / index.html no-cache）。
-        // 挂载点说明：router.rs 被并行修改（git status 未提交改动）——避免冲突，
-        // 在 app 构造处（lib.rs serve()，main.rs 无 app 构造代码）挂载，效果等同 router 内层。
+        // 静态资源 Cache-Control（hash 文件名 30 天 / index.html no-cache）
         let app = app.layer(crate::middleware::cache_control::CacheControlLayer);
-        // GAP 60 备注（实测确认）：router.rs 内的 CompressionLayer 只覆盖其调用前注册的路由
-        // （/assets、/health 等）——fallback 静态资源（web-ui/dist）与后注册的 /reader3、/opds
-        // 路由未覆盖（axum Router::layer 只包装调用时已注册的路由）。此处外层再挂一层兜底：
-        // 已带 Content-Encoding 的响应自动跳过，SSE（text/event-stream）/音视频默认排除，无副作用。
-        let app = app.layer(tower_http::compression::CompressionLayer::new());
-        // GAP 62：multipart 超限（DefaultBodyLimit 413）→ 替换为明确的 JSON 错误（最外层兜底）
+        // 统一外层响应压缩（gzip），显式排除 text/event-stream 以避免 SSE 首包缓冲延迟
+        use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Predicate};
+        let app = app.layer(
+            tower_http::compression::CompressionLayer::new().compress_when(
+                DefaultPredicate::new().and(NotForContentType::new("text/event-stream")),
+            ),
+        );
+        // multipart 超限（DefaultBodyLimit 413）→ 替换为明确的 JSON 错误（最外层兜底）
         let app = app.layer(crate::middleware::upload_limit::UploadLimitLayer {
             max_mb: self.upload_max_mb,
         });
-        // 服务监控：请求计数（最外层——413/404/静态资源同样计入）
-        let app = app.layer(crate::middleware::stats::StatsLayer);
         let addr = SocketAddr::from(([0, 0, 0, 0], self.port));
         tracing::info!("reader-dev (Rust) listening on {addr}");
         let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -280,7 +276,7 @@ mod tests {
         assert!(!cfg.default_user_enable_webdav);
         assert!(!cfg.default_user_enable_local_store);
         assert!(cfg.default_user_enable_book_source);
-        assert!(cfg.default_user_enable_rss_source);
+        assert!(!cfg.default_user_enable_rss_source);
         assert_eq!(cfg.default_user_book_source_limit, 80000);
         assert_eq!(cfg.default_user_book_limit, 5000);
         // 显式 true 可开启 / 显式 false 可关闭

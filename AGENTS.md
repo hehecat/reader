@@ -7,30 +7,29 @@
 
 | 路径 | 内容 |
 |---|---|
-| `backend/` | Rust(axum) 后端：`src/api/router.rs` 路由（很大，改前先 grep 函数名）、`src/service/*` 抓取/搜索/阅读、`src/storage/*` SQLite 与迁移、`src/parser/*` 书源规则引擎 |
-| `frontend/` | React + Vite + Tailwind，`pnpm` 管理 |
+| `backend/` | Rust(axum) 后端：`src/api/*` 按业务域拆分路由与 SSE、`src/service/*` 抓取/搜索/本地书（TXT+EPUB）、`src/storage/*` SQLite 模块化存储与热数据缓存、`src/parser/*` 书源规则引擎 |
+| `frontend-v2/` | 全新重构前端（React 19 + Vite + Tailwind v4 + Motion），`pnpm` 管理 |
 | `deploy/` | compose 与部署资产；`docker-compose.override.yml` 本机配置，已 gitignore |
 | `docs/` | 人类文档：配置、运维、截图 |
-| `scripts/` | `dev-backend.sh` 本地起后端、`camoufox_solver.py`、curated sources |
+| `scripts/` | `dev-backend.sh` 本地起后端（`camoufox_solver.py` 位于 `backend/scripts/`） |
 
 ## 构建与测试
 
 ```bash
-# 后端（RUSTFLAGS 必需，否则 reqwest http3 编译失败）
+# 后端（零环境变量开箱即编；可选 --no-default-features 关闭 dict/camoufox）
 cd backend
 export PATH="$HOME/.cargo/bin:$PATH"
-export RUSTFLAGS="--cfg reqwest_unstable"
 
-cargo test --lib                    # 全部单测（约 730 个，4 分钟）
-cargo test --lib service::crawler   # 只跑相关模块（执行 <1s，重链约 22s）
+cargo test --lib                    # 全部单测
+cargo test --lib service::crawler   # 只跑相关模块
 cargo test --lib --tests            # 单测 + 集成测试
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 
-# 前端
-cd frontend
+# 前端 (frontend-v2)
+cd frontend-v2
 pnpm install --frozen-lockfile
-pnpm lint
+pnpm typecheck && pnpm lint
 pnpm build                          # tsc -b && vite build
 ```
 
@@ -58,7 +57,7 @@ pnpm build                          # tsc -b && vite build
 ## 代码约定
 
 - 测试与源码同文件的 `#[cfg(test)]` 模块；跨模块集成测试在 `backend/tests/`。
-- 存储 schema 迁移在 `backend/src/storage/migrate.rs`，改表要兼容旧库。
+- 存储表结构与高频索引集中在 `backend/src/storage/schema.rs`（纯净建表，已移除旧版 JSON 迁移器）。
 - 提交信息说清「为什么」，不要只写「update」。
 - 大改动前先看 `backend/BACKEND-NOTES.md`（v5 时代设计背景，与现状冲突时以代码为准）。
 

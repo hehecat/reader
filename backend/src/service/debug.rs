@@ -339,7 +339,7 @@ async fn debug_explore(
     let url = if url.starts_with('/') && !url.starts_with("//") {
         let base = source
             .book_source_url
-            .split("##")
+            .split('#')
             .next()
             .unwrap_or("")
             .trim_end_matches('/');
@@ -370,7 +370,7 @@ async fn debug_explore(
     Ok(json!(books))
 }
 
-/// toc：规则解析 → 抓取目录页 → chapterList 提取 → 字段规则 → nextTocUrl 循环（≤5 页）
+/// toc：规则解析 →（必要时经 ruleBookInfo.tocUrl 解析目录地址）→ 抓取目录页 → chapterList 提取 → 字段规则 → nextTocUrl 队列循环（≤5 页）
 async fn debug_toc(
     ns: &str,
     source: &BookSource,
@@ -396,9 +396,39 @@ async fn debug_toc(
     step.result_len = list_rule.len();
     on_step(&step);
 
+    // 若书源配置了 ruleBookInfo.tocUrl（例如详情页 `/book/123` → 目录接口 `/toc/123`），先解析真实目录 URL
+    let info_started = Instant::now();
+    let resolved_toc_url = crate::service::book::resolve_toc_url(ns, source, toc_url).await;
+    if resolved_toc_url != toc_url {
+        on_step(&DebugStep {
+            rule_name: "详情目录解析（ruleBookInfo.tocUrl）".into(),
+            url: resolved_toc_url.clone(),
+            elapsed_ms: info_started.elapsed().as_millis() as i64,
+            result_len: resolved_toc_url.len(),
+            error: None,
+            detail: json!({ "bookUrl": toc_url, "tocUrl": resolved_toc_url }),
+        });
+    }
+
     let mut all: Vec<Value> = Vec::new();
-    let mut current_url = toc_url.to_string();
-    for page in 0..5usize {
+    let mut queue = std::collections::VecDeque::new();
+    let mut visited = std::collections::HashSet::new();
+    queue.push_back(resolved_toc_url.clone());
+    visited.insert(resolved_toc_url.clone());
+    let mut vars = crate::parser::rule::load_book_vars_merged(
+        ns,
+        &source.book_source_url,
+        toc_url,
+        &resolved_toc_url,
+    );
+    let mut tried_book_fallback = resolved_toc_url == toc_url;
+
+    let mut page = 0usize;
+    while page < 5 {
+        let Some(current_url) = queue.pop_front() else {
+            break;
+        };
+        page += 1;
         // 清掉上一页 nextTocUrl 字段求值可能留下的 JS 错误记录（避免错挂到本页步骤）
         let _ = crate::parser::js::take_last_js_error();
         // 抓取目录页
@@ -408,10 +438,11 @@ async fn debug_toc(
                 Err(e) => return Err(e),
             };
         let base = resp.url.clone();
+        vars.insert("baseUrl".to_string(), base.clone());
 
         // chapterList 提取（与生产 analyze_toc 同源 toc_items——含 <js>/@js: 兜底，
         // 保证 JS 规则确实执行、失败可被 attach_js_error 捕获）
-        let mut step = DebugStep::new(format!("chapterList 提取（第 {} 页）", page + 1));
+        let mut step = DebugStep::new(format!("chapterList 提取（第 {page} 页）"));
         let started = Instant::now();
         let items: Vec<String> = crate::service::book::toc_items(&list_rule, &resp.body);
         step.elapsed_ms = started.elapsed().as_millis() as i64;
@@ -420,6 +451,15 @@ async fn debug_toc(
         // GAP 156：chapterList JS 规则（<js>/@js:）eval 失败 → 错误消息 + JS 片段前 100 字符
         attach_js_error(&mut step, Some(&list_rule));
         on_step(&step);
+
+        // 首页若因镜像 tocUrl 失效得到 0 章，回退原书页 toc_url 再试一次（对齐生产 analyze_toc）
+        if page == 1 && items.is_empty() && !tried_book_fallback {
+            tried_book_fallback = true;
+            if visited.insert(toc_url.to_string()) {
+                queue.push_front(toc_url.to_string());
+                continue;
+            }
+        }
 
         // 字段规则（前 20 条示例）
         let mut step = DebugStep::new("字段规则（chapterName/chapterUrl）");
@@ -457,16 +497,16 @@ async fn debug_toc(
         on_step(&step);
         all.extend(page_chapters);
 
-        // nextTocUrl
-        let next = rule
-            .next_toc_url
-            .as_deref()
-            .map(|r| field(&resp.body, Some(r), ""))
-            .unwrap_or_default();
-        if next.is_empty() {
-            break;
+        // nextTocUrl：与生产 analyze_toc 共用多候选拆分与已访问去重，支持 `option@value` 等多元素翻页
+        if let Some(next_rule) = rule.next_toc_url.as_deref() {
+            for cand in crate::service::book::next_toc_urls(
+                &resp.body, next_rule, &base, source, ns, &mut vars,
+            ) {
+                if cand != base && visited.insert(cand.clone()) {
+                    queue.push_back(cand);
+                }
+            }
         }
-        current_url = to_absolute(&next, &base);
     }
     Ok(json!(all))
 }

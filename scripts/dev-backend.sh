@@ -10,7 +10,7 @@
 # 环境变量:
 #   DEV_BACKEND_PORT     监听端口(默认 4599)
 #   DEV_BACKEND_WORKDIR  实例数据目录(默认 /tmp/reader-devbackend-<port>, 含 storage/)
-#   DEV_BACKEND_WEBROOT  前端目录(默认仓库 deploy/web-dist; 不存在则用 frontend/dist)
+#   DEV_BACKEND_WEBROOT  前端目录(默认仓库 deploy/web-dist; 不存在则用 frontend-v2/dist)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -36,13 +36,13 @@ esac
 
 if [ -z "$WEBROOT" ]; then
   if [ -d "$ROOT/deploy/web-dist" ]; then WEBROOT="$ROOT/deploy/web-dist";
-  elif [ -d "$ROOT/frontend/dist" ]; then WEBROOT="$ROOT/frontend/dist";
+  elif [ -d "$ROOT/frontend-v2/dist" ]; then WEBROOT="$ROOT/frontend-v2/dist";
   else WEBROOT="$ROOT/backend/web-ui/dist"; fi
 fi
 
 # rust-embed 编译期内嵌 backend/web-ui/dist(仓库不存前端产物) → 每次用 WEBROOT 刷新,
 # 否则二进制内嵌旧前端优先于磁盘, 验不到新 UI
-if [ -d "$WEBROOT" ]; then
+if [ -d "$WEBROOT" ] && [ "$WEBROOT" != "$ROOT/backend/web-ui/dist" ]; then
   rm -rf "$ROOT/backend/web-ui/dist"
   mkdir -p "$ROOT/backend/web-ui/dist"
   cp -a "$WEBROOT"/. "$ROOT/backend/web-ui/dist/" 2>/dev/null || true
@@ -50,7 +50,6 @@ fi
 
 cd "$ROOT/backend"
 echo "== cargo build (debug 增量)"
-export RUSTFLAGS="--cfg reqwest_unstable"
 cargo build 2>&1 | tail -2
 
 mkdir -p "$WORKDIR/storage"

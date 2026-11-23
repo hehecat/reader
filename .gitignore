@@ -1,11 +1,12 @@
 # rust
 backend/target/
 # node
-frontend/node_modules/
-frontend/dist/
+frontend-v2/node_modules/
+frontend-v2/dist/
 # 部署产物与秘密
 deploy/.env
 deploy/web-dist/
+deploy/logs/
 *.log
 docker-compose.override.yml
 deploy/Caddyfile.local

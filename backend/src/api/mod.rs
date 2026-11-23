@@ -1,9 +1,13 @@
-//! HTTP API（/reader3/*，兼容 legacy）
+//! HTTP API（`/reader3/*` 及静态资源/媒体路由）
 
+pub mod assets;
+pub mod auth;
+pub mod books;
+pub mod features;
 pub mod files;
-pub mod opds;
-pub mod pro_export;
 pub mod router;
-pub mod webdav;
+pub mod search;
+pub mod sources;
+pub mod sse;
 
 pub use router::router;

@@ -238,7 +238,7 @@ pub async fn explore_url(
         } else {
             let base = source
                 .book_source_url
-                .split("##")
+                .split('#')
                 .next()
                 .unwrap_or("")
                 .trim_end_matches('/');
@@ -312,26 +312,28 @@ pub async fn explore_url(
             }
         }
     } else if method.eq_ignore_ascii_case("POST") {
-        crawler::http_post_retry(
+        crawler::http_post_retry_scoped(
+            crawler::FetchScope::Search,
             ns,
             &final_url,
             &headers,
-            15,
+            8,
             post_body.as_deref(),
             suffix.charset.as_deref(),
             source.proxy_url.as_deref(),
-            suffix.retry,
+            suffix.retry.or(Some(0)),
         )
         .await
     } else {
-        crawler::http_get_retry(
+        crawler::http_get_retry_scoped(
+            crawler::FetchScope::Search,
             ns,
             &final_url,
             &headers,
-            15,
+            8,
             suffix.charset.as_deref(),
             source.proxy_url.as_deref(),
-            suffix.retry,
+            suffix.retry.or(Some(0)),
         )
         .await
     }

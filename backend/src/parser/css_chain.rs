@@ -11,9 +11,196 @@
 //! - 末段提取：text/textNodes/ownText/html（去 script/style）/all/href/src/content/任意属性
 //! - 单段规则 CSS 解析失败 → 正则回退（legacy 兼容；GAP 153：lookbehind 经 fancy-regex）
 
+use std::cell::RefCell;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::rc::Rc;
+use std::sync::LazyLock;
+
+use parking_lot::Mutex;
 use scraper::{ElementRef, Html, Selector};
 
 use crate::parser::rule;
+
+/// CSS `Selector` 全局 LRU 编译缓存容量（避免列表项/字段反复解析同一选择器）
+const SELECTOR_CACHE_MAX: usize = 512;
+
+/// 同线程已解析 `scraper::Html` 4 槽位 LRU 缓存容量（典型命中：外层整页 + 当前条目 + 片段）
+const HTML_CACHE_SLOTS: usize = 4;
+/// 单条 HTML 缓存上限（4 MiB），防止超大响应长驻线程局部存储
+const HTML_CACHE_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+struct SelectorCache {
+    entries: HashMap<String, (u64, Result<Selector, ()>)>,
+    clock: u64,
+    #[cfg(test)]
+    hits: usize,
+}
+
+impl SelectorCache {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::with_capacity(64),
+            clock: 0,
+            #[cfg(test)]
+            hits: 0,
+        }
+    }
+
+    fn get(&mut self, sel: &str) -> Option<Result<Selector, ()>> {
+        let (tick, val) = self.entries.get_mut(sel)?;
+        self.clock = self.clock.wrapping_add(1);
+        *tick = self.clock;
+        #[cfg(test)]
+        {
+            self.hits += 1;
+        }
+        Some(val.clone())
+    }
+
+    fn insert(&mut self, sel: String, val: Result<Selector, ()>) {
+        self.clock = self.clock.wrapping_add(1);
+        let tick = self.clock;
+        if let Some(entry) = self.entries.get_mut(&sel) {
+            entry.0 = tick;
+            entry.1 = val;
+            return;
+        }
+        if self.entries.len() >= SELECTOR_CACHE_MAX {
+            if let Some(victim) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (t, _))| *t)
+                .map(|(k, _)| k.clone())
+            {
+                self.entries.remove(&victim);
+            }
+        }
+        self.entries.insert(sel, (tick, val));
+    }
+}
+
+static SELECTOR_CACHE: LazyLock<Mutex<SelectorCache>> =
+    LazyLock::new(|| Mutex::new(SelectorCache::new()));
+
+/// 全局 LRU 缓存的 CSS 选择器编译入口（收敛 `css_chain` 与 `bridge_dom` 全部 `Selector::parse`）。
+/// 解析失败同样缓存 `Err(())`，避免正则回退规则在列表循环中反复触发选择器解析失败。
+pub(crate) fn parse_selector_cached(sel: &str) -> Option<Selector> {
+    if let Some(hit) = SELECTOR_CACHE.lock().get(sel) {
+        return hit.ok();
+    }
+    let parsed = Selector::parse(sel).map_err(|_| ());
+    SELECTOR_CACHE
+        .lock()
+        .insert(sel.to_string(), parsed.clone());
+    parsed.ok()
+}
+
+struct HtmlCacheEntry {
+    hash: u64,
+    is_fragment: bool,
+    raw: String,
+    doc: Rc<Html>,
+    tick: u64,
+}
+
+struct HtmlCache {
+    slots: Vec<HtmlCacheEntry>,
+    clock: u64,
+    #[cfg(test)]
+    hits: usize,
+}
+
+impl HtmlCache {
+    fn new() -> Self {
+        Self {
+            slots: Vec::with_capacity(HTML_CACHE_SLOTS),
+            clock: 0,
+            #[cfg(test)]
+            hits: 0,
+        }
+    }
+
+    fn get(&mut self, hash: u64, is_fragment: bool, raw: &str) -> Option<Rc<Html>> {
+        for entry in &mut self.slots {
+            if entry.hash == hash && entry.is_fragment == is_fragment && entry.raw == raw {
+                self.clock = self.clock.wrapping_add(1);
+                entry.tick = self.clock;
+                #[cfg(test)]
+                {
+                    self.hits += 1;
+                }
+                return Some(Rc::clone(&entry.doc));
+            }
+        }
+        None
+    }
+
+    fn insert(&mut self, hash: u64, is_fragment: bool, raw: &str, doc: Rc<Html>) {
+        if raw.len() > HTML_CACHE_MAX_BYTES {
+            return;
+        }
+        self.clock = self.clock.wrapping_add(1);
+        let tick = self.clock;
+        for entry in &mut self.slots {
+            if entry.hash == hash && entry.is_fragment == is_fragment && entry.raw == raw {
+                entry.doc = doc;
+                entry.tick = tick;
+                return;
+            }
+        }
+        let new_entry = HtmlCacheEntry {
+            hash,
+            is_fragment,
+            raw: raw.to_string(),
+            doc,
+            tick,
+        };
+        if self.slots.len() < HTML_CACHE_SLOTS {
+            self.slots.push(new_entry);
+        } else if let Some((idx, _)) = self.slots.iter().enumerate().min_by_key(|(_, e)| e.tick) {
+            self.slots[idx] = new_entry;
+        }
+    }
+}
+
+thread_local! {
+    static HTML_CACHE: RefCell<HtmlCache> = RefCell::new(HtmlCache::new());
+}
+
+fn hash_html(raw: &str) -> u64 {
+    let mut h = DefaultHasher::new();
+    raw.hash(&mut h);
+    h.finish()
+}
+
+fn parse_html_cached(raw: &str, is_fragment: bool) -> Rc<Html> {
+    let hash = hash_html(raw);
+    if let Some(hit) = HTML_CACHE.with(|c| c.borrow_mut().get(hash, is_fragment, raw)) {
+        return hit;
+    }
+    let parsed = Rc::new(if is_fragment {
+        Html::parse_fragment(raw)
+    } else {
+        Html::parse_document(raw)
+    });
+    HTML_CACHE.with(|c| {
+        c.borrow_mut()
+            .insert(hash, is_fragment, raw, Rc::clone(&parsed))
+    });
+    parsed
+}
+
+/// 同线程 4 槽位缓存的 `Html::parse_document`：同一页面/条目连续提取多字段零重复建树。
+pub(crate) fn parse_html_document_cached(doc_html: &str) -> Rc<Html> {
+    parse_html_cached(doc_html, false)
+}
+
+/// 同线程 4 槽位缓存的 `Html::parse_fragment`（供 `bridge_dom` 元素属性/文本/子选择复用）。
+pub(crate) fn parse_html_fragment_cached(frag_html: &str) -> Rc<Html> {
+    parse_html_cached(frag_html, true)
+}
 
 /// 链式 CSS 入口。含 `<js>`/`@js:` 标记时委托规则引擎（类型逐段识别）；
 /// 否则走纯 CSS 链。
@@ -93,7 +280,7 @@ fn split_at_chain(rule: &str) -> Vec<&str> {
 
 /// 单条 CSS 链：`@` 切分；末段为提取器 → 提取；否则全为选择器步进 → 返回元素 HTML
 fn css_chain_single(rule: &str, doc_html: &str) -> Vec<String> {
-    let doc = Html::parse_document(doc_html);
+    let doc = parse_html_document_cached(doc_html);
     let parts = split_at_chain(rule);
     if parts.is_empty() {
         return vec![];
@@ -568,11 +755,11 @@ fn children_one<'a>(doc: &'a Html, root: Option<ElementRef<'a>>) -> Vec<ElementR
     }
 }
 
-/// 解析 CSS 选择器；失败置位（单段规则触发正则回退）
+/// 解析 CSS 选择器（经全局 LRU 缓存）；失败置位（单段规则触发正则回退）
 fn parse_selector(sel: &str, selector_parse_failed: &mut bool) -> Option<Selector> {
-    match Selector::parse(sel) {
-        Ok(s) => Some(s),
-        Err(_) => {
+    match parse_selector_cached(sel) {
+        Some(s) => Some(s),
+        None => {
             *selector_parse_failed = true;
             None
         }
@@ -1317,9 +1504,8 @@ fn text_without_scripts(el: &ElementRef) -> String {
 /// 元素 outerHTML，但移除内部 script/style（legado @html 语义）
 fn html_without_scripts(el: &ElementRef) -> String {
     let mut frag = Html::parse_fragment(&el.html());
-    let sel = match Selector::parse("script, style") {
-        Ok(s) => s,
-        Err(_) => return el.html(),
+    let Some(sel) = parse_selector_cached("script, style") else {
+        return el.html();
     };
     let ids: Vec<_> = frag.select(&sel).map(|e| e.id()).collect();
     for id in ids {
@@ -1843,6 +2029,58 @@ mod tests {
         assert_eq!(
             css_chain("class.item:eq(0)@text", html2),
             vec!["甲".to_string()]
+        );
+    }
+
+    /// R3：CSS Selector 全局 LRU 缓存 + 同线程 HTML DOM 4 槽位缓存命中与结果一致性
+    #[test]
+    fn test_selector_and_dom_cache_hit_consistency() {
+        let page = r#"<div class="card"><h2 class="title-r3">修真聊天群</h2><span class="author-r3">圣骑士的传说</span><a href="/book/99">详情</a></div>"#;
+        let item =
+            r#"<li class="item-r3"><a href="/c/1">第一章</a><em class="meta-r3">免费</em></li>"#;
+
+        let sel_hits_before = SELECTOR_CACHE.lock().hits;
+        let html_hits_before = HTML_CACHE.with(|c| c.borrow().hits);
+
+        // 对同一外层页面连续提取 3 个字段 + 对同一条目片段连续提取 2 个字段，交错验证多槽位共存
+        let t1 = css_chain("h2.title-r3@text", page);
+        let a1 = css_chain("span.author-r3@text", page);
+        let u1 = css_chain("div.card@a@href", page);
+        let c1 = css_chain("li.item-r3@a@text", item);
+        let m1 = css_chain("li.item-r3@em.meta-r3@text", item);
+
+        // 再次用相同选择器与相同文档查询，必命中 Selector 缓存与 HTML DOM 缓存
+        let t2 = css_chain("h2.title-r3@text", page);
+        let a2 = css_chain("span.author-r3@text", page);
+        let c2 = css_chain("li.item-r3@a@text", item);
+        // 片段缓存独立于 document 缓存，且同一片段二次解析必命中
+        let f1 = parse_html_fragment_cached(item);
+        let f2 = parse_html_fragment_cached(item);
+        assert!(Rc::ptr_eq(&f1, &f2), "同线程相同片段应复用同一 Rc<Html>");
+
+        // 非法选择器同样被缓存，不抛错且保持正则回退一致
+        let bad_sel = "书名-r3：(.+?)\\s";
+        assert!(parse_selector_cached(bad_sel).is_none());
+        assert!(parse_selector_cached(bad_sel).is_none());
+
+        assert_eq!(t1, vec!["修真聊天群".to_string()]);
+        assert_eq!(t1, t2);
+        assert_eq!(a1, vec!["圣骑士的传说".to_string()]);
+        assert_eq!(a1, a2);
+        assert_eq!(u1, vec!["/book/99".to_string()]);
+        assert_eq!(c1, vec!["第一章".to_string()]);
+        assert_eq!(c1, c2);
+        assert_eq!(m1, vec!["免费".to_string()]);
+
+        let sel_hits_after = SELECTOR_CACHE.lock().hits;
+        let html_hits_after = HTML_CACHE.with(|c| c.borrow().hits);
+        assert!(
+            sel_hits_after > sel_hits_before,
+            "Selector LRU 缓存应命中: before={sel_hits_before}, after={sel_hits_after}"
+        );
+        assert!(
+            html_hits_after >= html_hits_before + 6,
+            "同线程 HTML DOM 缓存应连续命中: before={html_hits_before}, after={html_hits_after}"
         );
     }
 }

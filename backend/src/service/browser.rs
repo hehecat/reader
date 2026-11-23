@@ -1,10 +1,12 @@
-//! 浏览器后端统一门面（**camoufox-only**）。
+//! 浏览器后端统一门面（**camoufox-only**，受可选 Cargo feature `camoufox` 控制）。
 //!
 //! Rust 内不内嵌浏览器引擎：验证码求解 / 登录表单 / 滑块 / 图片验证码全部委托
 //! camoufox HTTP 服务（`scripts/camoufox_solver.py`，见 [`crate::service::camoufox`]）。
 //! 保留本模块对外 API（`is_browser_available` / `solve_cf_challenge` / `solve_captcha`
 //! / `extract_turnstile_sitekey` / `unsupported_captcha_kind`），crawler 与书源 JS 桥
-//! 无需感知后端实现。服务未运行时首次调用自动拉起（`camoufox::ensure_service`）。
+//! 无需感知后端实现。服务未运行时首次调用自动拉起（`camoufox::ensure_service`）；
+//! 当构建关闭 `camoufox` 特性（`--no-default-features`）时，`is_browser_available()`
+//! 返回 `false`，求解/登录入口返回明确的未启用错误，纯 Rust HTML 预检函数仍照常工作。
 
 use anyhow::{anyhow, Result};
 

@@ -1,13 +1,4 @@
-[build]
-# reqwest http3 实验特性（书源抓取 H3 支持）
-rustflags = ["--cfg", "reqwest_unstable"]
-
 # Windows GNU 工具链专用（rustup stable-x86_64-pc-windows-gnu，无 binutils/dlltool）：
-# mongodb → bson2 → ahash(runtime-rng) 会启用 getrandom 0.3+，其默认 Windows 后端用
-# raw-dylib 链接 ProcessPrng（bcryptprimitives.dll），rustc 需调用 dlltool 生成导入库——
-# 本机无 binutils 会编译失败（"error calling dlltool"）。
-# 强制 getrandom 走 windows_legacy 后端（RtlGenRandom/advapi32）：rustc 1.97 GNU 工具链
-# 自带 self-contained/libadvapi32.a，rust-lld 直接链接，无需 dlltool；运行时行为等价。
-# 注意：[target.*] 的 rustflags 会整体覆盖 [build].rustflags，故此处重复 reqwest_unstable。
+# 强制 getrandom 走 windows_legacy 后端（RtlGenRandom/advapi32），rust-lld 直接链接，无需 dlltool。
 [target.x86_64-pc-windows-gnu]
-rustflags = ["--cfg", "reqwest_unstable", "--cfg", "getrandom_backend=\"windows_legacy\""]
+rustflags = ["--cfg", "getrandom_backend=\"windows_legacy\""]

@@ -1,9 +1,8 @@
-//! C1 第三轮 E2E：书源 Cookie 注入 / 自定义 header 透传 / RSS 双路径 / loginCheckJs。
+//! C1 第三轮 E2E：书源 Cookie 注入 / 自定义 header 透传 / loginCheckJs。
 //!
-//! - 回显端点校验：source.header 合并注入、cookie store 注入（E4/E5/E6 域键语义）
-//! - set_cookie_for → 后续同源请求自动携带 Cookie
-//! - RSS 标准 XML feed（feed-rs 路径）与 ruleArticles HTML 页（RssParserByRule 路径）
-//! - loginCheckJs 返回 true 时抓取判定需登录
+//! - 回显端点校验：`source.header` 合并注入、cookie store 注入
+//! - `set_cookie_for` → 后续同源请求自动携带 Cookie
+//! - `loginCheckJs` 返回非 true/false 时抓取判定需登录并替换内容
 
 use std::net::SocketAddr;
 use std::sync::Mutex;
@@ -12,11 +11,8 @@ use axum::extract::Request as AxumRequest;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
-use serde_json::json;
 
-use reader_dev::model::rss::{RssArticle, RssSource};
 use reader_dev::service::crawler;
-use reader_dev::service::rss;
 use reader_dev::storage::Storage;
 
 mod common;
@@ -33,13 +29,12 @@ async fn spawn_mock_site() -> u16 {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
 
     async fn echo_headers(req: AxumRequest) -> impl IntoResponse {
-        // 记录 Cookie/UA/自定义头，返回固定成功页
         for key in ["cookie", "user-agent", "x-custom"] {
             if let Some(v) = req.headers().get(key) {
                 if let Ok(vs) = v.to_str() {
                     CAPTURED
                         .lock()
-                        .unwrap()
+                        .unwrap_or_else(|e| e.into_inner())
                         .push((key.to_string(), vs.to_string()));
                 }
             }
@@ -52,42 +47,7 @@ async fn spawn_mock_site() -> u16 {
             .unwrap()
     }
 
-    // RSS 2.0 标准 feed
-    let rss_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0"><channel>
-<title>科技早报</title>
-<item><title>第一条新闻</title><link>https://example.com/a1</link><pubDate>Mon, 24 Aug 2026 08:00:00 GMT</pubDate><description>第一篇摘要内容。</description></item>
-<item><title>第二条新闻</title><link>https://example.com/a2</link><description>第二篇摘要。</description></item>
-</channel></rss>"#;
-
-    // ruleArticles HTML 页（legacy RssParserByRule）
-    let rss_html_page = r#"<!doctype html><html><body>
-<ul class="feed">
-<li class="card"><a class="ttl" href="/art/101.html">图文文章一</a><span class="dt">2026-08-23</span></li>
-<li class="card"><a class="ttl" href="/art/102.html">图文文章二</a><span class="dt">2026-08-24</span></li>
-</ul>
-</body></html>"#;
-
-    let app = Router::new()
-        .route("/echo", get(echo_headers))
-        .route(
-            "/feed.xml",
-            get(move || async move {
-                axum::http::Response::builder()
-                    .header("content-type", "application/rss+xml")
-                    .body(axum::body::Body::from(rss_xml))
-                    .unwrap()
-            }),
-        )
-        .route(
-            "/page.html",
-            get(move || async move {
-                axum::http::Response::builder()
-                    .header("content-type", "text/html; charset=utf-8")
-                    .body(axum::body::Body::from(rss_html_page))
-                    .unwrap()
-            }),
-        );
+    let app = Router::new().route("/echo", get(echo_headers));
 
     let server = axum::serve(listener, app);
     let addr: SocketAddr = server.local_addr().expect("mock 启动");
@@ -109,7 +69,6 @@ async fn e2e_header_and_cookie_injection() {
     let ns = "default";
     let base = base_url(port);
 
-    // T2 前置：为该源存 cookie（模拟 setBookSourceCookie 写入）
     crawler::set_cookie_for(ns, &format!("{base}/echo"), "session=abc123; theme=dark").await;
 
     let source = reader_dev::model::BookSource {
@@ -126,7 +85,7 @@ async fn e2e_header_and_cookie_injection() {
         .expect("回显抓取失败");
     assert!(resp.body.contains("echo-ok"));
 
-    let captured = CAPTURED.lock().unwrap().clone();
+    let captured = CAPTURED.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let cookie_hit = captured
         .iter()
         .any(|(k, v)| k == "cookie" && v.contains("session=abc123"));
@@ -145,67 +104,7 @@ async fn e2e_header_and_cookie_injection() {
     storage.pool.close().await;
 }
 
-/// T3：RSS 标准 XML feed（feed-rs 解析路径）
-#[tokio::test(flavor = "multi_thread")]
-async fn e2e_rss_standard_feed() {
-    let _guard = allow_private_net();
-    let port = spawn_mock_site().await;
-    let source: RssSource = serde_json::from_value(
-        json!({"sourceUrl": base_url(port) + "/feed.xml", "sourceName": "标准源", "enabled": true}),
-    )
-    .unwrap();
-
-    let articles: Vec<RssArticle> = rss::fetch_articles(&source, 1, None)
-        .await
-        .expect("feed 抓取失败");
-    assert_eq!(articles.len(), 2, "应解析出两条 item");
-    assert_eq!(articles[0].title, "第一条新闻");
-    assert_eq!(articles[0].url, "https://example.com/a1");
-    assert!(
-        articles[0]
-            .content
-            .as_deref()
-            .unwrap_or_default()
-            .contains("摘要"),
-        "description 应落入 content"
-    );
-    assert!(articles[0].time > 0, "pubDate 应解析为时间戳");
-}
-
-/// T4：ruleArticles HTML 页解析（legacy RssParserByRule 路径）
-#[tokio::test(flavor = "multi_thread")]
-async fn e2e_rss_rule_articles_page() {
-    let _guard = allow_private_net();
-    let port = spawn_mock_site().await;
-    // raw_json 为 serde(skip)：规则字段从 raw_json 读取（与 storage 读出路径一致）
-    let raw = json!({
-        "ruleArticles": "ul.feed@li.card",
-        "ruleTitle": "a.ttl@text",
-        "ruleLink": "a.ttl@href",
-        "rulePubDate": "span.dt@text"
-    })
-    .to_string();
-    let mut source: RssSource = serde_json::from_value(json!({
-        "sourceUrl": base_url(port) + "/page.html",
-        "sourceName": "规则源",
-        "enabled": true
-    }))
-    .unwrap();
-    source.raw_json = Some(raw);
-
-    let articles = rss::fetch_articles(&source, 1, None)
-        .await
-        .expect("HTML feed 失败");
-    assert_eq!(articles.len(), 2, "ruleArticles 应命中两张卡片");
-    assert_eq!(articles[0].title, "图文文章一");
-    assert!(
-        articles[0].url.ends_with("/art/101.html"),
-        "相对链接补全: {}",
-        articles[0].url
-    );
-}
-
-/// T5：loginCheckJs——JS 判定页面需要登录时 fetch 链路给出明确信号
+/// T3：loginCheckJs——JS 判定页面需要登录时 fetch 链路给出明确信号
 #[tokio::test(flavor = "multi_thread")]
 async fn e2e_login_check_js_flow() {
     let _guard = allow_private_net();
@@ -214,9 +113,6 @@ async fn e2e_login_check_js_flow() {
     let ns = "default";
     let base = base_url(port);
 
-    // loginCheckJs 语义（apply_login_check_js）：
-    //   JS 输出 true/空 → 原样透传（已登录）；false → 透传；
-    //   其他输出 → 用 JS 结果替换 body（如登录页 HTML / 标记文本）
     let mut source = reader_dev::model::BookSource {
         book_source_url: format!("{base}/login-src"),
         book_source_name: "登录检测源".into(),
@@ -226,20 +122,17 @@ async fn e2e_login_check_js_flow() {
     source.login_check_js =
         Some(r#"String(result).indexOf("登录已过期") !== -1 ? "NEED_LOGIN" : "false""#.into());
 
-    // 命中过期标记 → body 被替换为 JS 输出（上层据此触发登录流程）
     let expired_html = "<html><body>登录已过期，请重新登录</body></html>";
     let replaced =
         reader_dev::service::book::apply_login_check_js(ns, &source, expired_html, &base, None)
             .await;
     assert_eq!(replaced, "NEED_LOGIN", "命中时应替换为 JS 输出: {replaced}");
 
-    // 未命中 → false → 原样透传
     let ok_html = "<html><body>正文正常</body></html>";
     let passthrough =
         reader_dev::service::book::apply_login_check_js(ns, &source, ok_html, &base, None).await;
     assert_eq!(passthrough, ok_html, "未命中应原样透传");
 
-    // JS 输出 true → 同样透传（已登录语义）
     source.login_check_js = Some("\"true\"".into());
     let passthrough_true =
         reader_dev::service::book::apply_login_check_js(ns, &source, ok_html, &base, None).await;

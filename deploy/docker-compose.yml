@@ -23,8 +23,9 @@ services:
       # 搜索抓取重试次数(死源排空速度); 源站普遍慢时可下调
       READER_HTTP_RETRIES: "1"
       READER_BROWSER_FIRST: "0"
-      # 多用户开关: 默认单用户; .env 设 true 开启邀请码注册
-      READER_APP_SECURE: "${READER_APP_SECURE:-false}"
+      # 多用户开关: 默认启用多用户模式; 可经 .env 覆盖
+      READER_APP_MODE: "${READER_APP_MODE:-multi}"
+      READER_APP_SECURE: "${READER_APP_SECURE:-true}"
       # secure 模式必填(可经 .env 覆盖): 注册邀请码
       READER_APP_INVITECODE: "${READER_APP_INVITECODE:-}"
       TZ: Asia/Shanghai

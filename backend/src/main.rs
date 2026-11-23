@@ -1,14 +1,6 @@
-//! reader-dev 入口
-//!
-//! 单二进制双形态（feature gate）：
-//! - 默认构建 = CLI 服务端（musl 静态可用）
-//! - `--features gui` = 桌面变体：自动选端口起服务 + 窗口 + 托盘常驻
-//!   （关窗收托盘；`--headless` 强制纯服务模式）
+//! reader-dev 服务端入口
 
 use anyhow::Result;
-
-#[cfg(feature = "gui")]
-mod gui;
 
 fn main() -> Result<()> {
     // .env 先加载——RUST_LOG / READER_LOG_DIR 等日志 env 才能生效
@@ -52,15 +44,6 @@ fn main() -> Result<()> {
     // 离线词典: 数据存在则后台导入 dict.sqlite(不阻塞启动)
     reader_dev::service::dict::spawn_build_if_needed(&config.storage_dir());
 
-    // GUI 分派：feature=gui 且未显式 --headless 时进窗口模式
-    // 事件循环必须在主线程（Windows/macOS）
-    #[cfg(feature = "gui")]
-    {
-        if !std::env::args().any(|a| a == "--headless") {
-            return gui::run(config);
-        }
-    }
-
     rt.block_on(config.serve())
 }
 
@@ -86,7 +69,10 @@ fn init_tracing() {
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
     let Some(log_dir) = log_dir else {
-        tracing_subscriber::fmt().with_env_filter(filter).init();
+        tracing_subscriber::fmt()
+            .with_writer(|| LossyStdout)
+            .with_env_filter(filter)
+            .init();
         return;
     };
 
@@ -120,11 +106,27 @@ fn init_tracing() {
         )
         .with(
             tracing_subscriber::fmt::layer()
-                .with_writer(std::io::stdout)
+                .with_writer(|| LossyStdout)
                 .with_filter(filter),
         )
         .init();
     tracing::info!("文件日志已启用: {log_dir}（{max_size_mb}MB × {max_files} 个轮转）");
+}
+
+/// 容错控制台 Writer：后台守护进程脱离终端/PTY 关闭返回 EIO / EPIPE 时静默忽略，
+/// 避免 `tracing_subscriber` 回退调用 `eprintln!` 触发 Rust stdio panic 导致 HTTP 连接中断。
+struct LossyStdout;
+
+impl std::io::Write for LossyStdout {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let _ = std::io::stdout().write_all(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let _ = std::io::stdout().flush();
+        Ok(())
+    }
 }
 
 /// 按大小轮转的日志 writer（tracing-appender 无按大小轮转，自实现）
