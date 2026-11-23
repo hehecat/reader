@@ -8,9 +8,11 @@ Rust (`axum` + `SQLite`) + React 19 (`frontend-v2` + Tailwind CSS v4) · 单容�
 
 [![ci](https://github.com/hehecat/reader/actions/workflows/ci.yml/badge.svg)](https://github.com/hehecat/reader/actions/workflows/ci.yml)
 
-[快速开始](#快速开始) · [核心特性](#核心特性) · [架构与目录](#架构与目录) · [配置说明](#配置说明) · [本地开发](#本地开发)
+[快速开始](#快速开始) · [界面展示](#界面展示) · [核心特性](#核心特性) · [架构与目录](#架构与目录) · [配置说明](#配置说明) · [本地开发](#本地开发)
 
 </div>
+
+![砚台 · Reader 桌面端与移动端展示](docs/images/showcase-hero.jpg)
 
 书源在你手里，书架在你手里，阅读进度与笔记也在你手里。
 
@@ -54,6 +56,18 @@ cp .env.example .env
 # READER_APP_INVITECODE=<你的邀请码>
 docker compose up -d
 ```
+
+---
+
+## 界面展示
+
+### 桌面端 · 宣纸双页对开与悬浮底栏
+
+![砚台 · Reader 桌面端展示](docs/images/showcase-desktop.jpg)
+
+### 移动端 · 无框细线书架、沉浸阅读与书海发现
+
+![砚台 · Reader 移动端展示](docs/images/showcase-mobile.jpg)
 
 ---
 
