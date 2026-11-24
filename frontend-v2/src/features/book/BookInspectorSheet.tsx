@@ -45,7 +45,9 @@ import { Badge, EmptyView, InlineConfirm, Segmented, Spinner } from "@/ui/Contro
 import { Input } from "@/ui/Input";
 import { AnimatePresence, motion, SPRING_SILK, SPRING_SNAPPY } from "@/ui/motion";
 import { Popover, PopoverItem } from "@/ui/Popover";
-import { Sheet } from "@/ui/Sheet";
+import { Sheet, SheetTabPanel, SheetTabs, useSheetTabDirection } from "@/ui/Sheet";
+
+const BOOK_INSPECTOR_TAB_ORDER = ["overview", "toc", "sources"] as const;
 
 export interface BookInspectorSheetProps {
   open: boolean;
@@ -199,6 +201,7 @@ export function BookInspectorSheet({
   const queryClient = useQueryClient();
 
   const [tab, setTab] = React.useState<InspectorTab>(initialTab);
+  const inspectorTabs = useSheetTabDirection(tab, setTab, BOOK_INSPECTOR_TAB_ORDER);
   const [activeBook, setActiveBook] = React.useState<
     (Partial<Book> & { bookUrl: string; name?: string }) | null
   >(book);
@@ -1018,55 +1021,41 @@ export function BookInspectorSheet({
       open={open && Boolean(activeBook)}
       onClose={onClose}
       size="lg"
+      mobileHeight="full"
       title={displayName}
       subtitle={`${displayAuthor} · ${displayOriginName}`}
       bodyClassName="flex flex-col overflow-hidden p-0"
     >
-      {/* Sub-tab Header (underline tabs on mobile, Segmented on desktop) */}
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-5 sm:py-3">
-        <div className="flex items-center gap-6 sm:hidden" role="tablist" aria-label="书籍详情页签">
-          {tabOptions.map((opt) => {
-            const active = tab === opt.value;
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => setTab(opt.value)}
-                className={cn(
-                  "relative inline-flex cursor-pointer items-center gap-1.5 border-b-2 py-2.5 text-[13px] transition-colors",
-                  active
-                    ? "border-accent font-semibold text-accent"
-                    : "border-transparent text-ink-muted hover:text-ink",
-                )}
-              >
-                <span>{opt.label}</span>
-                {"badge" in opt ? opt.badge : null}
-              </button>
-            );
-          })}
-        </div>
-        <div className="hidden sm:block">
-          <Segmented
-            layoutId="book-inspector-tab"
-            options={tabOptions}
-            value={tab}
-            onChange={setTab}
-            size="sm"
-          />
-        </div>
-        {onShelf && shelfMatch?.durChapterTime ? (
-          <span className="hidden items-center gap-1.5 text-[11px] text-ink-muted sm:inline-flex">
-            <span className="size-1.5 rounded-full bg-success/80" aria-hidden />
-            上次阅读 {formatRelativeTime(shelfMatch.durChapterTime)}
-          </span>
-        ) : null}
+      {/* Sub-tab Header (unified spring underline on mobile, Segmented on desktop) */}
+      <div className="shrink-0 px-5 pt-1 sm:border-b sm:border-line sm:py-3">
+        <SheetTabs<InspectorTab>
+          layoutId="book-inspector-tab"
+          ariaLabel="书籍详情页签"
+          fullWidthDesktop={false}
+          value={tab}
+          onChange={inspectorTabs.onChange}
+          options={tabOptions}
+          desktopExtra={
+            onShelf && shelfMatch?.durChapterTime ? (
+              <span className="inline-flex items-center gap-1.5 text-[11px] text-ink-muted">
+                <span className="size-1.5 rounded-full bg-success/80" aria-hidden />
+                上次阅读 {formatRelativeTime(shelfMatch.durChapterTime)}
+              </span>
+            ) : null
+          }
+        />
       </div>
 
-      {/* Tab 1: Overview */}
-      {tab === "overview" ? (
-        <div className="h-[66dvh] shrink-0 overflow-y-auto px-5 py-4 sm:h-auto sm:min-h-0 sm:flex-1 sm:py-5">
+      {/* Equal-height Tab Body with directional slide+fade */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <SheetTabPanel
+          activeKey={tab}
+          direction={inspectorTabs.direction}
+          className="flex h-full flex-col overflow-hidden"
+        >
+          {/* Tab 1: Overview */}
+          {tab === "overview" ? (
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 sm:py-5">
           <div className="space-y-5 sm:space-y-6">
             {/* Editorial Hero (borderless horizontal layout on mobile, gradient card on desktop) */}
             <div className="relative border-b border-line/70 pb-5 sm:overflow-hidden sm:rounded-3xl sm:border sm:border-line sm:bg-gradient-to-br sm:from-accent-soft/50 sm:via-elevated sm:to-elevated sm:p-5">
@@ -1694,7 +1683,7 @@ export function BookInspectorSheet({
           </div>
 
           {/* Virtualized Chapter List */}
-          <div className="relative h-[54dvh] shrink-0 sm:h-auto sm:min-h-0 sm:flex-1">
+          <div className="relative min-h-0 flex-1">
             {tocLoading && effectiveChapters.length === 0 ? (
               <div className="flex h-full items-center justify-center py-16">
                 <Spinner label="正在加载目录…" />
@@ -1841,7 +1830,7 @@ export function BookInspectorSheet({
 
       {/* Tab 3: Sources */}
       {tab === "sources" ? (
-        <div className="flex h-[66dvh] shrink-0 flex-col sm:h-auto sm:min-h-0 sm:flex-1">
+        <div className="flex min-h-0 flex-1 flex-col">
           {local ? (
             <div className="flex flex-1 items-center justify-center">
               <EmptyView
@@ -2133,6 +2122,8 @@ export function BookInspectorSheet({
           )}
         </div>
       ) : null}
+        </SheetTabPanel>
+      </div>
     </Sheet>
   );
 }

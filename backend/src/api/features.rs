@@ -39,6 +39,20 @@ pub async fn get_replace_rules(
     }
 }
 
+/// 净化规则语义去重键：同一用户命名空间下，查找/替换/作用范围与匹配模式完全一致视为同一规则
+fn replace_rule_dedup_key(
+    r: &crate::model::ReplaceRule,
+) -> (String, String, String, bool, bool, bool) {
+    (
+        r.find.clone(),
+        r.replace.clone(),
+        r.scope.as_deref().unwrap_or("").trim().to_string(),
+        r.scope_title,
+        r.scope_content,
+        r.is_regex,
+    )
+}
+
 /// POST `/reader3/saveReplaceRule`
 pub async fn save_replace_rule(
     State(state): State<AppState>,
@@ -63,8 +77,30 @@ pub async fn save_replace_rule(
     if rule.find.trim().is_empty() {
         return Json(ReturnData::err("规则不能为空"));
     }
-    if rule.id.trim().is_empty() {
-        rule.id = format!("rule-{}", uuid::Uuid::new_v4());
+    let is_new = rule.id.trim().is_empty();
+    if is_new {
+        let existing = state
+            .storage
+            .get_replace_rules(&namespace)
+            .await
+            .unwrap_or_default();
+        let key = replace_rule_dedup_key(&rule);
+        if let Some(dup) = existing
+            .iter()
+            .find(|r| r.user_namespace == namespace && replace_rule_dedup_key(r) == key)
+        {
+            // 语义重复：复用已有规则 ID 覆盖更新，避免重复条目
+            rule.id = dup.id.clone();
+            if rule.order == 0 {
+                rule.order = dup.order;
+            }
+        } else {
+            rule.id = format!("rule-{}", uuid::Uuid::new_v4());
+            if rule.order == 0 {
+                let max_order = existing.iter().map(|r| r.order).max().unwrap_or(0);
+                rule.order = max_order + 1;
+            }
+        }
     }
     rule.user_namespace = namespace.clone();
     match state.storage.save_replace_rule(&namespace, &rule).await {
@@ -90,21 +126,53 @@ pub async fn save_replace_rules(
     let Some(body) = body else {
         return Json(ReturnData::err("参数错误"));
     };
-    let mut rules: Vec<crate::model::ReplaceRule> = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(_) => return Json(ReturnData::err("参数错误")),
-    };
-    if rules.is_empty() {
+    let raw_rules: Vec<crate::model::ReplaceRule> =
+        if let Ok(list) = serde_json::from_slice::<Vec<crate::model::ReplaceRule>>(&body) {
+            list
+        } else if let Ok(val) = serde_json::from_slice::<Value>(&body) {
+            let inner = val
+                .get("rules")
+                .or_else(|| val.get("data"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            match serde_json::from_value::<Vec<crate::model::ReplaceRule>>(inner) {
+                Ok(list) => list,
+                Err(_) => return Json(ReturnData::err("参数错误")),
+            }
+        } else {
+            return Json(ReturnData::err("参数错误"));
+        };
+    if raw_rules.is_empty() {
         return Json(ReturnData::err("参数错误"));
     }
-    for rule in &mut rules {
+    let existing = state
+        .storage
+        .get_replace_rules(&namespace)
+        .await
+        .unwrap_or_default();
+    let mut existing_by_key: HashMap<(String, String, String, bool, bool, bool), String> = existing
+        .iter()
+        .filter(|r| r.user_namespace == namespace)
+        .map(|r| (replace_rule_dedup_key(r), r.id.clone()))
+        .collect();
+    let mut seen_in_batch = std::collections::HashSet::new();
+    let mut rules: Vec<crate::model::ReplaceRule> = Vec::with_capacity(raw_rules.len());
+    for mut rule in raw_rules {
         if rule.name.trim().is_empty() || rule.find.trim().is_empty() {
             return Json(ReturnData::err("参数错误"));
         }
-        if rule.id.trim().is_empty() {
+        let key = replace_rule_dedup_key(&rule);
+        if !seen_in_batch.insert(key.clone()) {
+            continue;
+        }
+        if let Some(existing_id) = existing_by_key.get(&key) {
+            rule.id = existing_id.clone();
+        } else if rule.id.trim().is_empty() {
             rule.id = format!("rule-{}", uuid::Uuid::new_v4());
+            existing_by_key.insert(key, rule.id.clone());
         }
         rule.user_namespace = namespace.clone();
+        rules.push(rule);
     }
     match state.storage.save_replace_rules(&namespace, &rules).await {
         Ok(_) => Json(ReturnData::ok(json!({ "count": rules.len() }))),

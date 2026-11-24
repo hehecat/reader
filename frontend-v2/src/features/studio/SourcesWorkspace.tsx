@@ -59,7 +59,10 @@ import {
 } from "@/ui/Controls";
 import { Input, Textarea } from "@/ui/Input";
 import { AnimatePresence, EASE_PAPER, motion, SPRING_POP, useReducedMotion } from "@/ui/motion";
-import { Sheet } from "@/ui/Sheet";
+import { Sheet, SheetTabPanel, SheetTabs, useSheetTabDirection } from "@/ui/Sheet";
+
+const SOURCE_INSPECTOR_TAB_ORDER = ["quick", "json", "test", "auth"] as const;
+const SOURCE_IMPORT_MODE_ORDER = ["paste", "file", "remote"] as const;
 
 type StatusFilter = "all" | "enabled" | "invalid" | "quality";
 type InspectorTab = "quick" | "json" | "test" | "auth";
@@ -1258,7 +1261,8 @@ export default function SourcesWorkspace() {
         open={!isDesktop && inspectedSource !== null}
         onClose={() => setInspectedUrl(null)}
         size="lg"
-        bodyClassName="p-0 flex flex-col"
+        mobileHeight="full"
+        bodyClassName="p-0 flex flex-col overflow-hidden"
       >
         {!isDesktop && inspectedSource ? (
           <SourceInspector
@@ -1383,10 +1387,12 @@ export default function SourcesWorkspace() {
 function InspectorTabPanel({
   active,
   reduced,
+  direction = 1,
   children,
 }: {
   active: boolean;
   reduced: boolean;
+  direction?: 1 | -1;
   children: React.ReactNode;
 }) {
   return (
@@ -1394,8 +1400,8 @@ function InspectorTabPanel({
       role="tabpanel"
       aria-hidden={!active}
       initial={false}
-      animate={active ? { opacity: 1, y: 0 } : { opacity: 0, y: 6 }}
-      transition={reduced ? { duration: 0 } : { duration: 0.18, ease: EASE_PAPER }}
+      animate={active ? { opacity: 1, x: 0 } : { opacity: 0, x: direction * -12 }}
+      transition={reduced ? { duration: 0 } : { duration: 0.16, ease: EASE_PAPER }}
       className={active ? "block" : "hidden"}
     >
       {children}
@@ -1440,13 +1446,17 @@ function SourceInspector({
     auth: 0,
   });
 
-  const handleSelectTab = (next: InspectorTab) => {
-    if (next === tab) return;
-    if (scrollBodyRef.current) {
-      scrollTopByTabRef.current[tab] = scrollBodyRef.current.scrollTop;
-    }
-    setTab(next);
-  };
+  const handleSelectTabRaw = React.useCallback(
+    (next: InspectorTab) => {
+      if (scrollBodyRef.current) {
+        scrollTopByTabRef.current[tab] = scrollBodyRef.current.scrollTop;
+      }
+      setTab(next);
+    },
+    [tab],
+  );
+  const inspectorTabs = useSheetTabDirection(tab, handleSelectTabRaw, SOURCE_INSPECTOR_TAB_ORDER);
+  const handleSelectTab = inspectorTabs.onChange;
 
   React.useLayoutEffect(() => {
     if (scrollBodyRef.current) {
@@ -1688,45 +1698,80 @@ function SourceInspector({
           </IconButton>
         </div>
 
-        <Segmented<InspectorTab>
-          layoutId={inSheet ? "v2-src-inspector-sheet-tab" : "v2-src-inspector-tab"}
-          size="sm"
-          fullWidth
-          ariaLabel="书源检视面板"
-          value={tab}
-          onChange={handleSelectTab}
-          options={[
-            { value: "quick", label: "快捷编辑" },
-            {
-              value: "json",
-              label: "原始 JSON",
-              badge: !jsonValidation.valid ? (
-                <span className="size-1.5 rounded-full bg-danger" aria-label="JSON 语法有误" />
-              ) : null,
-            },
-            {
-              value: "test",
-              label: "试搜验证",
-              badge: testError ? (
-                <span className="size-1.5 rounded-full bg-danger" aria-label="试搜出错" />
-              ) : testResults !== null ? (
-                <span className="text-[10px] opacity-70 tabular-nums">{testResults.length}</span>
-              ) : null,
-            },
-            {
-              value: "auth",
-              label: "登录与 Cookie",
-              badge: cookieRow?.cookie ? (
-                <span className="size-1.5 rounded-full bg-success" aria-label="已保存 Cookie" />
-              ) : null,
-            },
-          ]}
-        />
+        {inSheet ? (
+          <SheetTabs<InspectorTab>
+            layoutId="v2-src-inspector-sheet-tab"
+            ariaLabel="书源检视面板"
+            value={tab}
+            onChange={handleSelectTab}
+            options={[
+              { value: "quick", label: "快捷编辑" },
+              {
+                value: "json",
+                label: "原始 JSON",
+                badge: !jsonValidation.valid ? (
+                  <span className="size-1.5 rounded-full bg-danger" aria-label="JSON 语法有误" />
+                ) : null,
+              },
+              {
+                value: "test",
+                label: "试搜验证",
+                badge: testError ? (
+                  <span className="size-1.5 rounded-full bg-danger" aria-label="试搜出错" />
+                ) : testResults !== null ? (
+                  <span className="text-[10px] opacity-70 tabular-nums">{testResults.length}</span>
+                ) : null,
+              },
+              {
+                value: "auth",
+                label: "登录与 Cookie",
+                badge: cookieRow?.cookie ? (
+                  <span className="size-1.5 rounded-full bg-success" aria-label="已保存 Cookie" />
+                ) : null,
+              },
+            ]}
+          />
+        ) : (
+          <Segmented<InspectorTab>
+            layoutId="v2-src-inspector-tab"
+            size="sm"
+            fullWidth
+            ariaLabel="书源检视面板"
+            value={tab}
+            onChange={handleSelectTab}
+            options={[
+              { value: "quick", label: "快捷编辑" },
+              {
+                value: "json",
+                label: "原始 JSON",
+                badge: !jsonValidation.valid ? (
+                  <span className="size-1.5 rounded-full bg-danger" aria-label="JSON 语法有误" />
+                ) : null,
+              },
+              {
+                value: "test",
+                label: "试搜验证",
+                badge: testError ? (
+                  <span className="size-1.5 rounded-full bg-danger" aria-label="试搜出错" />
+                ) : testResults !== null ? (
+                  <span className="text-[10px] opacity-70 tabular-nums">{testResults.length}</span>
+                ) : null,
+              },
+              {
+                value: "auth",
+                label: "登录与 Cookie",
+                badge: cookieRow?.cookie ? (
+                  <span className="size-1.5 rounded-full bg-success" aria-label="已保存 Cookie" />
+                ) : null,
+              },
+            ]}
+          />
+        )}
       </header>
 
       {/* Scrollable Body (all 4 panels stay mounted to preserve state & scroll) */}
       <div ref={scrollBodyRef} className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-        <InspectorTabPanel active={tab === "quick"} reduced={reducedMotion}>
+        <InspectorTabPanel active={tab === "quick"} reduced={reducedMotion} direction={inspectorTabs.direction}>
           <div className="flex flex-col gap-4">
             {/* Invalid alert */}
             {invalid ? (
@@ -1865,7 +1910,7 @@ function SourceInspector({
           </div>
         </InspectorTabPanel>
 
-        <InspectorTabPanel active={tab === "json"} reduced={reducedMotion}>
+        <InspectorTabPanel active={tab === "json"} reduced={reducedMotion} direction={inspectorTabs.direction}>
           <div className="flex flex-col gap-3">
             <div className="flex items-center justify-between gap-2">
               <Badge tone={jsonValidation.valid ? "success" : "danger"}>
@@ -1910,7 +1955,7 @@ function SourceInspector({
           </div>
         </InspectorTabPanel>
 
-        <InspectorTabPanel active={tab === "test"} reduced={reducedMotion}>
+        <InspectorTabPanel active={tab === "test"} reduced={reducedMotion} direction={inspectorTabs.direction}>
           <div className="flex flex-col gap-3.5">
             <div className="flex items-center gap-2">
               <Input
@@ -2028,7 +2073,7 @@ function SourceInspector({
           </div>
         </InspectorTabPanel>
 
-        <InspectorTabPanel active={tab === "auth"} reduced={reducedMotion}>
+        <InspectorTabPanel active={tab === "auth"} reduced={reducedMotion} direction={inspectorTabs.direction}>
           <div className="flex flex-col gap-5">
             {/* Login form */}
             <div className="flex flex-col gap-3 rounded-2xl border border-line bg-subtle/35 p-4">
@@ -2210,6 +2255,11 @@ function ImportSourcesSheet({
   onImported: () => void;
 }) {
   const [mode, setMode] = React.useState<ImportMode>("paste");
+  const handleModeChange = React.useCallback((m: ImportMode) => {
+    setMode(m);
+    setParseError(null);
+  }, []);
+  const importTabs = useSheetTabDirection(mode, handleModeChange, SOURCE_IMPORT_MODE_ORDER);
   const [pasteText, setPasteText] = React.useState("");
   const [remoteUrl, setRemoteUrl] = React.useState("");
   const [dragging, setDragging] = React.useState(false);
@@ -2325,8 +2375,10 @@ function ImportSourcesSheet({
       open={open}
       onClose={onClose}
       size="lg"
+      mobileHeight="tall"
       title="导入书源"
       subtitle="支持粘贴 JSON、拖拽本地文件或远程订阅 URL，预览去重后一键入库"
+      bodyClassName="flex flex-col overflow-hidden p-0"
       footer={
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs text-ink-muted tabular-nums">
@@ -2351,23 +2403,25 @@ function ImportSourcesSheet({
         </div>
       }
     >
-      <div className="flex flex-col gap-4">
-        <Segmented<ImportMode>
+      {/* Pinned Tab Header */}
+      <div className="shrink-0 px-5 pt-1 sm:border-b sm:border-line sm:py-3">
+        <SheetTabs<ImportMode>
           layoutId="v2-src-import-mode"
-          size="sm"
+          ariaLabel="导入书源方式"
           value={mode}
-          onChange={(m) => {
-            setMode(m);
-            setParseError(null);
-          }}
+          onChange={importTabs.onChange}
           options={[
             { value: "paste", label: "粘贴 JSON", icon: <FileJson className="size-3.5" /> },
             { value: "file", label: "本地文件", icon: <Upload className="size-3.5" /> },
             { value: "remote", label: "远程订阅", icon: <Link2 className="size-3.5" /> },
           ]}
         />
+      </div>
 
-        {mode === "paste" ? (
+      {/* Scrollable Body with directional tab transition */}
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overscroll-contain px-5 py-4">
+        <SheetTabPanel activeKey={mode} direction={importTabs.direction} className="flex-none">
+          {mode === "paste" ? (
           <Textarea
             mono
             rows={6}
@@ -2441,6 +2495,7 @@ function ImportSourcesSheet({
             </Button>
           </div>
         ) : null}
+        </SheetTabPanel>
 
         {parseError ? (
           <div className="flex items-center gap-2 rounded-xl border border-danger/30 bg-danger-soft/50 px-3 py-2 text-xs text-danger">

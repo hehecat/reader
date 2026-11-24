@@ -21,10 +21,12 @@ import { formatBytes, formatRelativeTime } from "@/lib/format";
 import { useNotesStore, type InkColor } from "@/stores/notes";
 import { notify } from "@/stores/toast";
 import { Button, IconButton } from "@/ui/Button";
-import { Badge, EmptyView, InlineConfirm, Segmented, Spinner } from "@/ui/Controls";
+import { Badge, EmptyView, InlineConfirm, Spinner } from "@/ui/Controls";
 import { Input } from "@/ui/Input";
-import { AnimatePresence, motion, useReducedMotion } from "@/ui/motion";
-import { Sheet } from "@/ui/Sheet";
+import { Sheet, SheetTabPanel, SheetTabs, useSheetTabDirection } from "@/ui/Sheet";
+
+const TOC_TAB_ORDER = ["chapters", "search"] as const;
+const NOTES_TAB_ORDER = ["bookmarks", "highlights"] as const;
 
 /* ============================================================================
    1. TocSheet — Left Drawer (Chapters List + Full-Book Search + Offline Cache)
@@ -57,8 +59,8 @@ export function TocSheet({
   onRefreshToc,
   onAddToShelf,
 }: TocSheetProps) {
-  const reduced = useReducedMotion();
   const [tab, setTab] = React.useState<"chapters" | "search">("chapters");
+  const tocTabs = useSheetTabDirection(tab, setTab, TOC_TAB_ORDER);
   const [filterText, setFilterText] = React.useState("");
   const [reversed, setReversed] = React.useState(false);
   const virtuosoRef = React.useRef<VirtuosoHandle>(null);
@@ -241,6 +243,7 @@ export function TocSheet({
       onClose={onClose}
       side="left"
       size="md"
+      mobileHeight="full"
       title={bookName || "书籍目录"}
       subtitle={chapters.length > 0 ? `共 ${chapters.length} 章` : "加载目录中…"}
       bodyClassName="flex flex-col overflow-hidden p-0"
@@ -308,58 +311,26 @@ export function TocSheet({
         </div>
       }
     >
-      {/* Top Tab Switch (underline on mobile, Segmented on desktop) */}
+      {/* Top Tab Switch (unified spring underline on mobile, Segmented on desktop) */}
       <div className="shrink-0 border-b border-line px-4 pt-1 pb-3 sm:py-3">
-        <div className="flex items-center gap-6 border-b border-line/60 sm:hidden" role="tablist">
-          {(
-            [
-              { value: "chapters" as const, label: "章节目录", icon: BookOpen },
-              { value: "search" as const, label: "全书搜索", icon: Search },
-            ]
-          ).map((item) => {
-            const Icon = item.icon;
-            const active = tab === item.value;
-            return (
-              <button
-                key={item.value}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => setTab(item.value)}
-                className={cn(
-                  "inline-flex cursor-pointer items-center gap-1.5 border-b-2 py-2 text-[13px] transition-colors",
-                  active
-                    ? "border-accent font-semibold text-accent"
-                    : "border-transparent text-ink-muted hover:text-ink",
-                )}
-              >
-                <Icon className="size-3.5" />
-                {item.label}
-              </button>
-            );
-          })}
-        </div>
-        <div className="hidden sm:block">
-          <Segmented<"chapters" | "search">
-            layoutId="reader-toc-tab"
-            size="sm"
-            className="w-full justify-between"
-            value={tab}
-            onChange={setTab}
-            options={[
-              {
-                value: "chapters",
-                label: "章节目录",
-                icon: <BookOpen className="size-3.5" />,
-              },
-              {
-                value: "search",
-                label: "全书搜索",
-                icon: <Search className="size-3.5" />,
-              },
-            ]}
-          />
-        </div>
+        <SheetTabs<"chapters" | "search">
+          layoutId="reader-toc-tab"
+          ariaLabel="目录与搜索"
+          value={tab}
+          onChange={tocTabs.onChange}
+          options={[
+            {
+              value: "chapters",
+              label: "章节目录",
+              icon: <BookOpen className="size-3.5" />,
+            },
+            {
+              value: "search",
+              label: "全书搜索",
+              icon: <Search className="size-3.5" />,
+            },
+          ]}
+        />
 
         {tab === "chapters" ? (
           <div className="mt-2.5 flex items-center gap-1.5">
@@ -424,18 +395,15 @@ export function TocSheet({
         )}
       </div>
 
-      {/* Body Area (equal height across both tabs with smooth cross-slide transition) */}
-      <div className="relative h-[58dvh] shrink-0 overflow-hidden sm:h-auto sm:min-h-0 sm:flex-1">
-        <AnimatePresence mode="wait" initial={false}>
+      {/* Body Area (equal height across both tabs with unified directional transition) */}
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        <SheetTabPanel
+          activeKey={tab}
+          direction={tocTabs.direction}
+          className={cn("h-full", tab === "search" && "overflow-y-auto overscroll-contain px-4 py-3")}
+        >
           {tab === "chapters" ? (
-            <motion.div
-              key="toc-chapters"
-              initial={reduced ? false : { opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={reduced ? { opacity: 0 } : { opacity: 0, x: -10 }}
-              transition={{ duration: 0.16, ease: "easeOut" }}
-              className="absolute inset-0"
-            >
+            <div className="relative h-full">
               {loadingChapters && chapters.length === 0 ? (
                 <div className="flex h-full items-center justify-center">
                   <Spinner label="正在载入目录…" />
@@ -511,16 +479,9 @@ export function TocSheet({
                   }}
                 />
               )}
-            </motion.div>
+            </div>
           ) : (
-            <motion.div
-              key="toc-search"
-              initial={reduced ? false : { opacity: 0, x: 10 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={reduced ? { opacity: 0 } : { opacity: 0, x: 10 }}
-              transition={{ duration: 0.16, ease: "easeOut" }}
-              className="absolute inset-0 overflow-y-auto px-4 py-3"
-            >
+            <>
               {searching ? (
                 <div className="flex h-full items-center justify-center">
                   <Spinner label="正在检索全书正文…" />
@@ -575,9 +536,9 @@ export function TocSheet({
                   ))}
                 </div>
               )}
-            </motion.div>
+            </>
           )}
-        </AnimatePresence>
+        </SheetTabPanel>
       </div>
     </Sheet>
   );
@@ -637,6 +598,7 @@ export function NotesSheet({
 }: NotesSheetProps) {
   const queryClient = useQueryClient();
   const [tab, setTab] = React.useState<"bookmarks" | "highlights">("bookmarks");
+  const notesTabs = useSheetTabDirection(tab, setTab, NOTES_TAB_ORDER);
   const [bookmarkNote, setBookmarkNote] = React.useState("");
   const [savingBm, setSavingBm] = React.useState(false);
   const [clearingBm, setClearingBm] = React.useState(false);
@@ -715,8 +677,10 @@ export function NotesSheet({
       onClose={onClose}
       side="right"
       size="md"
+      mobileHeight="tall"
       title="阅读笔记"
       subtitle={bookName || undefined}
+      bodyClassName="flex flex-col overflow-hidden p-0"
       footer={
         tab === "bookmarks" && bookmarks.length > 0 ? (
           <div className="flex items-center justify-between">
@@ -753,73 +717,47 @@ export function NotesSheet({
         ) : undefined
       }
     >
-      <div className="space-y-4">
-        <div className="flex items-center gap-6 border-b border-line/70 sm:hidden" role="tablist">
-          {(
-            [
-              { value: "bookmarks" as const, label: "书签", icon: BookmarkIcon, count: bookmarks.length },
-              { value: "highlights" as const, label: "划线批注", icon: Highlighter, count: notes.length },
-            ]
-          ).map((item) => {
-            const Icon = item.icon;
-            const active = tab === item.value;
-            return (
-              <button
-                key={item.value}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => setTab(item.value)}
-                className={cn(
-                  "inline-flex cursor-pointer items-center gap-1.5 border-b-2 py-2 text-[13px] transition-colors",
-                  active
-                    ? "border-accent font-semibold text-accent"
-                    : "border-transparent text-ink-muted hover:text-ink",
-                )}
-              >
-                <Icon className="size-3.5" />
-                <span>{item.label}</span>
-                {item.count > 0 ? (
-                  <span className="text-[11px] opacity-75 tabular-nums">{item.count}</span>
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
-        <div className="hidden sm:block">
-          <Segmented<"bookmarks" | "highlights">
-            layoutId="reader-notes-tab"
-            size="sm"
-            className="w-full justify-between"
-            value={tab}
-            onChange={setTab}
-            options={[
-              {
-                value: "bookmarks",
-                label: "书签",
-                icon: <BookmarkIcon className="size-3.5" />,
-                badge:
-                  bookmarks.length > 0 ? (
-                    <span className="rounded-full bg-subtle px-1.5 py-0.5 text-[10px] tabular-nums text-ink-secondary">
-                      {bookmarks.length}
-                    </span>
-                  ) : null,
-              },
-              {
-                value: "highlights",
-                label: "划线批注",
-                icon: <Highlighter className="size-3.5" />,
-                badge:
-                  notes.length > 0 ? (
-                    <span className="rounded-full bg-subtle px-1.5 py-0.5 text-[10px] tabular-nums text-ink-secondary">
-                      {notes.length}
-                    </span>
-                  ) : null,
-              },
-            ]}
-          />
-        </div>
+      {/* Pinned Tab Header (equal-height Sheet + unified sliding indicator) */}
+      <div className="shrink-0 px-5 pt-1 sm:border-b sm:border-line sm:py-3">
+        <SheetTabs<"bookmarks" | "highlights">
+          layoutId="reader-notes-tab"
+          ariaLabel="阅读笔记页签"
+          value={tab}
+          onChange={notesTabs.onChange}
+          options={[
+            {
+              value: "bookmarks",
+              label: "书签",
+              icon: <BookmarkIcon className="size-3.5" />,
+              badge:
+                bookmarks.length > 0 ? (
+                  <span className="rounded-full bg-subtle px-1.5 py-0.5 text-[10px] tabular-nums text-ink-secondary">
+                    {bookmarks.length}
+                  </span>
+                ) : null,
+            },
+            {
+              value: "highlights",
+              label: "划线批注",
+              icon: <Highlighter className="size-3.5" />,
+              badge:
+                notes.length > 0 ? (
+                  <span className="rounded-full bg-subtle px-1.5 py-0.5 text-[10px] tabular-nums text-ink-secondary">
+                    {notes.length}
+                  </span>
+                ) : null,
+            },
+          ]}
+        />
+      </div>
 
+      {/* Scrollable Tab Body with directional slide+fade */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <SheetTabPanel
+          activeKey={tab}
+          direction={notesTabs.direction}
+          className="overflow-y-auto overscroll-contain px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
+        >
         {tab === "bookmarks" ? (
           <div className="space-y-3.5">
             {/* Inline Quick-Add Bookmark (flat hairline on mobile, card on desktop) */}
@@ -1000,6 +938,7 @@ export function NotesSheet({
             )}
           </div>
         )}
+        </SheetTabPanel>
       </div>
     </Sheet>
   );

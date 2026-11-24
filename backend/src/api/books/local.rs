@@ -629,6 +629,16 @@ pub(super) async fn get_book_content_file(
         .await
     {
         if !content.trim().is_empty() {
+            let shelf_meta = state.storage.find_book(ns, book_part).await.ok().flatten();
+            let content = super::chapter::purify_book_content(
+                state,
+                ns,
+                content,
+                shelf_meta.as_ref().is_none_or(|b| b.use_replace_rule),
+                shelf_meta.as_ref().map(|b| b.name.as_str()),
+                Some("local"),
+            )
+            .await;
             let content = if is_epub {
                 wrap_epub_html(&content)
             } else {
@@ -657,6 +667,15 @@ pub(super) async fn get_book_content_file(
     .await
     .ok()??;
     let content = imported.chapters.get(index as usize)?.content.clone();
+    let content = super::chapter::purify_book_content(
+        state,
+        ns,
+        content,
+        shelf.as_ref().is_none_or(|b| b.use_replace_rule),
+        shelf.as_ref().map(|b| b.name.as_str()),
+        Some("local"),
+    )
+    .await;
     let content = if is_epub {
         wrap_epub_html(&content)
     } else {
@@ -713,6 +732,16 @@ pub(super) async fn get_book_content_local(
         .get_chapter_content(ns, &book_url, index)
         .await
         .ok()??;
+    let shelf_meta = state.storage.find_book(ns, &book_url).await.ok().flatten();
+    let content = super::chapter::purify_book_content(
+        state,
+        ns,
+        content,
+        shelf_meta.as_ref().is_none_or(|b| b.use_replace_rule),
+        shelf_meta.as_ref().map(|b| b.name.as_str()),
+        Some("local"),
+    )
+    .await;
     let content = if is_epub {
         wrap_epub_html(&content)
     } else {

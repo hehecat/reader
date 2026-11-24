@@ -6,6 +6,7 @@
 mod content;
 mod info;
 mod media;
+mod purify;
 #[cfg(test)]
 mod tests;
 mod toc;
@@ -26,6 +27,7 @@ pub use info::{
     merge_existing_identity, resolve_toc_url, BookInfoRule, RelatedRule,
 };
 pub use media::{analyze_comic_images, analyze_media_url, audio_content_type};
+pub use purify::{apply_replace_rules, PurifyTarget};
 pub use toc::{analyze_toc, parse_toc_page, TocRule};
 pub(crate) use toc::{next_toc_urls, toc_items};
 

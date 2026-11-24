@@ -3,10 +3,13 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 import { useDragControls, type PanInfo } from "motion/react";
+import { Segmented } from "./Controls";
 import {
   AnimatePresence,
+  EASE_PAPER,
   motion,
   SPRING_SHEET,
+  SPRING_SNAPPY,
   useMediaQuery,
   useReducedMotion,
 } from "./motion";
@@ -20,11 +23,24 @@ export interface SheetProps {
   footer?: React.ReactNode;
   side?: "right" | "left";
   size?: "sm" | "md" | "lg" | "xl";
+  /**
+   * 移动端抽屉高度策略：
+   * - "auto": 随内容自适应（默认，适合无页签的紧凑表单）
+   * - "tall": 锁定 76dvh 等高（适合多页签面板，切换页签时不跳动）
+   * - "full": 锁定 86dvh 等高（适合目录/详情/检视器等长列表多页签面板）
+   */
+  mobileHeight?: "auto" | "tall" | "full";
   /** 极淡柔焦背景点击关闭；设为 false 可实现完全轻盈的非阻塞边栏 */
   scrim?: boolean;
   children: React.ReactNode;
   bodyClassName?: string;
 }
+
+const MOBILE_HEIGHT_MAP: Record<NonNullable<SheetProps["mobileHeight"]>, string> = {
+  auto: "",
+  tall: "h-[76dvh] sm:h-auto",
+  full: "h-[86dvh] sm:h-auto",
+};
 
 const WIDTH_MAP: Record<NonNullable<SheetProps["size"]>, string> = {
   sm: "sm:w-[360px]",
@@ -65,6 +81,7 @@ export function Sheet({
   footer,
   side = "right",
   size = "md",
+  mobileHeight = "auto",
   scrim = true,
   children,
   bodyClassName,
@@ -209,6 +226,7 @@ export function Sheet({
             onDragEnd={handleDragEnd}
             className={cn(
               "surface-sheet relative z-10 flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-[26px] outline-none",
+              MOBILE_HEIGHT_MAP[mobileHeight],
               "sm:fixed sm:inset-y-3 sm:max-h-none sm:rounded-2xl",
               side === "right" ? "sm:right-3" : "sm:left-3",
               WIDTH_MAP[size],
@@ -283,5 +301,159 @@ export function Sheet({
       ) : null}
     </AnimatePresence>,
     document.body,
+  );
+}
+
+/* ==========================================================================
+   SheetTabs & SheetTabPanel
+   统一的弹出抽屉页签语言：
+   - 移动端：无边框底部滑动指示线（SPRING_SNAPPY）
+   - 桌面端：Segmented 胶囊切换（SPRING_LIQUID）
+   - 内容区：方向感知的轻盈横向淡入淡出（EASE_PAPER），配合 Sheet mobileHeight 实现零跳动等高切换
+   ========================================================================== */
+
+export interface SheetTabOption<T extends string> {
+  value: T;
+  label: React.ReactNode;
+  icon?: React.ReactNode;
+  badge?: React.ReactNode;
+}
+
+export interface SheetTabsProps<T extends string> {
+  value: T;
+  onChange: (value: T) => void;
+  options: ReadonlyArray<SheetTabOption<T>>;
+  layoutId: string;
+  ariaLabel?: string;
+  /** 桌面端 Segmented 是否撑满整行（默认 true） */
+  fullWidthDesktop?: boolean;
+  /** 桌面端右侧附加信息（如上次阅读时间） */
+  desktopExtra?: React.ReactNode;
+  className?: string;
+}
+
+export function SheetTabs<T extends string>({
+  value,
+  onChange,
+  options,
+  layoutId,
+  ariaLabel,
+  fullWidthDesktop = true,
+  desktopExtra,
+  className,
+}: SheetTabsProps<T>) {
+  const reduced = useReducedMotion();
+
+  return (
+    <div className={cn("shrink-0", className)}>
+      {/* Mobile: borderless underline tabs with spring-sliding indicator */}
+      <div
+        role="tablist"
+        aria-label={ariaLabel}
+        className="flex items-center gap-6 overflow-x-auto border-b border-line/70 no-scrollbar sm:hidden"
+      >
+        {options.map((opt) => {
+          const active = value === opt.value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => onChange(opt.value)}
+              className={cn(
+                "relative inline-flex shrink-0 cursor-pointer items-center gap-1.5 py-2.5 text-[13px] transition-colors outline-none focus-visible:text-accent",
+                active ? "font-semibold text-accent" : "text-ink-muted hover:text-ink",
+              )}
+            >
+              {opt.icon ? <span className="inline-flex shrink-0">{opt.icon}</span> : null}
+              <span>{opt.label}</span>
+              {opt.badge ? <span className="inline-flex shrink-0">{opt.badge}</span> : null}
+              {active ? (
+                <motion.span
+                  layoutId={`${layoutId}-mobile-underline`}
+                  transition={reduced ? { duration: 0 } : SPRING_SNAPPY}
+                  className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] rounded-full bg-accent"
+                />
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Desktop: Segmented pill with optional trailing meta */}
+      <div className="hidden items-center justify-between gap-3 sm:flex">
+        <Segmented<T>
+          layoutId={layoutId}
+          size="sm"
+          fullWidth={fullWidthDesktop}
+          ariaLabel={ariaLabel}
+          value={value}
+          onChange={onChange}
+          options={options}
+        />
+        {desktopExtra ? <div className="shrink-0">{desktopExtra}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 方向感知的页签切换状态辅助 hook：
+ * 记录切换方向（1 = 向右前进，-1 = 向左返回），供 SheetTabPanel 呈现自然滑入动效。
+ */
+export function useSheetTabDirection<T extends string>(
+  value: T,
+  onChange: (next: T) => void,
+  order: readonly T[],
+) {
+  const [direction, setDirection] = React.useState<1 | -1>(1);
+
+  const handleChange = React.useCallback(
+    (next: T) => {
+      if (next === value) return;
+      const curIdx = order.indexOf(value);
+      const nextIdx = order.indexOf(next);
+      if (curIdx >= 0 && nextIdx >= 0) {
+        setDirection(nextIdx >= curIdx ? 1 : -1);
+      }
+      onChange(next);
+    },
+    [value, onChange, order],
+  );
+
+  return { direction, onChange: handleChange };
+}
+
+export interface SheetTabPanelProps {
+  activeKey: string;
+  direction?: 1 | -1;
+  className?: string;
+  children: React.ReactNode;
+}
+
+export function SheetTabPanel({
+  activeKey,
+  direction = 1,
+  className,
+  children,
+}: SheetTabPanelProps) {
+  const reduced = useReducedMotion();
+
+  return (
+    <AnimatePresence mode="wait" initial={false} custom={direction}>
+      <motion.div
+        key={activeKey}
+        role="tabpanel"
+        custom={direction}
+        initial={reduced ? { opacity: 0 } : { opacity: 0, x: direction * 14 }}
+        animate={{ opacity: 1, x: 0 }}
+        exit={reduced ? { opacity: 0 } : { opacity: 0, x: direction * -10 }}
+        transition={reduced ? { duration: 0.08 } : { duration: 0.16, ease: EASE_PAPER }}
+        className={cn("min-h-0 flex-1", className)}
+      >
+        {children}
+      </motion.div>
+    </AnimatePresence>
   );
 }

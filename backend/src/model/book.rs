@@ -8,6 +8,10 @@ use sqlx::FromRow;
 /// - serde：camelCase 与 legacy bookshelf.json / API 输出一致（legacy 全字段）
 /// - sqlx：snake_case 与 books 表列名一致（`group` 为 SQLite 关键字 → 列名 `group_name`；
 ///   `order` 为 SQLite 关键字 → 列名 `order_num`）
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, FromRow)]
 #[serde(default)]
 pub struct Book {
@@ -99,8 +103,8 @@ pub struct Book {
     #[serde(rename = "originOrder")]
     #[sqlx(rename = "origin_order")]
     pub origin_order: i64,
-    /// 正文使用净化替换规则
-    #[serde(rename = "useReplaceRule")]
+    /// 正文使用净化替换规则（默认开启）
+    #[serde(rename = "useReplaceRule", default = "default_true")]
     #[sqlx(rename = "use_replace_rule")]
     pub use_replace_rule: bool,
     /// 自定义书籍变量（书源规则检索用）

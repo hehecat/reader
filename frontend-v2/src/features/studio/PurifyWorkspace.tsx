@@ -178,9 +178,32 @@ function expandReplacement(template: string, match: RegExpExecArray): string {
   });
 }
 
+/** 将 Java/legado 常见内联标志 (?m) / (?i) / (?s) 转换为 JS RegExp 标志 */
+function compileSandboxRegex(find: string): RegExp {
+  let body = find;
+  const flagSet = new Set<string>(["g", "m"]);
+  const leading = body.match(/^\(\?([imsux-]+)\)/);
+  if (leading) {
+    const rawFlags = leading[1] ?? "";
+    let neg = false;
+    for (const ch of rawFlags) {
+      if (ch === "-") {
+        neg = true;
+        continue;
+      }
+      if (ch === "i" || ch === "m" || ch === "s") {
+        if (neg) flagSet.delete(ch);
+        else flagSet.add(ch);
+      }
+    }
+    body = body.slice(leading[0].length);
+  }
+  return new RegExp(body, Array.from(flagSet).join(""));
+}
+
 function regexError(find: string): string | null {
   try {
-    new RegExp(find, "gm");
+    compileSandboxRegex(find);
     return null;
   } catch (err) {
     return err instanceof Error ? err.message : "正则表达式语法有误";
@@ -207,7 +230,7 @@ function findRuleMatches(
 
   let regex: RegExp;
   try {
-    regex = new RegExp(rule.find, "gm");
+    regex = compileSandboxRegex(rule.find);
   } catch (err) {
     return {
       matches,
@@ -450,7 +473,17 @@ function SandboxPieces({
 
 function parseImportRules(raw: string): ReplaceRule[] {
   const parsed: unknown = JSON.parse(raw);
-  const arr = Array.isArray(parsed) ? parsed : [parsed];
+  let arr: unknown[];
+  if (Array.isArray(parsed)) {
+    arr = parsed;
+  } else if (parsed && typeof parsed === "object") {
+    const obj = parsed as Record<string, unknown>;
+    if (Array.isArray(obj.rules)) arr = obj.rules;
+    else if (Array.isArray(obj.data)) arr = obj.data;
+    else arr = [parsed];
+  } else {
+    arr = [];
+  }
   const results: ReplaceRule[] = [];
   for (const item of arr) {
     if (!item || typeof item !== "object") continue;
@@ -550,7 +583,11 @@ export default function PurifyWorkspace() {
     });
   }, [rules, keyword, activeGroup]);
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["studio", "replaceRules"] });
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: ["studio", "replaceRules"] });
+    void qc.invalidateQueries({ queryKey: ["chapter"] });
+    void qc.invalidateQueries({ queryKey: ["toc"] });
+  };
 
   const saveRuleMutation = useMutation({
     mutationFn: async (d: RuleDraft) => {

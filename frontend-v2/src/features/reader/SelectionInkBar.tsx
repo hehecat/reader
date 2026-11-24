@@ -296,13 +296,9 @@ export function SelectionInkBar({
         isRegex: false,
         enabled: true,
       });
-      notify.success(
-        "已加入正文净化规则",
-        onRequestRefreshChapter
-          ? { label: "刷新本章", onClick: onRequestRefreshChapter }
-          : undefined,
-      );
+      notify.success("已加入正文净化规则，正在刷新本章");
       dismiss(true);
+      onRequestRefreshChapter?.();
     } catch (err) {
       notify.error(err instanceof Error ? err.message : "保存净化规则失败");
     } finally {

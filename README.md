@@ -61,7 +61,7 @@ docker compose up -d
 
 ## 界面展示
 
-### 桌面端 · 宣纸双页对开与悬浮底栏
+### 桌面端 · 书房书架与宣纸沉浸阅读
 
 ![砚台 · Reader 桌面端展示](docs/images/showcase-desktop.jpg)
 

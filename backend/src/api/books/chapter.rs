@@ -47,6 +47,65 @@ struct LocalRuleChaptersPayload {
     chapters: Vec<LocalChapterItem>,
 }
 
+/// 按当前用户启用的净化规则处理章节正文（`get_replace_rules` 走内存 LRU 缓存，零 SQL 开销）
+pub(super) async fn purify_book_content(
+    state: &AppState,
+    ns: &str,
+    content: String,
+    use_replace_rule: bool,
+    book_name: Option<&str>,
+    source_url: Option<&str>,
+) -> String {
+    if !use_replace_rule || content.is_empty() {
+        return content;
+    }
+    let Ok(rules) = state.storage.get_replace_rules(ns).await else {
+        return content;
+    };
+    if rules.is_empty() {
+        return content;
+    }
+    crate::service::book::apply_replace_rules(
+        &content,
+        &rules,
+        crate::service::book::PurifyTarget::Content,
+        book_name,
+        source_url,
+    )
+}
+
+/// 按当前用户启用的标题净化规则处理目录标题（仅当至少有一条启用了 `scopeTitle` 规则时遍历）
+async fn purify_chapter_titles(
+    state: &AppState,
+    ns: &str,
+    chapters: &mut [crate::model::book_chapter::BookChapter],
+    use_replace_rule: bool,
+    book_name: Option<&str>,
+    source_url: Option<&str>,
+) {
+    if !use_replace_rule || chapters.is_empty() {
+        return;
+    }
+    let Ok(rules) = state.storage.get_replace_rules(ns).await else {
+        return;
+    };
+    if !rules
+        .iter()
+        .any(|r| r.enabled && r.scope_title && !r.find.is_empty())
+    {
+        return;
+    }
+    for ch in chapters.iter_mut() {
+        ch.title = crate::service::book::apply_replace_rules(
+            &ch.title,
+            &rules,
+            crate::service::book::PurifyTarget::Title,
+            book_name,
+            source_url,
+        );
+    }
+}
+
 /// GET/POST `/reader3/getChapterList`：章节目录（支持缓存命中、质量门与离线合成兜底）
 pub async fn get_chapter_list(
     State(state): State<AppState>,
@@ -80,11 +139,30 @@ pub async fn get_chapter_list(
             .get_toc_cache(&namespace, &toc_url, toc_cache_ttl_ms())
             .await
         {
-            if let Ok(chapters) =
+            if let Ok(mut chapters) =
                 serde_json::from_str::<Vec<crate::model::book_chapter::BookChapter>>(&cached)
             {
                 calibrate_total_from_cached_toc(&state, &namespace, &url_param, chapters.len())
                     .await;
+                let shelf_meta = if !url_param.is_empty() {
+                    state
+                        .storage
+                        .find_book(&namespace, &url_param)
+                        .await
+                        .ok()
+                        .flatten()
+                } else {
+                    None
+                };
+                purify_chapter_titles(
+                    &state,
+                    &namespace,
+                    &mut chapters,
+                    shelf_meta.as_ref().is_none_or(|b| b.use_replace_rule),
+                    shelf_meta.as_ref().map(|b| b.name.as_str()),
+                    shelf_meta.as_ref().map(|b| b.origin.as_str()),
+                )
+                .await;
                 return ReturnData::ok_typed(chapters).into_response();
             }
         }
@@ -144,11 +222,30 @@ pub async fn get_chapter_list(
             .get_toc_cache(&namespace, &toc_url, toc_cache_ttl_ms())
             .await
         {
-            if let Ok(chapters) =
+            if let Ok(mut chapters) =
                 serde_json::from_str::<Vec<crate::model::book_chapter::BookChapter>>(&cached)
             {
                 calibrate_total_from_cached_toc(&state, &namespace, &url_param, chapters.len())
                     .await;
+                let shelf_meta = if !url_param.is_empty() {
+                    state
+                        .storage
+                        .find_book(&namespace, &url_param)
+                        .await
+                        .ok()
+                        .flatten()
+                } else {
+                    None
+                };
+                purify_chapter_titles(
+                    &state,
+                    &namespace,
+                    &mut chapters,
+                    shelf_meta.as_ref().is_none_or(|b| b.use_replace_rule),
+                    shelf_meta.as_ref().map(|b| b.name.as_str()),
+                    shelf_meta.as_ref().map(|b| b.origin.as_str()),
+                )
+                .await;
                 return ReturnData::ok_typed(chapters).into_response();
             }
         }
@@ -257,6 +354,16 @@ pub async fn get_chapter_list(
                     .patch_book(&namespace, &shelf.book_url, &patch)
                     .await;
             }
+            let mut chapters = chapters;
+            purify_chapter_titles(
+                &state,
+                &namespace,
+                &mut chapters,
+                shelf_for_write.as_ref().is_none_or(|b| b.use_replace_rule),
+                shelf_for_write.as_ref().map(|b| b.name.as_str()),
+                Some(&source.book_source_url),
+            )
+            .await;
             ReturnData::ok_typed(chapters).into_response()
         }
         Err(e) => {
@@ -356,6 +463,21 @@ pub async fn get_book_content(
                     )
                     .await;
                 }
+                let cached_meta = state
+                    .storage
+                    .find_book(&namespace, cached_book)
+                    .await
+                    .ok()
+                    .flatten();
+                let content = purify_book_content(
+                    &state,
+                    &namespace,
+                    content,
+                    cached_meta.as_ref().is_none_or(|b| b.use_replace_rule),
+                    cached_meta.as_ref().map(|b| b.name.as_str()),
+                    cached_meta.as_ref().map(|b| b.origin.as_str()),
+                )
+                .await;
                 return ReturnData::ok_typed(ContentPayload { content }).into_response();
             }
         }
@@ -552,6 +674,15 @@ pub async fn get_book_content(
                     )
                     .await;
                 }
+                let content = purify_book_content(
+                    &state,
+                    &namespace,
+                    content,
+                    shelf_book.as_ref().is_none_or(|b| b.use_replace_rule),
+                    book_name_ctx,
+                    Some(&source.book_source_url),
+                )
+                .await;
                 return ReturnData::ok_typed(ContentPayload { content }).into_response();
             }
         }
@@ -599,6 +730,15 @@ pub async fn get_book_content(
                 }
             }
             bump_source_use(&state, &namespace, &source).await;
+            let content = purify_book_content(
+                &state,
+                &namespace,
+                content,
+                shelf_book.as_ref().is_none_or(|b| b.use_replace_rule),
+                book_name_ctx,
+                Some(&source.book_source_url),
+            )
+            .await;
             ReturnData::ok_typed(ContentPayload { content }).into_response()
         }
         Err(e) => {
