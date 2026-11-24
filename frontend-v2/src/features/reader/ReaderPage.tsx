@@ -245,6 +245,24 @@ function deserializeCachedPayload(raw: string): BookContentPayload | string {
   return raw;
 }
 
+const EMPTY_PARSED_CHAPTER: ParsedChapter = { kind: "empty", paragraphs: [] };
+const MAX_MEM_CHAPTERS = 16;
+/** Synchronous in-memory parsed chapter LRU cache so cross-chapter page flips render with 0ms delay and zero stale-text flash */
+const parsedChapterMemCache = new Map<string, ParsedChapter>();
+
+function putParsedChapterMemCache(key: string, data: ParsedChapter) {
+  if (data.kind === "empty") return;
+  if (parsedChapterMemCache.has(key)) {
+    parsedChapterMemCache.delete(key);
+  }
+  parsedChapterMemCache.set(key, data);
+  while (parsedChapterMemCache.size > MAX_MEM_CHAPTERS) {
+    const oldest = parsedChapterMemCache.keys().next().value;
+    if (oldest === undefined) break;
+    parsedChapterMemCache.delete(oldest);
+  }
+}
+
 /* ============================================================================
    ReaderPage — Central Immersive Reading Hub
    ============================================================================ */
@@ -336,7 +354,10 @@ export default function ReaderPage() {
   const [chapterIndex, setChapterIndex] = React.useState<number>(
     () => parsedUrlIndex ?? shelfBook?.durChapterIndex ?? 0,
   );
-  const [parsed, setParsed] = React.useState<ParsedChapter>({ kind: "empty", paragraphs: [] });
+  const [parsedState, setParsedState] = React.useState<{ key: string; data: ParsedChapter }>({
+    key: "",
+    data: EMPTY_PARSED_CHAPTER,
+  });
   const [loadingContent, setLoadingContent] = React.useState(false);
   const [contentError, setContentError] = React.useState<string | null>(null);
   const [contentRefreshNonce, setContentRefreshNonce] = React.useState(0);
@@ -455,12 +476,32 @@ export default function ReaderPage() {
   }, [chapters.length, chapterIndex]);
 
   const currentChapter = chapters[chapterIndex] ?? null;
+  const prevChapter = chapterIndex > 0 ? (chapters[chapterIndex - 1] ?? null) : null;
   const nextChapter = chapters[chapterIndex + 1] ?? null;
   const currentChapterUrl = currentChapter?.url ?? "";
   const currentChapterTitle = currentChapter?.title ?? "";
   const currentChapterIdx = currentChapter?.index ?? chapterIndex;
+  const currentChapterKey =
+    bookUrl && currentChapterUrl ? chapterCacheKey(bookUrl, currentChapterUrl) : "";
+  const prevChapterRef = React.useRef<BookChapter | null>(prevChapter);
+  prevChapterRef.current = prevChapter;
   const nextChapterRef = React.useRef<BookChapter | null>(nextChapter);
   nextChapterRef.current = nextChapter;
+
+  // Bind parsed content strictly to currentChapterKey so old chapter text NEVER flashes under a new chapter
+  const parsed: ParsedChapter = React.useMemo(() => {
+    if (!currentChapterKey) return EMPTY_PARSED_CHAPTER;
+    if (parsedState.key === currentChapterKey) return parsedState.data;
+    if (contentRefreshNonce === 0) {
+      const mem = parsedChapterMemCache.get(currentChapterKey);
+      if (mem) return mem;
+    }
+    return EMPTY_PARSED_CHAPTER;
+  }, [currentChapterKey, parsedState, contentRefreshNonce]);
+
+  const effectiveLoadingContent =
+    loadingContent ||
+    (Boolean(currentChapterKey) && parsed.kind === "empty" && !contentError);
 
   const displayChapterTitle =
     cleanChapterTitle(currentChapter?.title) ||
@@ -487,12 +528,40 @@ export default function ReaderPage() {
 
     let cancelled = false;
 
+    const warmAdjacentFromIdb = async (ch: BookChapter | null) => {
+      if (!ch || cancelled) return;
+      const adjKey = chapterCacheKey(bookUrl, ch.url);
+      if (parsedChapterMemCache.has(adjKey)) return;
+      const raw = await getCachedChapter(adjKey);
+      if (raw && !cancelled) {
+        const parsedAdj = parseBookContent(deserializeCachedPayload(raw), ch.url, ch.title);
+        if (parsedAdj.kind !== "empty") {
+          putParsedChapterMemCache(adjKey, parsedAdj);
+        }
+      }
+    };
+
     const prefetchNext = async () => {
+      // Warm previous chapter from IndexedDB into sync memory cache for instant back-turn
+      void warmAdjacentFromIdb(prevChapterRef.current);
+
       const nextCh = nextChapterRef.current;
       if (!nextCh || cancelled) return;
       const nextKey = chapterCacheKey(bookUrl, nextCh.url);
+      if (parsedChapterMemCache.has(nextKey)) return;
       const alreadyCached = await getCachedChapter(nextKey);
-      if (alreadyCached || cancelled) return;
+      if (alreadyCached && !cancelled) {
+        const parsedNext = parseBookContent(
+          deserializeCachedPayload(alreadyCached),
+          nextCh.url,
+          nextCh.title,
+        );
+        if (parsedNext.kind !== "empty") {
+          putParsedChapterMemCache(nextKey, parsedNext);
+          return;
+        }
+      }
+      if (cancelled) return;
       try {
         const nextPayload = await booksApi.getContent({
           chapterUrl: nextCh.url,
@@ -505,6 +574,10 @@ export default function ReaderPage() {
         });
         if (!cancelled && nextPayload) {
           void setCachedChapter(nextKey, JSON.stringify(nextPayload));
+          const parsedNext = parseBookContent(nextPayload, nextCh.url, nextCh.title);
+          if (parsedNext.kind !== "empty") {
+            putParsedChapterMemCache(nextKey, parsedNext);
+          }
         }
       } catch {
         // silent background prefetch
@@ -514,13 +587,23 @@ export default function ReaderPage() {
     void (async () => {
       setContentError(null);
 
-      if (!forceRefresh) {
+      if (forceRefresh) {
+        parsedChapterMemCache.delete(key);
+      } else {
+        const memHit = parsedChapterMemCache.get(key);
+        if (memHit && !cancelled) {
+          setParsedState({ key, data: memHit });
+          setLoadingContent(false);
+          void prefetchNext();
+          return;
+        }
         const cachedRaw = await getCachedChapter(key);
         if (cachedRaw && !cancelled) {
           const payload = deserializeCachedPayload(cachedRaw);
           const result = parseBookContent(payload, currentChapterUrl, currentChapterTitle);
           if (result.kind !== "empty") {
-            setParsed(result);
+            putParsedChapterMemCache(key, result);
+            setParsedState({ key, data: result });
             setLoadingContent(false);
             void prefetchNext();
             return;
@@ -544,10 +627,11 @@ export default function ReaderPage() {
         );
         if (cancelled) return;
         const result = parseBookContent(payload, currentChapterUrl, currentChapterTitle);
-        setParsed(result);
         if (result.kind !== "empty") {
+          putParsedChapterMemCache(key, result);
           void setCachedChapter(key, JSON.stringify(payload));
         }
+        setParsedState({ key, data: result });
         if (forceRefresh) {
           setContentRefreshNonce(0);
           notify.success("已重新拉取本章正文");
@@ -986,7 +1070,7 @@ export default function ReaderPage() {
       {/* ================================================================
           Zero-Reflow Constant Stage Content (deltaY = 0 always)
          ================================================================ */}
-      {loadingContent && parsed.kind === "empty" ? (
+      {effectiveLoadingContent && parsed.kind === "empty" ? (
         <div
           onClick={handleToggleHud}
           className="flex h-full w-full flex-col items-center justify-center gap-3 px-6"

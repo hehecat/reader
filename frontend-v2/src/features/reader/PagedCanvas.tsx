@@ -425,9 +425,11 @@ export function PagedCanvas({
 
   // Measure total pages & preserve anchor / apply jump signal
   React.useLayoutEffect(() => {
-    resetCurlDom();
     const track = trackRef.current;
-    if (!track || stageSize.w === 0 || stageSize.h === 0) return;
+    if (!track || stageSize.w === 0 || stageSize.h === 0) {
+      resetCurlDom();
+      return;
+    }
 
     const unit = metrics.colWidth + metrics.colGap;
     const trackRect = track.getBoundingClientRect();
@@ -445,6 +447,7 @@ export function PagedCanvas({
     const nextTotalPages = metrics.isSpread
       ? Math.max(1, Math.ceil(totalCols / 2))
       : totalCols;
+    totalPagesRef.current = nextTotalPages;
     setTotalPages(nextTotalPages);
 
     const findPageForPara = (paraIdx: number): number => {
@@ -471,7 +474,11 @@ export function PagedCanvas({
       nextPage = findPageForPara(anchorParaRef.current);
     }
 
+    // Sync DOM transform synchronously BEFORE lifting curl overlay so the new chapter never paints at the old page offset
+    track.style.transform = `translate3d(${-(nextPage * metrics.stepPx)}px, 0, 0)`;
+    pageRef.current = nextPage;
     setPage(nextPage);
+    resetCurlDom();
   }, [
     chapterIndex,
     parsed,
@@ -791,10 +798,11 @@ export function PagedCanvas({
             setPage(sess.targetPage);
             resetCurlDom();
           } else if (sess.boundary === "next-chapter") {
-            resetCurlDom();
+            // Keep the chapter transition sheet covering the old chapter until React commits the new chapter's layout (lifted atomically in useLayoutEffect)
+            sess.animRaf = null;
             onNextChapter();
           } else if (sess.boundary === "prev-chapter") {
-            resetCurlDom();
+            sess.animRaf = null;
             onPrevChapter("end");
           } else {
             resetCurlDom();
