@@ -444,27 +444,70 @@ pub async fn save_book_progress(
     let index =
         int_param_of(&params, body_json.as_ref(), &["durChapterIndex", "index"]).unwrap_or(0);
     let pos = int_param_of(&params, body_json.as_ref(), &["durChapterPos", "pos"]).unwrap_or(0);
-    let time = int_param_of(&params, body_json.as_ref(), &["durChapterTime", "time"])
-        .unwrap_or_else(now_millis);
+    let client_time = int_param_of(&params, body_json.as_ref(), &["durChapterTime", "time"]);
+    let base_time = int_param_of(
+        &params,
+        body_json.as_ref(),
+        &["baseChapterTime", "baseTime"],
+    );
+    let force = body_json
+        .as_ref()
+        .and_then(|b| b.get("force"))
+        .and_then(|v| {
+            v.as_bool()
+                .or_else(|| v.as_i64().map(|n| n != 0))
+                .or_else(|| v.as_str().map(|s| s == "true" || s == "1"))
+        })
+        .or_else(|| params.get("force").map(|s| s == "true" || s == "1"))
+        .unwrap_or(false);
     if index < 0 {
         return Json(ReturnData::err("章节不存在"));
     }
     let title = opt_str_param_of(&params, body_json.as_ref(), &["durChapterTitle", "title"]);
-    let exists = state
-        .storage
-        .find_book(&namespace, &book_url)
-        .await
-        .ok()
-        .flatten()
-        .is_some();
     match state
         .storage
-        .update_book_progress(&namespace, &book_url, title.as_deref(), index, pos, time)
+        .save_book_progress_checked(
+            &namespace,
+            &book_url,
+            title.as_deref(),
+            index,
+            pos,
+            base_time,
+            force,
+            client_time,
+            now_millis(),
+        )
         .await
     {
-        Ok(0) if exists => Json(ReturnData::ok(Value::Null)),
-        Ok(0) => Json(ReturnData::err("书籍未加入书架")),
-        Ok(_) => Json(ReturnData::ok(Value::Null)),
+        Ok(crate::storage::ProgressUpdateResult::Updated {
+            dur_chapter_index,
+            dur_chapter_pos,
+            dur_chapter_title,
+            dur_chapter_time,
+        }) => Json(ReturnData::ok(serde_json::json!({
+            "conflict": false,
+            "durChapterIndex": dur_chapter_index,
+            "durChapterPos": dur_chapter_pos,
+            "durChapterTitle": dur_chapter_title,
+            "durChapterTime": dur_chapter_time,
+        }))),
+        Ok(crate::storage::ProgressUpdateResult::Conflict {
+            dur_chapter_index,
+            dur_chapter_pos,
+            dur_chapter_title,
+            dur_chapter_time,
+        }) => Json(ReturnData::ok(serde_json::json!({
+            "conflict": true,
+            "remote": {
+                "durChapterIndex": dur_chapter_index,
+                "durChapterPos": dur_chapter_pos,
+                "durChapterTitle": dur_chapter_title,
+                "durChapterTime": dur_chapter_time,
+            }
+        }))),
+        Ok(crate::storage::ProgressUpdateResult::NotFound) => {
+            Json(ReturnData::err("书籍未加入书架"))
+        }
         Err(e) => {
             tracing::error!("saveBookProgress 失败: {e}");
             Json(ReturnData::err("保存失败"))

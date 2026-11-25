@@ -174,6 +174,114 @@ async fn save_book_progress_accepts_pure_json_body_and_query_fallback() {
 }
 
 #[tokio::test]
+async fn save_book_progress_detects_cross_device_conflict_and_supports_force() {
+    let (app, _storage, dir) = test_app("progress-sync", false).await;
+    let book_url = "https://book.test/sync-1";
+
+    let saved = post_json(
+        &app,
+        "/reader3/saveBook",
+        json!({
+            "bookUrl": book_url,
+            "name": "跨设备同步测试",
+            "author": "测试作者",
+            "origin": "https://book.test",
+            "originName": "测试源"
+        }),
+        None,
+    )
+    .await;
+    assert_eq!(saved["isSuccess"], true);
+
+    // 1. 设备 A 阅读到第 50 章并保存
+    let res_a = post_json(
+        &app,
+        "/reader3/saveBookProgress",
+        json!({
+            "bookUrl": book_url,
+            "durChapterIndex": 49,
+            "durChapterPos": 10,
+            "durChapterTitle": "第50章",
+            "baseChapterTime": 0
+        }),
+        None,
+    )
+    .await;
+    assert_eq!(res_a["isSuccess"], true);
+    assert_eq!(res_a["data"]["conflict"], false);
+    let time_a = res_a["data"]["durChapterTime"].as_i64().unwrap();
+    assert!(time_a > 0);
+
+    // 2. 设备 B 登录打开（已知 time_a），继续读到第 65 章并保存
+    let res_b = post_json(
+        &app,
+        "/reader3/saveBookProgress",
+        json!({
+            "bookUrl": book_url,
+            "durChapterIndex": 64,
+            "durChapterPos": 22,
+            "durChapterTitle": "第65章",
+            "baseChapterTime": time_a
+        }),
+        None,
+    )
+    .await;
+    assert_eq!(res_b["isSuccess"], true);
+    assert_eq!(res_b["data"]["conflict"], false);
+    let time_b = res_b["data"]["durChapterTime"].as_i64().unwrap();
+    assert!(time_b > time_a);
+
+    // 3. 设备 A 未退出，停留在旧基线 time_a 上又翻了一页 -> 必须拒绝覆盖并返回 conflict + B 进度
+    let res_a_stale = post_json(
+        &app,
+        "/reader3/saveBookProgress",
+        json!({
+            "bookUrl": book_url,
+            "durChapterIndex": 49,
+            "durChapterPos": 14,
+            "durChapterTitle": "第50章",
+            "baseChapterTime": time_a
+        }),
+        None,
+    )
+    .await;
+    assert_eq!(res_a_stale["isSuccess"], true);
+    assert_eq!(res_a_stale["data"]["conflict"], true);
+    assert_eq!(res_a_stale["data"]["remote"]["durChapterIndex"], 64);
+    assert_eq!(res_a_stale["data"]["remote"]["durChapterPos"], 22);
+    assert_eq!(res_a_stale["data"]["remote"]["durChapterTitle"], "第65章");
+    assert_eq!(res_a_stale["data"]["remote"]["durChapterTime"], time_b);
+
+    // 验证数据库中仍保留设备 B 的第 65 章，未被覆盖
+    let shelf = get_json(&app, "/reader3/getBookshelf").await;
+    assert_eq!(shelf["data"][0]["durChapterIndex"], 64);
+    assert_eq!(shelf["data"][0]["durChapterPos"], 22);
+
+    // 4. 用户在设备 A 明确选择「留在当前」后 force=true 覆盖成功
+    let res_a_force = post_json(
+        &app,
+        "/reader3/saveBookProgress",
+        json!({
+            "bookUrl": book_url,
+            "durChapterIndex": 49,
+            "durChapterPos": 15,
+            "durChapterTitle": "第50章",
+            "baseChapterTime": time_a,
+            "force": true
+        }),
+        None,
+    )
+    .await;
+    assert_eq!(res_a_force["isSuccess"], true);
+    assert_eq!(res_a_force["data"]["conflict"], false);
+    let shelf_after = get_json(&app, "/reader3/getBookshelf").await;
+    assert_eq!(shelf_after["data"][0]["durChapterIndex"], 49);
+    assert_eq!(shelf_after["data"][0]["durChapterPos"], 15);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn book_group_endpoints_accept_pure_json_body_and_query_fallback() {
     let (app, _storage, dir) = test_app("groups", false).await;
     let book_url = "https://book.test/group-1";

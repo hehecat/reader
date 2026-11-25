@@ -69,6 +69,8 @@ export interface RequestOptions {
   timeoutMs?: number;
   /** 跳过自动派发未登录事件（例如启动探测 getUserInfo 时） */
   silentAuth?: boolean;
+  /** 页面切后台 / 关闭时保活上报（如阅读进度冲刷） */
+  keepalive?: boolean;
 }
 
 async function rawRequest<T>(
@@ -111,7 +113,8 @@ async function rawRequest<T>(
       headers,
       body: fetchBody,
       credentials: "include",
-      signal: controller.signal,
+      keepalive: options?.keepalive,
+      signal: options?.keepalive ? undefined : controller.signal,
     });
 
     if (resp.status === 401) {

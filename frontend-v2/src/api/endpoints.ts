@@ -73,6 +73,22 @@ export const usersApi = {
 
 /* ---------- Bookshelf, Reading, Groups, Bookmarks & Local Import ---------- */
 
+export interface RemoteBookProgress {
+  durChapterIndex: number;
+  durChapterPos: number;
+  durChapterTitle: string;
+  durChapterTime: number;
+}
+
+export interface SaveBookProgressResult {
+  conflict: boolean;
+  durChapterIndex?: number;
+  durChapterPos?: number;
+  durChapterTitle?: string;
+  durChapterTime?: number;
+  remote?: RemoteBookProgress;
+}
+
 export const booksApi = {
   getShelf: (refresh = false) =>
     apiGet<Book[]>("/reader3/getBookshelf", refresh ? { refresh: 1 } : undefined),
@@ -81,18 +97,27 @@ export const booksApi = {
   deleteBook: (bookUrl: string) => apiPost<string>("/reader3/deleteBook", { bookUrl }),
   deleteBooks: (bookUrls: string[]) =>
     apiPost<{ count: number }>("/reader3/deleteBooks", { bookUrls }),
-  saveProgress: (body: {
-    bookUrl: string;
-    durChapterIndex: number;
-    durChapterPos?: number;
-    durChapterTime?: number;
-    durChapterTitle?: string;
-  }) =>
-    apiPost<null>("/reader3/saveBookProgress", {
-      ...body,
-      durChapterPos: body.durChapterPos ?? 0,
-      durChapterTime: body.durChapterTime ?? Date.now(),
-    }),
+  saveProgress: (
+    body: {
+      bookUrl: string;
+      durChapterIndex: number;
+      durChapterPos?: number;
+      durChapterTime?: number;
+      durChapterTitle?: string;
+      baseChapterTime?: number;
+      force?: boolean;
+    },
+    options?: { keepalive?: boolean },
+  ) =>
+    apiPost<SaveBookProgressResult | null>(
+      "/reader3/saveBookProgress",
+      {
+        ...body,
+        durChapterPos: body.durChapterPos ?? 0,
+        durChapterTime: body.durChapterTime ?? Date.now(),
+      },
+      { keepalive: options?.keepalive, silentAuth: options?.keepalive },
+    ),
   getBookInfo: (url: string, bookSource?: string, signal?: AbortSignal) =>
     apiPost<BookInfo>("/reader3/getBookInfo", { url, bookSource }, { signal }),
   getChapters: (

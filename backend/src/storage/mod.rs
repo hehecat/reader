@@ -7,6 +7,8 @@ mod schema;
 mod sources;
 mod users;
 
+pub use books::ProgressUpdateResult;
+
 use anyhow::Result;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;

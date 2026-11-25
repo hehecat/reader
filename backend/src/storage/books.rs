@@ -358,7 +358,118 @@ impl Storage {
         }
         Ok(r.rows_affected())
     }
+}
 
+/// 跨设备阅读进度写入结果
+#[derive(Debug, Clone)]
+pub enum ProgressUpdateResult {
+    Updated {
+        dur_chapter_index: i64,
+        dur_chapter_pos: i64,
+        dur_chapter_title: String,
+        dur_chapter_time: i64,
+    },
+    Conflict {
+        dur_chapter_index: i64,
+        dur_chapter_pos: i64,
+        dur_chapter_title: String,
+        dur_chapter_time: i64,
+    },
+    NotFound,
+}
+
+impl Storage {
+    /// 原子保存阅读进度（支持服务端单调时钟 + 乐观并发冲突检测，完全兼容旧客户端）
+    ///
+    /// - 当 `base_time` 为 `Some(base)` 且 `!force` 时：若库中 `dur_chapter_time > base`
+    ///   且位置与本次上报不同，则判定为其他设备已更新，拒绝覆盖并返回 `Conflict`。
+    /// - 当 `base_time` 为 `None` 且 `!force` 时：兼容旧版 Legado / reader3 协议，
+    ///   较旧客户端时间戳不覆盖较新进度。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn save_book_progress_checked(
+        &self,
+        ns: &str,
+        book_url: &str,
+        title: Option<&str>,
+        index: i64,
+        pos: i64,
+        base_time: Option<i64>,
+        force: bool,
+        client_time: Option<i64>,
+        server_now: i64,
+    ) -> Result<ProgressUpdateResult> {
+        let mut tx = self.begin_immediate().await?;
+        let row: Option<(i64, i64, String, i64)> = sqlx::query_as(
+            "SELECT COALESCE(dur_chapter_index, 0), COALESCE(dur_chapter_pos, 0), \
+             COALESCE(dur_chapter_title, ''), COALESCE(dur_chapter_time, 0) \
+             FROM books WHERE user_namespace = ?1 AND book_url = ?2",
+        )
+        .bind(ns)
+        .bind(book_url)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let Some((cur_index, cur_pos, cur_title, cur_time)) = row else {
+            return Ok(ProgressUpdateResult::NotFound);
+        };
+
+        // 现代跨设备客户端：带有效 base_time(>0) 时做乐观并发检测，防止后台未退出的旧设备覆盖新进度
+        if let Some(base) = base_time {
+            if !force && base > 0 && cur_time > base && (cur_index != index || cur_pos != pos) {
+                return Ok(ProgressUpdateResult::Conflict {
+                    dur_chapter_index: cur_index,
+                    dur_chapter_pos: cur_pos,
+                    dur_chapter_title: cur_title,
+                    dur_chapter_time: cur_time,
+                });
+            }
+        } else if !force {
+            // 兼容旧客户端：若显式传了早于当前库记录的 client_time，则保持原进度不回退
+            if let Some(ct) = client_time {
+                if ct > 0 && ct < cur_time {
+                    return Ok(ProgressUpdateResult::Updated {
+                        dur_chapter_index: cur_index,
+                        dur_chapter_pos: cur_pos,
+                        dur_chapter_title: cur_title,
+                        dur_chapter_time: cur_time,
+                    });
+                }
+            }
+        }
+
+        // 使用服务端单调递增时钟，彻底消除多设备本地时钟偏差
+        let next_time = if base_time.is_some() || force {
+            server_now.max(cur_time.saturating_add(1))
+        } else {
+            server_now.max(client_time.unwrap_or(0)).max(cur_time)
+        };
+        let next_title = title.unwrap_or(cur_title.as_str()).to_string();
+
+        sqlx::query(
+            "UPDATE books SET dur_chapter_title = COALESCE(?3, dur_chapter_title), \
+             dur_chapter_index = ?4, dur_chapter_pos = ?5, dur_chapter_time = ?6 \
+             WHERE user_namespace = ?1 AND book_url = ?2",
+        )
+        .bind(ns)
+        .bind(book_url)
+        .bind(title)
+        .bind(index)
+        .bind(pos)
+        .bind(next_time)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(ProgressUpdateResult::Updated {
+            dur_chapter_index: index,
+            dur_chapter_pos: pos,
+            dur_chapter_title: next_title,
+            dur_chapter_time: next_time,
+        })
+    }
+}
+
+impl Storage {
     /// 保存阅读进度（较旧时间戳不覆盖新进度）
     pub async fn update_book_progress(
         &self,

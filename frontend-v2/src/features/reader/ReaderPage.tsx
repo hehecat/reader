@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   ArrowLeftRight,
   BookOpen,
+  CloudDownload,
   Download,
   Headphones,
   RefreshCw,
@@ -11,7 +12,7 @@ import {
 import * as React from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { fontFileUrl, resolveImageUrl } from "@/api/client";
-import { booksApi, featuresApi } from "@/api/endpoints";
+import { booksApi, featuresApi, type RemoteBookProgress } from "@/api/endpoints";
 import type {
   Book,
   BookChapter,
@@ -34,6 +35,7 @@ import { notify } from "@/stores/toast";
 import { BookCover } from "@/ui/BookCover";
 import { Button } from "@/ui/Button";
 import { EmptyView, Spinner } from "@/ui/Controls";
+import { AnimatePresence, motion, SPRING_POP, useReducedMotion } from "@/ui/motion";
 import {
   ChapterEndColophon,
   PagedCanvas,
@@ -288,11 +290,12 @@ export default function ReaderPage() {
   const readLayout = usePrefsStore((s) => s.readLayout);
   const setReadLayout = usePrefsStore((s) => s.setReadLayout);
 
-  // Shelf & Book metadata
+  // Shelf & Book metadata (always refetch on mount so Device B sees Device A's latest progress)
   const { data: shelfBooks = [], isFetched: shelfFetched } = useQuery({
     queryKey: ["shelf"],
     queryFn: () => booksApi.getShelf(),
     staleTime: 30_000,
+    refetchOnMount: "always",
   });
 
   const shelfBook = React.useMemo(
@@ -386,9 +389,14 @@ export default function ReaderPage() {
   const [autoScrollActive, setAutoScrollActive] = React.useState(false);
   const [isFullscreen, setIsFullscreen] = React.useState(false);
 
+  const reduced = useReducedMotion();
+  const [remoteSyncBanner, setRemoteSyncBanner] = React.useState<RemoteBookProgress | null>(null);
+
   const stageContainerRef = React.useRef<HTMLDivElement>(null);
   const resolvedBookRef = React.useRef<string>("");
-  const lastLocalSaveAtRef = React.useRef<number>(0);
+  const baseChapterTimeRef = React.useRef<number>(0);
+  const syncedPosRef = React.useRef<{ chapterIndex: number; paraIndex: number } | null>(null);
+  const forceNextSaveRef = React.useRef<boolean>(false);
   const lastSyncCheckAtRef = React.useRef<number>(0);
   const saveTimerRef = React.useRef<number | null>(null);
   const latestProgressRef = React.useRef({
@@ -408,11 +416,53 @@ export default function ReaderPage() {
     resolvedBookRef.current = bookUrl;
     const initIdx = parsedUrlIndex ?? shelfBook?.durChapterIndex ?? 0;
     const initPos = parsedUrlIndex === null ? (shelfBook?.durChapterPos ?? 0) : 0;
+    const remoteTime = shelfBook?.durChapterTime ?? 0;
+    baseChapterTimeRef.current = remoteTime;
+    syncedPosRef.current = { chapterIndex: initIdx, paraIndex: initPos };
+    forceNextSaveRef.current = false;
+    setRemoteSyncBanner(null);
+
+    // If opened with an explicit stale ?index= while server already has a different newer position, prompt to sync
+    if (
+      parsedUrlIndex !== null &&
+      shelfBook &&
+      remoteTime > 0 &&
+      shelfBook.durChapterIndex !== parsedUrlIndex
+    ) {
+      setRemoteSyncBanner({
+        durChapterIndex: shelfBook.durChapterIndex,
+        durChapterPos: shelfBook.durChapterPos ?? 0,
+        durChapterTitle: shelfBook.durChapterTitle || "",
+        durChapterTime: remoteTime,
+      });
+    }
+
     setChapterIndex(initIdx);
     setJumpSignal((prev) => ({ paraIndex: initPos, align: "start", nonce: prev.nonce + 1 }));
     setTtsActive(false);
     setAutoScrollActive(false);
   }, [bookUrl, parsedUrlIndex, shelfFetched, shelfBook]);
+
+  // If fresh mount refetch of ["shelf"] brings newer remote progress than cached initial state, surface banner
+  React.useEffect(() => {
+    if (!bookUrl || resolvedBookRef.current !== bookUrl || !shelfBook) return;
+    const remoteTime = shelfBook.durChapterTime ?? 0;
+    if (remoteTime <= 0 || remoteTime <= baseChapterTimeRef.current) return;
+    const snap = latestProgressRef.current;
+    const differs =
+      shelfBook.durChapterIndex !== snap.chapterIndex ||
+      Math.abs((shelfBook.durChapterPos ?? 0) - snap.paraIndex) >= 2;
+    if (differs) {
+      setRemoteSyncBanner({
+        durChapterIndex: shelfBook.durChapterIndex,
+        durChapterPos: shelfBook.durChapterPos ?? 0,
+        durChapterTitle: shelfBook.durChapterTitle || "",
+        durChapterTime: remoteTime,
+      });
+    } else {
+      baseChapterTimeRef.current = remoteTime;
+    }
+  }, [bookUrl, shelfBook]);
 
   // Sync ?index= query parameter cleanly on chapter switch (after initial resolution)
   React.useEffect(() => {
@@ -669,45 +719,78 @@ export default function ReaderPage() {
     chapterTitle: displayChapterTitle,
   };
 
-  const flushProgressSave = React.useCallback(() => {
-    const snap = latestProgressRef.current;
-    if (!snap.bookUrl || !snap.isInShelf) return;
-    const now = Date.now();
-    lastLocalSaveAtRef.current = now;
-    void booksApi
-      .saveProgress({
-        bookUrl: snap.bookUrl,
-        durChapterIndex: snap.chapterIndex,
-        durChapterPos: snap.paraIndex,
-        durChapterTime: now,
-        durChapterTitle: snap.chapterTitle || undefined,
-      })
-      .then(() => {
-        queryClient.setQueryData<Book[]>(["shelf"], (old) =>
-          old?.map((b) =>
-            b.bookUrl === snap.bookUrl
-              ? {
-                  ...b,
-                  durChapterIndex: snap.chapterIndex,
-                  durChapterPos: snap.paraIndex,
-                  durChapterTime: now,
-                  durChapterTitle: snap.chapterTitle || b.durChapterTitle,
-                }
-              : b,
-          ),
-        );
-      })
-      .catch(() => undefined);
-  }, [queryClient]);
+  const flushProgressSave = React.useCallback(
+    (opts?: { keepalive?: boolean; force?: boolean }) => {
+      const snap = latestProgressRef.current;
+      if (!snap.bookUrl || !snap.isInShelf) return;
+      const force = Boolean(opts?.force || forceNextSaveRef.current);
+      const synced = syncedPosRef.current;
+      const isDirty =
+        !synced ||
+        synced.chapterIndex !== snap.chapterIndex ||
+        synced.paraIndex !== snap.paraIndex;
+      // Never write back if the user has not actually moved on this device (prevents background Device A clobbering Device B)
+      if (!isDirty && !force) return;
 
-  // Throttled progress save on chapter / paragraph change
+      const sentChapter = snap.chapterIndex;
+      const sentPara = snap.paraIndex;
+      const sentTitle = snap.chapterTitle;
+
+      void booksApi
+        .saveProgress(
+          {
+            bookUrl: snap.bookUrl,
+            durChapterIndex: sentChapter,
+            durChapterPos: sentPara,
+            durChapterTitle: sentTitle || undefined,
+            baseChapterTime: baseChapterTimeRef.current,
+            force: force || undefined,
+          },
+          { keepalive: opts?.keepalive },
+        )
+        .then((res) => {
+          if (res?.conflict && res.remote) {
+            setRemoteSyncBanner(res.remote);
+            return;
+          }
+          const serverTime = res?.durChapterTime ?? Date.now();
+          baseChapterTimeRef.current = serverTime;
+          syncedPosRef.current = { chapterIndex: sentChapter, paraIndex: sentPara };
+          forceNextSaveRef.current = false;
+          queryClient.setQueryData<Book[]>(["shelf"], (old) =>
+            old?.map((b) =>
+              b.bookUrl === snap.bookUrl
+                ? {
+                    ...b,
+                    durChapterIndex: sentChapter,
+                    durChapterPos: sentPara,
+                    durChapterTime: serverTime,
+                    durChapterTitle: sentTitle || b.durChapterTitle,
+                  }
+                : b,
+            ),
+          );
+        })
+        .catch(() => undefined);
+    },
+    [queryClient],
+  );
+
+  // Throttled progress save on genuine chapter / paragraph movement
   React.useEffect(() => {
-    if (!isInShelf || !bookUrl) return;
+    if (!isInShelf || !bookUrl || resolvedBookRef.current !== bookUrl) return;
+    const synced = syncedPosRef.current;
+    const isDirty =
+      !synced ||
+      synced.chapterIndex !== chapterIndex ||
+      synced.paraIndex !== progressInfo.paraIndex;
+    if (!isDirty) return;
+
     if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
       saveTimerRef.current = null;
       flushProgressSave();
-    }, 2200);
+    }, 1600);
     return () => {
       if (saveTimerRef.current !== null) {
         window.clearTimeout(saveTimerRef.current);
@@ -731,27 +814,52 @@ export default function ReaderPage() {
     [chapters.length],
   );
 
+  const handleAcceptRemoteSync = React.useCallback(() => {
+    if (!remoteSyncBanner) return;
+    const target = remoteSyncBanner;
+    baseChapterTimeRef.current = target.durChapterTime;
+    syncedPosRef.current = {
+      chapterIndex: target.durChapterIndex,
+      paraIndex: target.durChapterPos,
+    };
+    forceNextSaveRef.current = false;
+    setRemoteSyncBanner(null);
+    jumpToPosition(target.durChapterIndex, target.durChapterPos, "start");
+    notify.success(`已同步至第 ${target.durChapterIndex + 1} 章`);
+  }, [remoteSyncBanner, jumpToPosition]);
+
+  const handleKeepLocalPosition = React.useCallback(() => {
+    forceNextSaveRef.current = true;
+    setRemoteSyncBanner(null);
+    flushProgressSave({ force: true });
+  }, [flushProgressSave]);
+
   React.useEffect(() => {
     const checkRemoteSync = async () => {
       const snap = latestProgressRef.current;
       if (!snap.bookUrl || !snap.isInShelf) return;
       const now = Date.now();
-      if (now - lastSyncCheckAtRef.current < 12_000) return;
+      if (now - lastSyncCheckAtRef.current < 4_000) return;
       lastSyncCheckAtRef.current = now;
       try {
         const list = await booksApi.getShelf();
+        queryClient.setQueryData<Book[]>(["shelf"], list);
         const remote = list.find((b) => b.bookUrl === snap.bookUrl);
         if (!remote) return;
-        const aheadByChapter = remote.durChapterIndex > snap.chapterIndex;
-        const aheadInChapter =
-          remote.durChapterIndex === snap.chapterIndex &&
-          remote.durChapterTime > lastLocalSaveAtRef.current + 5000 &&
-          remote.durChapterPos > snap.paraIndex + 5;
-        if (aheadByChapter || aheadInChapter) {
-          notify.info(`其他设备已读至第 ${remote.durChapterIndex + 1} 章`, {
-            label: "跳转",
-            onClick: () => jumpToPosition(remote.durChapterIndex, remote.durChapterPos),
+        const remoteTime = remote.durChapterTime ?? 0;
+        const isNewerThanBase = remoteTime > baseChapterTimeRef.current;
+        const differsInPosition =
+          remote.durChapterIndex !== snap.chapterIndex ||
+          Math.abs((remote.durChapterPos ?? 0) - snap.paraIndex) >= 2;
+        if (isNewerThanBase && differsInPosition) {
+          setRemoteSyncBanner({
+            durChapterIndex: remote.durChapterIndex,
+            durChapterPos: remote.durChapterPos ?? 0,
+            durChapterTitle: remote.durChapterTitle || "",
+            durChapterTime: remoteTime,
           });
+        } else if (isNewerThanBase) {
+          baseChapterTimeRef.current = remoteTime;
         }
       } catch {
         // ignore network hiccup
@@ -760,18 +868,30 @@ export default function ReaderPage() {
 
     const onVisibility = () => {
       if (document.visibilityState === "hidden") {
-        flushProgressSave();
+        flushProgressSave({ keepalive: true });
       } else if (document.visibilityState === "visible") {
         void checkRemoteSync();
       }
     };
 
+    const onWindowFocus = () => {
+      void checkRemoteSync();
+    };
+
+    const onPageHide = () => {
+      flushProgressSave({ keepalive: true });
+    };
+
     document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", onWindowFocus);
+    window.addEventListener("pagehide", onPageHide);
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
-      flushProgressSave();
+      window.removeEventListener("focus", onWindowFocus);
+      window.removeEventListener("pagehide", onPageHide);
+      flushProgressSave({ keepalive: true });
     };
-  }, [flushProgressSave, jumpToPosition]);
+  }, [flushProgressSave, queryClient]);
 
   // Fullscreen state listener
   React.useEffect(() => {
@@ -1253,6 +1373,46 @@ export default function ReaderPage() {
           onParagraphClickForTts={(idx) => setTtsParaIndex(idx)}
         />
       )}
+
+      {/* Non-blocking Cross-Device Progress Sync Pill Banner */}
+      <AnimatePresence>
+        {remoteSyncBanner ? (
+          <motion.div
+            key="remote-sync-banner"
+            role="status"
+            aria-live="polite"
+            initial={reduced ? { opacity: 0 } : { opacity: 0, y: -14, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={reduced ? { opacity: 0 } : { opacity: 0, y: -12, scale: 0.98 }}
+            transition={reduced ? { duration: 0.12 } : SPRING_POP}
+            onClick={(e) => e.stopPropagation()}
+            className="pointer-events-auto fixed inset-x-3 top-3 z-35 mx-auto flex max-w-lg items-center gap-2.5 rounded-2xl border border-line/85 bg-bg/95 px-3.5 py-2.5 shadow-[var(--shadow-lg)] backdrop-blur-xl safe-t sm:top-4 sm:rounded-full sm:px-4"
+          >
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent">
+              <CloudDownload className="size-3.5" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs font-medium text-ink">
+                其他设备已读至第 {remoteSyncBanner.durChapterIndex + 1} 章
+              </p>
+              {remoteSyncBanner.durChapterTitle ? (
+                <p className="truncate text-[11px] text-ink-muted">
+                  {cleanChapterTitle(remoteSyncBanner.durChapterTitle) ||
+                    remoteSyncBanner.durChapterTitle}
+                </p>
+              ) : null}
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <Button size="xs" variant="ghost" onClick={handleKeepLocalPosition}>
+                留在当前
+              </Button>
+              <Button size="xs" variant="primary" onClick={handleAcceptRemoteSync}>
+                同步跳转
+              </Button>
+            </div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
 
       {/* Subtle inline spinner overlay when refreshing an already visible chapter */}
       {loadingContent && parsed.kind !== "empty" ? (
