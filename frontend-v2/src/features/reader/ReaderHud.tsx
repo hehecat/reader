@@ -28,12 +28,12 @@ import * as React from "react";
 import type { BookChapter, CustomFont } from "@/api/types";
 import { cn } from "@/lib/cn";
 import { cleanChapterTitle } from "@/lib/format";
+import { ensureReaderFontLoaded, READER_FONT_PRESETS } from "@/lib/readerFonts";
 import {
   resolvePaperTheme,
   usePrefsStore,
   type PageTurnMode,
   type PaperTheme,
-  type ReaderFont,
   type ReadLayout,
   type SpreadMode,
 } from "@/stores/prefs";
@@ -662,24 +662,22 @@ export function ReaderHud({
                         ) : null}
                       </div>
 
-                      {/* Font Family Picker (Builtin + Uploaded Custom Fonts) */}
+                      {/* Font Family Picker (Curated Builtins + Uploaded Custom Fonts) */}
                       <div>
                         <p className="mb-1.5 text-[11px] font-medium text-ink-muted">正文书体</p>
                         <div className="flex flex-wrap gap-1.5">
-                          {(
-                            [
-                              { id: "serif", label: "宋刻衬线", css: "var(--font-serif)" },
-                              { id: "kai", label: "霞鹜楷体", css: "var(--font-kai)" },
-                              { id: "sans", label: "现代黑体", css: "var(--font-sans)" },
-                            ] as const
-                          ).map((f) => {
+                          {READER_FONT_PRESETS.map((f) => {
                             const active = fontFamily === f.id;
                             return (
                               <button
                                 key={f.id}
                                 type="button"
-                                style={{ fontFamily: f.css }}
-                                onClick={() => setFontFamily(f.id as ReaderFont)}
+                                title={f.description}
+                                style={{ fontFamily: f.cssVar }}
+                                onClick={() => {
+                                  ensureReaderFontLoaded(f.id);
+                                  setFontFamily(f.id);
+                                }}
                                 className={cn(
                                   "cursor-pointer rounded-full border px-3 py-1 text-xs transition-colors",
                                   active

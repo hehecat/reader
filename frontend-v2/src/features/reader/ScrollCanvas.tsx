@@ -1,12 +1,12 @@
 import * as React from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { cn } from "@/lib/cn";
+import { ensureReaderFontLoaded, resolveReaderFontFamily } from "@/lib/readerFonts";
 import type { ReadingNote } from "@/stores/notes";
 import { usePrefsStore } from "@/stores/prefs";
 import {
   ChapterEndColophon,
   renderHighlightedText,
-  resolveReaderFontFamily,
   type JumpSignal,
   type PageProgressInfo,
   type ParsedChapter,
@@ -90,6 +90,10 @@ export function ScrollCanvas({
   const autoScrollSpeed = usePrefsStore((s) => s.autoScrollSpeed);
 
   const fontCss = resolveReaderFontFamily(fontFamily, customFontFamily);
+
+  React.useEffect(() => {
+    ensureReaderFontLoaded(fontFamily);
+  }, [fontFamily]);
 
   const isComic = parsed.kind === "comic" && (parsed.images?.length ?? 0) > 0;
   const itemCount = isComic

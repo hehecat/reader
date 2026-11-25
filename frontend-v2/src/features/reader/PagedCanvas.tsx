@@ -1,8 +1,9 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import * as React from "react";
 import { cn } from "@/lib/cn";
+import { ensureReaderFontLoaded, resolveReaderFontFamily } from "@/lib/readerFonts";
 import type { InkColor, ReadingNote } from "@/stores/notes";
-import { usePrefsStore, type ReaderFont } from "@/stores/prefs";
+import { usePrefsStore } from "@/stores/prefs";
 import { Button } from "@/ui/Button";
 import {
   computeCurlGeometry,
@@ -43,17 +44,7 @@ export interface PageProgressInfo {
   paraIndex: number;
 }
 
-export function resolveReaderFontFamily(
-  fontFamily: ReaderFont,
-  customFontFamily: string,
-): string {
-  if (fontFamily === "kai") return "var(--font-kai)";
-  if (fontFamily === "sans") return "var(--font-sans)";
-  if (fontFamily === "custom" && customFontFamily) {
-    return `"${customFontFamily}", var(--font-serif)`;
-  }
-  return "var(--font-serif)";
-}
+export { resolveReaderFontFamily };
 
 const HIGHLIGHT_MARK_CLASSES: Record<InkColor, string> = {
   amber:
@@ -304,14 +295,18 @@ export function PagedCanvas({
     return () => ro.disconnect();
   }, []);
 
-  // Re-measure when web fonts finish loading
+  // Lazy-load selected open-source web font and re-measure once loaded
   React.useEffect(() => {
     let active = true;
-    void document.fonts?.ready.then(() => {
+    ensureReaderFontLoaded(fontFamily);
+    const bump = () => {
       if (active) setLayoutVersion((v) => v + 1);
-    });
+    };
+    void document.fonts?.ready.then(bump);
+    document.fonts?.addEventListener?.("loadingdone", bump);
     return () => {
       active = false;
+      document.fonts?.removeEventListener?.("loadingdone", bump);
     };
   }, [fontFamily, customFontFamily]);
 

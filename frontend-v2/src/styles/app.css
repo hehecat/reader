@@ -231,12 +231,24 @@
   --color-warn-soft: var(--warn-soft);
 
   --font-serif:
-    "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", Georgia, serif;
+    "Source Han Serif SC", "Noto Serif SC", "FZBoYaSongS-GB", "方正博雅宋简体", "FZYanSongS-R-GB",
+    "Songti SC", "STSong", "SimSun", Georgia, serif;
   --font-kai:
-    "LXGW WenKai", "Kaiti SC", "STKaiti", "KaiTi", "Noto Serif SC", serif;
+    "LXGW WenKai Screen", "LXGW WenKai", "FZKai-Z03S", "方正楷体简体", "Kaiti SC", "STKaiti",
+    "KaiTi", "Noto Serif SC", serif;
+  --font-oldsong:
+    "KingHwa_OldSong", "KingHwaOldSong", "京華老宋体", "FZQingKeBenYueSongS-R-GB",
+    "方正清刻本悦宋简体", "Huiwen-mincho", "Songti SC", "STSong", "Source Han Serif SC",
+    "Noto Serif SC", serif;
+  --font-fangsong:
+    "FZLanTingSongS-R-GB", "方正兰亭宋简体", "FZBoYaSongS-GB", "方正博雅宋简体", "FZYOU_S",
+    "方正悠宋简体", "STFangsong", "FangSong", "Songti SC", "Noto Serif SC", serif;
   --font-sans:
-    "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", -apple-system,
+    BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-round:
+    "FZZhunYuan-M02S", "方正准圆简体", "Yuanti SC", "STYuanti", "Hiragino Maru Gothic ProN",
+    "FZKai-Z03S", "方正楷体简体", "LXGW WenKai Screen", "Kaiti SC", "PingFang SC", sans-serif;
   --font-mono:
     "JetBrains Mono", "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }

@@ -33,12 +33,16 @@ import { featuresApi } from "@/api/endpoints";
 import type { CustomFont, HttpTts, RestoreReport } from "@/api/types";
 import { cn } from "@/lib/cn";
 import { formatBytes, formatRelativeTime, formatUptime } from "@/lib/format";
+import {
+  ensureReaderFontLoaded,
+  READER_FONT_PRESETS,
+  resolveReaderFontFamily,
+} from "@/lib/readerFonts";
 import { useAuthStore } from "@/stores/auth";
 import {
   resolvePaperTheme,
   usePrefsStore,
   type PaperTheme,
-  type ReaderFont,
   type TtsEngine,
 } from "@/stores/prefs";
 import { notify } from "@/stores/toast";
@@ -679,23 +683,11 @@ function ReadingSection() {
   };
 
   const previewPaper = resolvePaperTheme(prefs.theme);
-  const previewFontCss =
-    prefs.fontFamily === "custom" && prefs.customFontFamily
-      ? `"${prefs.customFontFamily}", var(--font-serif)`
-      : prefs.fontFamily === "kai"
-        ? "var(--font-kai)"
-        : prefs.fontFamily === "sans"
-          ? "var(--font-sans)"
-          : "var(--font-serif)";
+  const previewFontCss = resolveReaderFontFamily(prefs.fontFamily, prefs.customFontFamily);
 
-  const fontOptions: { value: ReaderFont; label: string }[] = [
-    { value: "serif", label: "宋体" },
-    { value: "kai", label: "楷体" },
-    { value: "sans", label: "黑体" },
-    ...(fonts.length > 0 || prefs.customFontFamily
-      ? [{ value: "custom" as ReaderFont, label: "自定义" }]
-      : []),
-  ];
+  React.useEffect(() => {
+    ensureReaderFontLoaded(prefs.fontFamily);
+  }, [prefs.fontFamily]);
 
   return (
     <SectionStack>
@@ -816,24 +808,95 @@ function ReadingSection() {
         {/* Font & Typography Card */}
         <SettingsCard>
           <CardGroupLabel>字体与版式</CardGroupLabel>
-          <SettingRow
-            title="阅读字体"
-            desc="选择正文字体族，或选用下方上传的自定字体"
-            control={
-              <Segmented
-                layoutId="v2-pref-font"
-                size="sm"
-                value={prefs.fontFamily}
-                onChange={(v) => {
-                  if (v === "custom" && !prefs.customFontFamily && fonts[0]) {
-                    prefs.setCustomFontFamily(fonts[0].family);
-                  }
-                  prefs.setFontFamily(v);
-                }}
-                options={fontOptions}
-              />
-            }
-          />
+          <div className="border-b border-line/70 px-4 py-3.5">
+            <p className="mb-2.5 text-[13px] font-medium text-ink">阅读字体</p>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {READER_FONT_PRESETS.map((preset) => {
+                const active = prefs.fontFamily === preset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => {
+                      ensureReaderFontLoaded(preset.id);
+                      prefs.setFontFamily(preset.id);
+                    }}
+                    className={cn(
+                      "flex h-full cursor-pointer flex-col items-start justify-start rounded-xl border px-3 py-2.5 text-left transition-colors",
+                      active
+                        ? "border-accent/55 bg-accent-soft/65 text-accent"
+                        : "border-line bg-elevated/60 text-ink hover:border-line-strong hover:bg-subtle/60",
+                    )}
+                  >
+                    <div className="flex w-full items-center justify-between gap-1.5">
+                      <span
+                        style={{ fontFamily: preset.cssVar }}
+                        className="truncate text-[14px] font-semibold"
+                      >
+                        {preset.label}
+                      </span>
+                      <span
+                        className={cn(
+                          "shrink-0 rounded-full px-1.5 py-0.5 text-[10px]",
+                          active
+                            ? "bg-accent/15 text-accent"
+                            : "bg-subtle text-ink-muted",
+                        )}
+                      >
+                        {preset.tag}
+                      </span>
+                    </div>
+                    <span className="mt-1.5 text-[11px] leading-relaxed text-ink-muted">
+                      {preset.description}
+                    </span>
+                  </button>
+                );
+              })}
+              {fonts.length > 0 || prefs.customFontFamily ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!prefs.customFontFamily && fonts[0]) {
+                      prefs.setCustomFontFamily(fonts[0].family);
+                    }
+                    prefs.setFontFamily("custom");
+                  }}
+                  className={cn(
+                    "flex h-full cursor-pointer flex-col items-start justify-start rounded-xl border px-3 py-2.5 text-left transition-colors",
+                    prefs.fontFamily === "custom"
+                      ? "border-accent/55 bg-accent-soft/65 text-accent"
+                      : "border-line bg-elevated/60 text-ink hover:border-line-strong hover:bg-subtle/60",
+                  )}
+                >
+                  <div className="flex w-full items-center justify-between gap-1.5">
+                    <span
+                      style={
+                        prefs.customFontFamily
+                          ? { fontFamily: `"${prefs.customFontFamily}", var(--font-serif)` }
+                          : undefined
+                      }
+                      className="truncate text-[14px] font-semibold"
+                    >
+                      {prefs.customFontFamily || "自定义字体"}
+                    </span>
+                    <span
+                      className={cn(
+                        "shrink-0 rounded-full px-1.5 py-0.5 text-[10px]",
+                        prefs.fontFamily === "custom"
+                          ? "bg-accent/15 text-accent"
+                          : "bg-subtle text-ink-muted",
+                      )}
+                    >
+                      自定
+                    </span>
+                  </div>
+                  <span className="mt-1.5 text-[11px] leading-relaxed text-ink-muted">
+                    使用已上传的本地字体文件
+                  </span>
+                </button>
+              ) : null}
+            </div>
+          </div>
 
           <div className="grid grid-cols-1 gap-4 px-4 py-4 sm:grid-cols-2">
             <div>

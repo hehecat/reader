@@ -2,7 +2,14 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 export type PaperTheme = "paper" | "parchment" | "celadon" | "dark" | "system";
-export type ReaderFont = "serif" | "kai" | "sans" | "custom";
+export type ReaderFont =
+  | "serif"
+  | "kai"
+  | "oldsong"
+  | "fangsong"
+  | "sans"
+  | "round"
+  | "custom";
 export type ReadLayout = "paged" | "scroll";
 export type SpreadMode = "auto" | "single";
 export type PageTurnMode = "curl" | "none";
