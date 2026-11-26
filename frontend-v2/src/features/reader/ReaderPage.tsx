@@ -395,6 +395,9 @@ export default function ReaderPage() {
   const stageContainerRef = React.useRef<HTMLDivElement>(null);
   const resolvedBookRef = React.useRef<string>("");
   const baseChapterTimeRef = React.useRef<number>(0);
+  const ownSavedTimesRef = React.useRef<Set<number>>(new Set());
+  const inFlightSaveRef = React.useRef<boolean>(false);
+  const pendingSaveRef = React.useRef<{ force: boolean } | null>(null);
   const syncedPosRef = React.useRef<{ chapterIndex: number; paraIndex: number } | null>(null);
   const forceNextSaveRef = React.useRef<boolean>(false);
   const lastSyncCheckAtRef = React.useRef<number>(0);
@@ -418,24 +421,13 @@ export default function ReaderPage() {
     const initPos = parsedUrlIndex === null ? (shelfBook?.durChapterPos ?? 0) : 0;
     const remoteTime = shelfBook?.durChapterTime ?? 0;
     baseChapterTimeRef.current = remoteTime;
+    ownSavedTimesRef.current.clear();
+    inFlightSaveRef.current = false;
+    pendingSaveRef.current = null;
+    // When opening via explicit ?index= (e.g. TOC / search jump), treat it as an intentional local position
     syncedPosRef.current = { chapterIndex: initIdx, paraIndex: initPos };
     forceNextSaveRef.current = false;
     setRemoteSyncBanner(null);
-
-    // If opened with an explicit stale ?index= while server already has a different newer position, prompt to sync
-    if (
-      parsedUrlIndex !== null &&
-      shelfBook &&
-      remoteTime > 0 &&
-      shelfBook.durChapterIndex !== parsedUrlIndex
-    ) {
-      setRemoteSyncBanner({
-        durChapterIndex: shelfBook.durChapterIndex,
-        durChapterPos: shelfBook.durChapterPos ?? 0,
-        durChapterTitle: shelfBook.durChapterTitle || "",
-        durChapterTime: remoteTime,
-      });
-    }
 
     setChapterIndex(initIdx);
     setJumpSignal((prev) => ({ paraIndex: initPos, align: "start", nonce: prev.nonce + 1 }));
@@ -443,11 +435,16 @@ export default function ReaderPage() {
     setAutoScrollActive(false);
   }, [bookUrl, parsedUrlIndex, shelfFetched, shelfBook]);
 
-  // If fresh mount refetch of ["shelf"] brings newer remote progress than cached initial state, surface banner
+  // If fresh mount refetch of ["shelf"] brings genuinely newer remote progress from another device, surface banner
   React.useEffect(() => {
     if (!bookUrl || resolvedBookRef.current !== bookUrl || !shelfBook) return;
+    if (inFlightSaveRef.current) return;
     const remoteTime = shelfBook.durChapterTime ?? 0;
     if (remoteTime <= 0 || remoteTime <= baseChapterTimeRef.current) return;
+    if (ownSavedTimesRef.current.has(remoteTime)) {
+      baseChapterTimeRef.current = remoteTime;
+      return;
+    }
     const snap = latestProgressRef.current;
     const differs =
       shelfBook.durChapterIndex !== snap.chapterIndex ||
@@ -732,9 +729,21 @@ export default function ReaderPage() {
       // Never write back if the user has not actually moved on this device (prevents background Device A clobbering Device B)
       if (!isDirty && !force) return;
 
+      // Serialize saves per tab so two overlapping saves never self-conflict on baseChapterTime
+      if (inFlightSaveRef.current && !opts?.keepalive) {
+        pendingSaveRef.current = {
+          force: Boolean(pendingSaveRef.current?.force || force),
+        };
+        return;
+      }
+
       const sentChapter = snap.chapterIndex;
       const sentPara = snap.paraIndex;
       const sentTitle = snap.chapterTitle;
+
+      if (!opts?.keepalive) {
+        inFlightSaveRef.current = true;
+      }
 
       void booksApi
         .saveProgress(
@@ -750,11 +759,20 @@ export default function ReaderPage() {
         )
         .then((res) => {
           if (res?.conflict && res.remote) {
+            // Ignore self-conflict if the remote timestamp was written by this very tab
+            if (ownSavedTimesRef.current.has(res.remote.durChapterTime)) {
+              baseChapterTimeRef.current = Math.max(
+                baseChapterTimeRef.current,
+                res.remote.durChapterTime,
+              );
+              return;
+            }
             setRemoteSyncBanner(res.remote);
             return;
           }
           const serverTime = res?.durChapterTime ?? Date.now();
-          baseChapterTimeRef.current = serverTime;
+          ownSavedTimesRef.current.add(serverTime);
+          baseChapterTimeRef.current = Math.max(baseChapterTimeRef.current, serverTime);
           syncedPosRef.current = { chapterIndex: sentChapter, paraIndex: sentPara };
           forceNextSaveRef.current = false;
           queryClient.setQueryData<Book[]>(["shelf"], (old) =>
@@ -771,7 +789,17 @@ export default function ReaderPage() {
             ),
           );
         })
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(() => {
+          if (!opts?.keepalive) {
+            inFlightSaveRef.current = false;
+            const queued = pendingSaveRef.current;
+            if (queued) {
+              pendingSaveRef.current = null;
+              flushProgressSave({ force: queued.force });
+            }
+          }
+        });
     },
     [queryClient],
   );
@@ -837,7 +865,7 @@ export default function ReaderPage() {
   React.useEffect(() => {
     const checkRemoteSync = async () => {
       const snap = latestProgressRef.current;
-      if (!snap.bookUrl || !snap.isInShelf) return;
+      if (!snap.bookUrl || !snap.isInShelf || inFlightSaveRef.current) return;
       const now = Date.now();
       if (now - lastSyncCheckAtRef.current < 4_000) return;
       lastSyncCheckAtRef.current = now;
@@ -847,6 +875,10 @@ export default function ReaderPage() {
         const remote = list.find((b) => b.bookUrl === snap.bookUrl);
         if (!remote) return;
         const remoteTime = remote.durChapterTime ?? 0;
+        if (ownSavedTimesRef.current.has(remoteTime)) {
+          baseChapterTimeRef.current = Math.max(baseChapterTimeRef.current, remoteTime);
+          return;
+        }
         const isNewerThanBase = remoteTime > baseChapterTimeRef.current;
         const differsInPosition =
           remote.durChapterIndex !== snap.chapterIndex ||
